@@ -112,6 +112,8 @@ pub enum StepTarget {
 /// | `AddSharedStep` | `RemoveSharedStep` | O(log n) |
 /// | `RenameSharedStep` | the same with the old name and provenance | O(log n) |
 /// | `RemoveSharedStep` | `AddSharedStep` with the old name and provenance | O(log n) |
+/// | `UseSharedStep` | `UnuseSharedStep` with the same provenance | O(log n + log V) |
+/// | `UnuseSharedStep` | `UseSharedStep` with the same provenance | O(log n + log V) |
 /// | `NeedCondition` | `UnneedCondition` with the same provenance | O(log n) |
 /// | `UnneedCondition` | `NeedCondition` with the same provenance | O(log n) |
 /// | `NeedStepCondition` | `UnneedStepCondition` with the same provenance | O(log n) |
@@ -906,6 +908,26 @@ pub enum Op {
         /// Existing shared step.
         id: SharedStepId,
     },
+    /// Links an unrated tree step to a shared attack step.
+    UseSharedStep {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// An existing step node in `tree`.
+        node: NodeId,
+        /// Existing shared attack step.
+        step: SharedStepId,
+        /// Provenance of linking the shared step.
+        provenance: Provenance,
+    },
+    /// Unlinks a tree step from its shared attack step.
+    UnuseSharedStep {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// A step node in `tree` that uses a shared step.
+        node: NodeId,
+        /// Provenance of unlinking the shared step.
+        provenance: Provenance,
+    },
     /// Records that an element needs a condition, capped at
     /// `MAX_CONDITIONS_PER_ELEMENT` and stored sorted by public ID.
     NeedCondition {
@@ -1351,6 +1373,8 @@ impl Op {
             | Self::RenameAssumption { provenance, .. }
             | Self::AddSharedStep { provenance, .. }
             | Self::RenameSharedStep { provenance, .. }
+            | Self::UseSharedStep { provenance, .. }
+            | Self::UnuseSharedStep { provenance, .. }
             | Self::SetAssumptionHolds { provenance, .. }
             | Self::SetAssumptionExcludes { provenance, .. }
             | Self::NeedCondition { provenance, .. }
@@ -1489,6 +1513,8 @@ impl Op {
             | Self::RenameAssumption { provenance, .. }
             | Self::AddSharedStep { provenance, .. }
             | Self::RenameSharedStep { provenance, .. }
+            | Self::UseSharedStep { provenance, .. }
+            | Self::UnuseSharedStep { provenance, .. }
             | Self::SetAssumptionHolds { provenance, .. }
             | Self::SetAssumptionExcludes { provenance, .. }
             | Self::NeedCondition { provenance, .. }

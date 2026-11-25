@@ -542,6 +542,34 @@ pub enum ModelError {
     /// A shared step still has its own rating data and cannot be removed.
     #[error("shared step {0} still has its own rating, factors, through item, or attack type")]
     SharedStepIsRated(SharedStepId),
+    /// A tree step with its own rating or settings cannot use a shared step.
+    #[error(
+        "step {node} in attack tree {tree} still has its own rating, factors, through item, or attack type"
+    )]
+    StepIsRated {
+        /// The attack tree.
+        tree: TreeId,
+        /// The rated step.
+        node: NodeId,
+    },
+    /// A tree step already uses a shared step.
+    #[error("step {node} in attack tree {tree} already uses shared step {shared_step}")]
+    NodeUsesSharedStep {
+        /// The attack tree.
+        tree: TreeId,
+        /// The linked step.
+        node: NodeId,
+        /// The shared step it already uses.
+        shared_step: SharedStepId,
+    },
+    /// A tree step does not use a shared step.
+    #[error("step {node} in attack tree {tree} does not use a shared step")]
+    NodeNotShared {
+        /// The attack tree.
+        tree: TreeId,
+        /// The unlinked step.
+        node: NodeId,
+    },
     /// `child` is not an extra child of `parent` (there is no such edge, or
     /// it is the owner's edge, which unlinking does not remove).
     #[error("{child} is not linked under {parent}")]

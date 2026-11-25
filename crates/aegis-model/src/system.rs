@@ -116,6 +116,7 @@ pub struct SystemUse {
     assets: Vec<SystemSet>,
     threats: Vec<SystemSet>,
     trees: Vec<SystemSet>,
+    shared_steps: Vec<SystemSet>,
     damages: Vec<SystemSet>,
     controls: Vec<SystemSet>,
     goals: Vec<SystemSet>,
@@ -208,6 +209,12 @@ impl SystemUse {
     #[must_use]
     pub fn tree(&self, idx: TreeIdx) -> SystemSet {
         get(&self.trees, idx.index())
+    }
+
+    /// The systems that use a shared step. Time O(1).
+    #[must_use]
+    pub fn shared_step(&self, idx: crate::id::SharedStepIdx) -> SystemSet {
+        get(&self.shared_steps, idx.index())
     }
 
     /// The systems that use a damage scenario. Time O(1).
@@ -380,10 +387,26 @@ impl Project {
                 continue;
             }
             for (node, _, _) in tree.iter() {
+                if let Some(shared) = self.step_shared(tree_idx, node) {
+                    add(&mut u.shared_steps, shared.index(), set);
+                }
                 for m in self.step_mitigations(tree_idx, node) {
                     add(&mut u.controls, m.control().index(), set);
                 }
             }
+        }
+        for (idx, _, _) in self.shared_steps() {
+            let set = self
+                .shared_step_via(idx)
+                .map_or(SystemSet::EMPTY, |via| match via {
+                    ItemRef::Component(id) => self
+                        .component_idx(&id)
+                        .map_or(SystemSet::EMPTY, |i| u.component(i)),
+                    ItemRef::Interface(id) => self
+                        .interface_idx(&id)
+                        .map_or(SystemSet::EMPTY, |i| u.interface(i)),
+                });
+            add(&mut u.shared_steps, idx.index(), set);
         }
         for (idx, _, g) in self.cybersecurity_goals() {
             let set = u.goal(idx);

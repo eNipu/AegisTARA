@@ -527,6 +527,19 @@ enum OpView<'a> {
     RemoveSharedStep {
         id: Text<SharedStepId>,
     },
+    UseSharedStep {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        shared_step: Text<SharedStepId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    UnuseSharedStep {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     NeedCondition {
         element: TargetView,
         condition: Text<ConditionId>,
@@ -1583,6 +1596,26 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             provenance: ProvenanceView::of(provenance),
         },
         Op::RemoveSharedStep { id } => OpView::RemoveSharedStep { id: Text(*id) },
+        Op::UseSharedStep {
+            tree,
+            node,
+            step,
+            provenance,
+        } => OpView::UseSharedStep {
+            tree: Text(*tree),
+            node: Text(*node),
+            shared_step: Text(*step),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::UnuseSharedStep {
+            tree,
+            node,
+            provenance,
+        } => OpView::UnuseSharedStep {
+            tree: Text(*tree),
+            node: Text(*node),
+            provenance: ProvenanceView::of(provenance),
+        },
         Op::NeedCondition {
             element,
             condition,
@@ -2620,6 +2653,26 @@ fn op_from_wire(m: &Methodology, w: OpWire, line: u64) -> Result<Op, StoreError>
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::RemoveSharedStep { id } => Op::RemoveSharedStep { id: id.0 },
+        OpWire::UseSharedStep {
+            tree,
+            node,
+            shared_step,
+            provenance,
+        } => Op::UseSharedStep {
+            tree: tree.0,
+            node: node.0,
+            step: shared_step.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UnuseSharedStep {
+            tree,
+            node,
+            provenance,
+        } => Op::UnuseSharedStep {
+            tree: tree.0,
+            node: node.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
         OpWire::NeedCondition {
             element,
             condition,

@@ -2843,6 +2843,21 @@ pub(super) enum OpWire {
     RemoveSharedStep {
         id: WireId<SharedStepId>,
     },
+    #[serde(rename = "use_shared_step")]
+    UseSharedStep {
+        tree: WireId<TreeId>,
+        node: WireId<NodeId>,
+        shared_step: WireId<SharedStepId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    #[serde(rename = "unuse_shared_step")]
+    UnuseSharedStep {
+        tree: WireId<TreeId>,
+        node: WireId<NodeId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
     NeedCondition {
         element: TargetWire,
         condition: WireId<ConditionId>,

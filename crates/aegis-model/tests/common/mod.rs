@@ -571,7 +571,7 @@ pub struct Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..87,
+        0u8..89,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -799,6 +799,39 @@ impl Gen {
             Some(id) if !sel.is_multiple_of(8) => id,
             _ => shared_step_id(self.fresh()),
         }
+    }
+
+    fn linkable_steps(p: &Project) -> Vec<(TreeId, NodeId)> {
+        p.attack_trees()
+            .flat_map(|(t, tree, nodes)| {
+                nodes
+                    .iter()
+                    .filter(|(_, _, n)| matches!(n, Node::Step { .. }))
+                    .map(move |(n, node, _)| (t, tree, n, node))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|(t, _, n, _)| {
+                p.step_shared(*t, *n).is_none()
+                    && p.step_feasibility(*t, *n).is_none()
+                    && p.step_factors(*t, *n).next().is_none()
+                    && p.step_via(*t, *n).is_none()
+                    && p.step_attack_type(*t, *n).is_none()
+            })
+            .map(|(_, tree, _, node)| (tree, node))
+            .collect()
+    }
+
+    fn shared_step_users(p: &Project) -> Vec<(TreeId, NodeId)> {
+        p.attack_trees()
+            .flat_map(|(t, tree, nodes)| {
+                nodes
+                    .iter()
+                    .map(move |(n, node, _)| (t, tree, n, node))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|(t, _, n, _)| p.step_shared(*t, *n).is_some())
+            .map(|(_, tree, _, node)| (tree, node))
+            .collect()
     }
 
     fn rating_target(&mut self, p: &Project, sel: u16, tree: TreeId, node: NodeId) -> StepTarget {
@@ -2135,6 +2168,51 @@ impl Gen {
             86 => Op::RemoveSharedStep {
                 id: self.shared_step(p, s.a),
             },
+            87 => {
+                if p.shared_steps().next().is_none() {
+                    return Op::AddSharedStep {
+                        id: shared_step_id(self.fresh()),
+                        name: self.name(s.c),
+                        provenance,
+                    };
+                }
+                let (tree, node) = match nth(Self::linkable_steps(p), s.a) {
+                    Some(step) if !s.c.is_multiple_of(4) => step,
+                    _ => self.step_node(p, s.a, s.b),
+                };
+                Op::UseSharedStep {
+                    tree,
+                    node,
+                    step: self.shared_step(p, s.c),
+                    provenance,
+                }
+            }
+            88 => {
+                let linked = Self::shared_step_users(p);
+                if let Some((tree, node)) = nth(linked, s.a) {
+                    Op::UnuseSharedStep {
+                        tree,
+                        node,
+                        provenance,
+                    }
+                } else if let Some((tree, node)) = nth(Self::linkable_steps(p), s.b)
+                    && p.shared_steps().next().is_some()
+                {
+                    Op::UseSharedStep {
+                        tree,
+                        node,
+                        step: self.shared_step(p, s.c),
+                        provenance,
+                    }
+                } else {
+                    let (tree, node) = self.step_node(p, s.a, s.b);
+                    Op::UnuseSharedStep {
+                        tree,
+                        node,
+                        provenance,
+                    }
+                }
+            }
             _ => Op::SetComponentSystem {
                 id: self.component(p, s.a),
                 system: (!s.b.is_multiple_of(4)).then(|| self.system(p, s.b)),
