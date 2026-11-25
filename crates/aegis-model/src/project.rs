@@ -4,12 +4,18 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
+#[cfg(test)]
+#[path = "../tests/common/shared_fragment_guards.rs"]
+mod shared_fragments;
+
 use crate::applicability::{
     Applicability, Assumption, AttackFilter, Condition, MAX_ASSUMPTION_EXCLUDES, MAX_ASSUMPTIONS,
     MAX_CLAIM_ASSUMPTIONS, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT, StepRef,
 };
 use crate::asset::{Asset, PropertySet};
-use crate::blocks::{MAX_SHARED_STEPS, SharedStep, TreeRole};
+use crate::blocks::{
+    MAX_FRAGMENT_DEPTH, MAX_FRAGMENT_REFERENCES, MAX_SHARED_STEPS, SharedStep, TreeRole,
+};
 use crate::control::{
     CeilingSource, ControlRule, ControlStatus, CybersecurityClaim, CybersecurityGoal, DecidingStep,
     MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment,
@@ -209,6 +215,7 @@ struct StepLinks {
     attack_type: Vec<Option<AttackType>>,
     condition: Vec<Vec<ConditionIdx>>,
     shared: Vec<Option<SharedStepIdx>>,
+    fragment: Vec<Option<TreeIdx>>,
 }
 
 impl StepLinks {
@@ -217,6 +224,7 @@ impl StepLinks {
             && self.attack_type.iter().all(Option::is_none)
             && self.condition.iter().all(Vec::is_empty)
             && self.shared.iter().all(Option::is_none)
+            && self.fragment.iter().all(Option::is_none)
     }
 }
 
@@ -238,6 +246,10 @@ impl TreeEntry {
         self.step_links.as_ref()?.shared.get(i).copied().flatten()
     }
 
+    fn fragment_at(&self, i: usize) -> Option<TreeIdx> {
+        self.step_links.as_ref()?.fragment.get(i).copied().flatten()
+    }
+
     /// The slots that have a "through" item, with the item.
     fn vias(&self) -> impl Iterator<Item = (usize, ItemIdx)> + '_ {
         self.step_links
@@ -254,8 +266,9 @@ impl TreeEntry {
                 .zip(&l.attack_type)
                 .zip(&l.condition)
                 .zip(&l.shared)
-                .filter(|(((v, t), c), s)| {
-                    v.is_some() || t.is_some() || !c.is_empty() || s.is_some()
+                .zip(&l.fragment)
+                .filter(|((((v, t), c), s), f)| {
+                    v.is_some() || t.is_some() || !c.is_empty() || s.is_some() || f.is_some()
                 })
                 .count()
         })
@@ -279,6 +292,7 @@ impl TreeEntry {
                 attack_type: vec![None; len],
                 condition: vec![Vec::new(); len],
                 shared: vec![None; len],
+                fragment: vec![None; len],
             })
         });
         let old = field(links)
@@ -300,12 +314,19 @@ impl TreeEntry {
         self.set_link(at, value, |l| &mut l.shared)
     }
 
+    // Prepared for the atomic persisted writes in the following slice.
+    #[allow(dead_code)]
+    fn set_fragment(&mut self, at: usize, value: Option<TreeIdx>) -> Option<TreeIdx> {
+        self.set_link(at, value, |l| &mut l.fragment)
+    }
+
     fn insert_links(&mut self, i: usize) {
         if let Some(l) = self.step_links.as_mut() {
             l.via.insert(i, None);
             l.attack_type.insert(i, None);
             l.condition.insert(i, Vec::new());
             l.shared.insert(i, None);
+            l.fragment.insert(i, None);
         }
     }
 
@@ -315,6 +336,7 @@ impl TreeEntry {
             l.attack_type.remove(i);
             l.condition.remove(i);
             l.shared.remove(i);
+            l.fragment.remove(i);
             if l.is_empty() {
                 self.step_links = None;
             }
@@ -339,6 +361,7 @@ impl TreeEntry {
                 attack_type: vec![None; len],
                 condition: vec![Vec::new(); len],
                 shared: vec![None; len],
+                fragment: vec![None; len],
             })
         });
         if let Some(slot) = links.condition.get_mut(i) {
@@ -1439,6 +1462,130 @@ impl Project {
     pub fn step_shared_id(&self, tree: TreeIdx, node: NodeIdx) -> Option<SharedStepId> {
         self.step_shared(tree, node)
             .and_then(|idx| self.shared_step_id(idx))
+    }
+
+    /// The fragment referenced by this step, if any. Time O(1).
+    #[must_use]
+    pub fn step_fragment(&self, tree: TreeIdx, node: NodeIdx) -> Option<TreeIdx> {
+        self.trees.get(tree)?.fragment_at(node.index())
+    }
+
+    /// The stable ID of the fragment referenced by this step. Time O(1).
+    #[must_use]
+    pub fn step_fragment_id(&self, tree: TreeIdx, node: NodeIdx) -> Option<TreeId> {
+        self.step_fragment(tree, node)
+            .and_then(|f| self.attack_tree_id(f))
+    }
+
+    /// Source steps referencing `fragment`, sorted by stable tree/node IDs.
+    #[must_use]
+    pub fn fragment_users(&self, fragment: TreeIdx) -> Vec<StepRef> {
+        let mut users = Vec::new();
+        for (_, tree, entry) in self.trees.iter() {
+            for (idx, node, _) in entry.tree.iter() {
+                if entry.fragment_at(idx.index()) == Some(fragment) {
+                    users.push(StepRef { tree, node });
+                }
+            }
+        }
+        users.sort();
+        users
+    }
+
+    /// All live trees, dependency-first, with stable-ID ties.
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::FragmentCycle`] for a cycle, [`ModelError::FragmentDepth`]
+    /// for a path longer than [`MAX_FRAGMENT_DEPTH`] edges.
+    pub fn fragment_order(&self) -> Result<Vec<TreeIdx>, ModelError> {
+        self.check_fragment_graph(None)
+    }
+
+    fn check_fragment_graph(
+        &self,
+        candidate: Option<(TreeIdx, NodeIdx, TreeIdx)>,
+    ) -> Result<Vec<TreeIdx>, ModelError> {
+        let mut deps = BTreeMap::<TreeId, BTreeSet<TreeId>>::new();
+        for (idx, id, entry) in self.trees.iter() {
+            let targets = deps.entry(id).or_default();
+            for (node, _, _) in entry.tree.iter() {
+                let target = match candidate {
+                    Some((source, at, target)) if source == idx && at == node => Some(target),
+                    _ => entry.fragment_at(node.index()),
+                };
+                if let Some(target) = target {
+                    let target_id = self
+                        .attack_tree_id(target)
+                        .ok_or(ModelError::FragmentRole(id))?;
+                    if self.attack_tree_role(target) != Some(TreeRole::Fragment) {
+                        return Err(ModelError::FragmentRole(target_id));
+                    }
+                    targets.insert(target_id);
+                }
+            }
+        }
+        let mut users = BTreeMap::<TreeId, Vec<TreeId>>::new();
+        let mut remaining: BTreeMap<_, _> = deps.iter().map(|(&id, d)| (id, d.len())).collect();
+        for (&source, targets) in &deps {
+            for &target in targets {
+                users.entry(target).or_default().push(source);
+            }
+        }
+        let mut ready: BTreeSet<_> = remaining
+            .iter()
+            .filter_map(|(&id, &count)| (count == 0).then_some(id))
+            .collect();
+        let mut order = Vec::new();
+        let mut depth = BTreeMap::<TreeId, usize>::new();
+        while let Some(id) = ready.pop_first() {
+            order.push(self.live_tree(id)?.0);
+            let d = deps[&id].iter().map(|t| depth[t] + 1).max().unwrap_or(0);
+            depth.insert(id, d);
+            for source in users.get(&id).into_iter().flatten() {
+                if let Some(count) = remaining.get_mut(source) {
+                    *count -= 1;
+                    if *count == 0 {
+                        ready.insert(*source);
+                    }
+                }
+            }
+        }
+        if order.len() != deps.len() {
+            // Kahn residual: each remaining source has a remaining dependency.
+            // Walking those dependencies already follows source -> target edges.
+            let mut at = remaining
+                .iter()
+                .find_map(|(&id, &n)| (n > 0).then_some(id))
+                .ok_or(ModelError::FragmentDepth {
+                    max: MAX_FRAGMENT_DEPTH,
+                })?;
+            let mut positions = BTreeMap::new();
+            let mut walk = Vec::new();
+            loop {
+                if let Some(&start) = positions.get(&at) {
+                    let mut cycle = walk[start..].to_vec();
+                    if let Some((pos, _)) = cycle.iter().enumerate().min_by_key(|(_, id)| *id) {
+                        cycle.rotate_left(pos);
+                    }
+                    cycle.push(cycle[0]);
+                    return Err(ModelError::FragmentCycle(cycle));
+                }
+                positions.insert(at, walk.len());
+                walk.push(at);
+                at = deps[&at].iter().copied().find(|t| remaining[t] > 0).ok_or(
+                    ModelError::FragmentDepth {
+                        max: MAX_FRAGMENT_DEPTH,
+                    },
+                )?;
+            }
+        }
+        if depth.values().any(|&d| d > MAX_FRAGMENT_DEPTH) {
+            return Err(ModelError::FragmentDepth {
+                max: MAX_FRAGMENT_DEPTH,
+            });
+        }
+        Ok(order)
     }
 
     /// How many attack-tree steps use `shared`. Time O(1).
@@ -9041,6 +9188,7 @@ impl Project {
     ) -> Result<(), ModelError> {
         let (entry, idx) = self.tree_node(tree, id)?;
         entry.tree.check_remove(idx)?;
+        self.require_no_fragment(tree, id, entry.fragment_at(idx.index()))?;
         if let Some(shared) = entry.shared_at(idx.index()) {
             return Err(self.shared_link_error(tree, id, shared));
         }
@@ -9887,6 +10035,77 @@ impl Project {
         }
     }
 
+    fn require_no_fragment(
+        &self,
+        tree: TreeId,
+        node: NodeId,
+        fragment: Option<TreeIdx>,
+    ) -> Result<(), ModelError> {
+        if let Some(fragment) = fragment {
+            return Err(ModelError::NodeUsesFragment {
+                tree,
+                node,
+                fragment: self
+                    .attack_tree_id(fragment)
+                    .ok_or(ModelError::UnknownAttackTree(tree))?,
+            });
+        }
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    fn check_use_fragment(
+        &self,
+        tree: TreeId,
+        node: NodeId,
+        fragment: TreeId,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let (target, entry) = self.live_tree(fragment)?;
+        if entry.role != TreeRole::Fragment {
+            return Err(ModelError::FragmentRole(fragment));
+        }
+        let at = self.unshared_step_slot(tree, node)?;
+        check_provenance(provenance)?;
+        let (source, entry) = self.live_tree(tree)?;
+        if entry.step_feasibility[at.index()].is_some()
+            || entry.step_factors[at.index()].iter().any(Option::is_some)
+            || entry.via_at(at.index()).is_some()
+            || entry.attack_type_at(at.index()).is_some()
+        {
+            return Err(ModelError::StepIsRated { tree, node });
+        }
+        if entry
+            .step_links
+            .as_ref()
+            .map_or(0, |l| l.fragment.iter().filter(|f| f.is_some()).count())
+            >= MAX_FRAGMENT_REFERENCES
+        {
+            return Err(ModelError::TooManyFragmentReferences {
+                tree,
+                max: MAX_FRAGMENT_REFERENCES,
+            });
+        }
+        self.check_fragment_graph(Some((source, at, target)))
+            .map(|_| ())
+    }
+
+    #[allow(dead_code)]
+    fn check_unuse_fragment(
+        &self,
+        tree: TreeId,
+        node: NodeId,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let at = self.step_slot(tree, node)?;
+        check_provenance(provenance)?;
+        self.live_tree(tree)?
+            .1
+            .fragment_at(at.index())
+            .ok_or(ModelError::NodeNotFragment { tree, node })
+            .map(|_| ())
+    }
+
     fn check_use_shared_step(
         &self,
         tree: TreeId,
@@ -9899,6 +10118,7 @@ impl Project {
             return Err(ModelError::NotAStep { tree, node });
         }
         self.live_shared_step(step)?;
+        self.require_no_fragment(tree, node, entry.fragment_at(idx.index()))?;
         check_provenance(provenance)?;
         if let Some(shared) = entry.shared_at(idx.index()) {
             return Err(self.shared_link_error(tree, node, shared));
@@ -9963,6 +10183,7 @@ impl Project {
     fn unshared_step_slot(&self, tree: TreeId, node: NodeId) -> Result<NodeIdx, ModelError> {
         let node_idx = self.step_slot(tree, node)?;
         let (_, entry) = self.live_tree(tree)?;
+        self.require_no_fragment(tree, node, entry.fragment_at(node_idx.index()))?;
         if let Some(shared) = entry.shared_at(node_idx.index()) {
             return Err(self.shared_link_error(tree, node, shared));
         }
@@ -10028,8 +10249,10 @@ impl Project {
         tree: Option<TreeId>,
     ) -> Result<(), ModelError> {
         self.live_threat(threat)?;
-        if let Some(tree) = tree {
-            self.live_tree(tree)?;
+        if let Some(tree) = tree
+            && self.live_tree(tree)?.1.role == TreeRole::Fragment
+        {
+            return Err(ModelError::FragmentRole(tree));
         }
         Ok(())
     }
@@ -10052,6 +10275,16 @@ impl Project {
         self.require_no_description(ElementRef::Tree(id), EntityKind::AttackTree)?;
         self.require_no_conditions(ElementRef::Tree(id))?;
         let (idx, entry) = self.live_tree(id)?;
+        let users = self.fragment_users(idx).len();
+        if users > 0 {
+            return Err(ModelError::FragmentInUse {
+                fragment: id,
+                users,
+            });
+        }
+        for (at, node, _) in entry.tree.iter() {
+            self.require_no_fragment(id, node, entry.fragment_at(at.index()))?;
+        }
         let threats = self.refs.trees.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
             return Err(ModelError::AttackTreeInUse { tree: id, threats });
@@ -13552,6 +13785,8 @@ impl Project {
             && (0..x.tree.len()).all(|i| {
                 x.attack_type_at(i) == y.attack_type_at(i)
                     && self.item_ref(x.via_at(i)) == other.item_ref(y.via_at(i))
+                    && x.fragment_at(i).and_then(|f| self.attack_tree_id(f))
+                        == y.fragment_at(i).and_then(|f| other.attack_tree_id(f))
                     && x.shared_at(i).and_then(|s| self.shared_step_id(s))
                         == y.shared_at(i).and_then(|s| other.shared_step_id(s))
             })
@@ -13944,6 +14179,9 @@ impl Project {
                 self.trees
                     .get(tree)
                     .ok_or_else(|| format!("threat {id} links a dead tree slot"))?;
+                if self.attack_tree_role(tree) != Some(TreeRole::Threat) {
+                    return Err(format!("threat {id} links a fragment"));
+                }
                 bump(&mut trees, Some(tree.index()), true);
             }
             for &goal in &t.goals {
@@ -14231,6 +14469,8 @@ impl Project {
                 || links.attack_type.len() != entry.tree.len()
                 || links.condition.len() != entry.tree.len()
                 || links.shared.len() != entry.tree.len()
+                || links.fragment.len() != entry.tree.len()
+                || links.fragment.iter().filter(|f| f.is_some()).count() > MAX_FRAGMENT_REFERENCES
                 || links.is_empty())
         {
             return Err(format!("tree {id} has malformed step link slots"));
@@ -14238,6 +14478,19 @@ impl Project {
         for (i, (_, node_id, node)) in entry.tree.iter().enumerate() {
             let (via, attack_type) = (entry.via_at(i), entry.attack_type_at(i));
             let shared = entry.shared_at(i);
+            if let Some(fragment) = entry.fragment_at(i)
+                && (self.attack_tree_role(fragment) != Some(TreeRole::Fragment)
+                    || matches!(node, Node::Gate { .. })
+                    || shared.is_some()
+                    || entry.step_feasibility[i].is_some()
+                    || entry.step_factors[i].iter().any(Option::is_some)
+                    || via.is_some()
+                    || attack_type.is_some())
+            {
+                return Err(format!(
+                    "tree {id} node {node_id} has an invalid fragment slot"
+                ));
+            }
             if let Some(shared) = shared {
                 if self.shared_steps.get(shared).is_none() {
                     return Err(format!("tree {id} node {node_id} links a dead shared step"));
@@ -14277,6 +14530,7 @@ impl Project {
 
     #[cfg(test)]
     fn tree_invariants(&self) -> Result<(Vec<u32>, Vec<u32>), String> {
+        self.fragment_order().map_err(|e| e.to_string())?;
         let m = &*self.methodology;
         let mut controls = vec![0u32; self.controls.slot_count()];
         let mut shared_step_users = vec![0u32; self.shared_steps.slot_count()];

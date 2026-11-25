@@ -35,6 +35,12 @@ impl TreeRole {
     }
 }
 
+/// Maximum populated fragment source nodes per tree.
+pub const MAX_FRAGMENT_REFERENCES: usize = 256;
+
+/// Maximum dependency edges in a fragment path, including a Threat entry edge.
+pub const MAX_FRAGMENT_DEPTH: usize = 8;
+
 /// Maximum number of shared steps in one project.
 pub const MAX_SHARED_STEPS: usize = 4_096;
 

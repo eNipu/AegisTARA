@@ -570,6 +570,52 @@ pub enum ModelError {
         /// The unlinked step.
         node: NodeId,
     },
+    /// A fragment target or threat-tree link has the wrong tree role.
+    #[error("tree {0} has the wrong role for this fragment operation")]
+    FragmentRole(TreeId),
+    /// Clear a fragment reference before editing its source settings.
+    #[error("step {node} in tree {tree} uses fragment {fragment}")]
+    NodeUsesFragment {
+        /// Source tree.
+        tree: TreeId,
+        /// Source step.
+        node: NodeId,
+        /// Referenced fragment.
+        fragment: TreeId,
+    },
+    /// The source has no fragment reference to clear.
+    #[error("step {node} in tree {tree} does not use a fragment")]
+    NodeNotFragment {
+        /// Source tree.
+        tree: TreeId,
+        /// Source step.
+        node: NodeId,
+    },
+    /// A closed cycle, in source-to-target edge direction.
+    #[error("fragment dependency cycle: {0:?}")]
+    FragmentCycle(Vec<TreeId>),
+    /// A dependency path exceeds the edge limit.
+    #[error("fragment dependency depth exceeds {max}")]
+    FragmentDepth {
+        /// Maximum edges.
+        max: usize,
+    },
+    /// Too many populated fragment source nodes in one tree.
+    #[error("tree {tree} would reference fragments from more than {max} steps")]
+    TooManyFragmentReferences {
+        /// Source tree.
+        tree: TreeId,
+        /// Maximum populated nodes.
+        max: usize,
+    },
+    /// Incoming references must be cleared before fragment removal.
+    #[error("fragment {fragment} is used by {users} steps")]
+    FragmentInUse {
+        /// Target fragment.
+        fragment: TreeId,
+        /// Number of source steps.
+        users: usize,
+    },
     /// `child` is not an extra child of `parent` (there is no such edge, or
     /// it is the owner's edge, which unlinking does not remove).
     #[error("{child} is not linked under {parent}")]

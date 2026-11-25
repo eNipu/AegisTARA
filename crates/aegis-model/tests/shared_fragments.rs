@@ -6,7 +6,8 @@ mod common;
 use std::sync::Arc;
 
 use aegis_model::{
-    AttackTree, Methodology, Node, Op, Project, Provenance, StoreError, TreeId, TreeRole,
+    AssetId, AttackTree, DamageId, MAX_FRAGMENT_DEPTH, MAX_FRAGMENT_REFERENCES, Methodology,
+    ModelError, Node, Op, Project, Provenance, StoreError, ThreatId, TreeId, TreeRole,
 };
 use common::{builtin, node_id, read_log, save, tree_id, write_log};
 use serde_json::Value;
@@ -220,4 +221,68 @@ fn workspace_rejects_a_fragment_file_holding_a_threat_tree() {
         ),
         "file prefix must match the stored role: {result:?}"
     );
+}
+
+#[test]
+fn fragment_limits_are_exported_and_public_order_is_dependency_first() {
+    assert_eq!((MAX_FRAGMENT_REFERENCES, MAX_FRAGMENT_DEPTH), (256, 8));
+    let m = builtin();
+    let p = mixed(&m);
+    let order: Vec<_> = p
+        .fragment_order()
+        .expect("no references")
+        .into_iter()
+        .map(|i| p.attack_tree_id(i).expect("id"))
+        .collect();
+    assert_eq!(order, [tree_id(1), tree_id(2), tree_id(3)]);
+    let fragment = p.attack_tree_idx(&tree_id(2)).expect("fragment");
+    let root = p.attack_tree(fragment).expect("tree").root();
+    assert!(p.fragment_users(fragment).is_empty());
+    assert_eq!(p.step_fragment(fragment, root), None);
+    assert_eq!(p.step_fragment_id(fragment, root), None);
+}
+
+#[test]
+fn fragment_trees_cannot_realize_threats() {
+    let m = builtin();
+    let mut p = mixed(&m);
+    let asset = AssetId::new_v7();
+    let damage = DamageId::new_v7();
+    let threat = ThreatId::new_v7();
+    let safety = m.impact_category("safety").expect("safety");
+    let severe = m.level(safety, "severe").expect("severe");
+    for op in [
+        Op::AddAsset {
+            id: asset,
+            name: "ECU".into(),
+            properties: m.all_properties(),
+            provenance: Provenance::human("alice", 10),
+        },
+        Op::AddDamageScenario {
+            id: damage,
+            name: "Crash".into(),
+            impacts: vec![(safety, severe)],
+            provenance: Provenance::human("alice", 11),
+        },
+        Op::AddThreatScenario {
+            id: threat,
+            name: "Injection".into(),
+            asset,
+            category: m.threat_categories().next().expect("category"),
+            catalog_refs: Vec::new(),
+            damages: vec![damage],
+            provenance: Provenance::human("alice", 12),
+        },
+    ] {
+        p.apply(op).expect("setup");
+    }
+    let link = |tree| Op::SetThreatAttackTree {
+        threat,
+        tree: Some(tree_id(tree)),
+        provenance: Provenance::human("alice", 13),
+    };
+    let before = p.clone();
+    assert_eq!(p.apply(link(2)), Err(ModelError::FragmentRole(tree_id(2))));
+    assert_eq!(p, before);
+    p.apply(link(1)).expect("threat tree links");
 }
