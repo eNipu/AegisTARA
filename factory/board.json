@@ -3093,6 +3093,34 @@
       ],
       "decision": "Completed BLK-01. Slices 141a-141c used an integrated model sequence because persistence lands in 141d; 141d, 141e and 141f gates pass and full workspace CI passes. Slint is nav-only for SharedBlocks; GPUI renders the table.",
       "updated": "2026-11-25T03:27:24Z"
+    },
+    {
+      "id": "142-shared-fragments",
+      "title": "Shared fragments (BLK-02, BLK-03)",
+      "branch": "factory/142-shared-fragments",
+      "stage": "review",
+      "slice": "142a",
+      "base": "a5877d6dd907e4c67c77a3bcc9834b6410c3d429",
+      "reviews": {
+        "slice": "142a",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "142a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "inherit",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 237
+        }
+      ],
+      "decision": "Owner approved: defer canvas UI to GPUI 187; include selected-subtree MakeShared and value-preserving Unshare. Planner correcting audited blockers before build resumes.",
+      "updated": "2026-11-25T23:35:42Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
