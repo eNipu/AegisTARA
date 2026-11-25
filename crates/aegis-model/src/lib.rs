@@ -225,6 +225,7 @@ extern crate self as aegis_model;
 
 mod applicability;
 mod asset;
+mod blocks;
 pub mod catalog_pack;
 mod compat;
 mod control;
@@ -269,6 +270,7 @@ pub use applicability::{
     StepRef,
 };
 pub use asset::{Asset, PropertySet};
+pub use blocks::{MAX_SHARED_STEPS, SharedStep};
 pub use compat::{
     ClientContract, CompatibilityError, ENGINE_SEMANTICS_VERSION, EngineContract, FORMAT_VERSION,
     MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION, check_client_compatibility,
@@ -300,8 +302,8 @@ pub use id::{
     AssetId, AssetIdx, AssumptionId, AssumptionIdx, ClaimId, ClaimIdx, ComponentId, ComponentIdx,
     ConditionId, ConditionIdx, ControlId, ControlIdx, DamageId, DamageIdx, DataFlowId, DataFlowIdx,
     ElementId, GoalId, GoalIdx, InterfaceId, InterfaceIdx, NodeId, NodeIdx, PartyId, PartyIdx,
-    SuggestionId, ThreatId, ThreatIdx, TreeId, TreeIdx, TrustBoundaryId, TrustBoundaryIdx,
-    VisualPrefix, format_visual_id,
+    SharedStepId, SharedStepIdx, SuggestionId, ThreatId, ThreatIdx, TreeId, TreeIdx,
+    TrustBoundaryId, TrustBoundaryIdx, VisualPrefix, format_visual_id,
 };
 pub use item::{
     Component, DataFlow, Interface, ItemRef, MAX_COMPONENT_DEPTH, MAX_TRUST_BOUNDARY_MEMBERS,

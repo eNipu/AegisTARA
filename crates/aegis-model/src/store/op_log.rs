@@ -20,7 +20,8 @@ use crate::control::MAX_GOAL_CONTROLS;
 use crate::error::StoreError;
 use crate::id::{
     AssetId, AssumptionId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
-    ElementId, GoalId, InterfaceId, NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
+    ElementId, GoalId, InterfaceId, NodeId, PartyId, SharedStepId, ThreatId, TreeId,
+    TrustBoundaryId,
 };
 use crate::item::MAX_TRUST_BOUNDARY_MEMBERS;
 use crate::methodology::Methodology;
@@ -495,6 +496,21 @@ enum OpView<'a> {
     RemoveAssumption {
         id: Text<AssumptionId>,
     },
+    AddSharedStep {
+        id: Text<SharedStepId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RenameSharedStep {
+        id: Text<SharedStepId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveSharedStep {
+        id: Text<SharedStepId>,
+    },
     NeedCondition {
         element: TargetView,
         condition: Text<ConditionId>,
@@ -814,6 +830,8 @@ fn within_caps(op: &Op) -> bool {
         | Op::RenameCondition { name, .. }
         | Op::AddAssumption { name, .. }
         | Op::RenameAssumption { name, .. }
+        | Op::AddSharedStep { name, .. }
+        | Op::RenameSharedStep { name, .. }
         | Op::AddElement { name, .. }
         | Op::RenameElement { name, .. }
         | Op::AddComponent { name, .. }
@@ -1505,6 +1523,25 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             provenance: ProvenanceView::of(provenance),
         },
         Op::RemoveAssumption { id } => OpView::RemoveAssumption { id: Text(*id) },
+        Op::AddSharedStep {
+            id,
+            name,
+            provenance,
+        } => OpView::AddSharedStep {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RenameSharedStep {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameSharedStep {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveSharedStep { id } => OpView::RemoveSharedStep { id: Text(*id) },
         Op::NeedCondition {
             element,
             condition,
@@ -2510,6 +2547,25 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             }
         }
         OpWire::RemoveAssumption { id } => Op::RemoveAssumption { id: id.0 },
+        OpWire::AddSharedStep {
+            id,
+            name,
+            provenance,
+        } => Op::AddSharedStep {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RenameSharedStep {
+            id,
+            name,
+            provenance,
+        } => Op::RenameSharedStep {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveSharedStep { id } => Op::RemoveSharedStep { id: id.0 },
         OpWire::NeedCondition {
             element,
             condition,

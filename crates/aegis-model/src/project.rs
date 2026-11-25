@@ -9,6 +9,7 @@ use crate::applicability::{
     MAX_CLAIM_ASSUMPTIONS, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT, StepRef,
 };
 use crate::asset::{Asset, PropertySet};
+use crate::blocks::{MAX_SHARED_STEPS, SharedStep};
 use crate::control::{
     CeilingSource, ControlRule, ControlStatus, CybersecurityClaim, CybersecurityGoal, DecidingStep,
     MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment,
@@ -27,8 +28,8 @@ use crate::id::{
     ArenaIndex, AssetId, AssetIdx, AssumptionId, AssumptionIdx, ClaimId, ClaimIdx, ComponentId,
     ComponentIdx, ConditionId, ConditionIdx, ControlId, ControlIdx, DamageId, DamageIdx,
     DataFlowId, DataFlowIdx, ElementId, GoalId, GoalIdx, InterfaceId, InterfaceIdx, NodeId,
-    NodeIdx, PartyId, PartyIdx, ThreatId, ThreatIdx, TreeId, TreeIdx, TrustBoundaryId,
-    TrustBoundaryIdx, VisualPrefix,
+    NodeIdx, PartyId, PartyIdx, SharedStepId, SharedStepIdx, ThreatId, ThreatIdx, TreeId, TreeIdx,
+    TrustBoundaryId, TrustBoundaryIdx, VisualPrefix,
 };
 use crate::item::{
     Component, DataFlow, Interface, ItemIdx, ItemRef, MAX_COMPONENT_DEPTH,
@@ -392,6 +393,8 @@ struct RefCounts {
     goals: Vec<u32>,
     /// Per cybersecurity claim slot: how many live threats reference it.
     claims: Vec<u32>,
+    /// Per shared step slot: how many attack steps use it.
+    shared_step_users: Vec<u32>,
     /// Per component slot: how many live child components reference it as `parent`.
     component_children: Vec<u32>,
     /// Per component slot: how many live interfaces belong to it.
@@ -645,6 +648,7 @@ pub struct Project {
     parties: Arena<PartyId, PartyIdx, Party>,
     conditions: Arena<ConditionId, ConditionIdx, Condition>,
     assumptions: Arena<AssumptionId, AssumptionIdx, Assumption>,
+    shared_steps: Arena<SharedStepId, SharedStepIdx, SharedStep>,
     /// Conditions needed by each element (job 133). Sparse: an element with
     /// no conditions has no entry. Lists are sorted by public `ConditionId`.
     condition_links: BTreeMap<ElementRef, Vec<ConditionIdx>>,
@@ -806,6 +810,7 @@ impl Project {
             parties: Arena::new(),
             conditions: Arena::new(),
             assumptions: Arena::new(),
+            shared_steps: Arena::new(),
             condition_links: BTreeMap::new(),
             components: Arena::new(),
             interfaces: Arena::new(),
@@ -2195,6 +2200,51 @@ impl Project {
             .map(|n| VisualPrefix::Assumption.format(n))
     }
 
+    /// Resolves a live shared step's public ID to its arena index.
+    #[must_use]
+    pub fn shared_step_idx(&self, id: &SharedStepId) -> Option<SharedStepIdx> {
+        self.shared_steps.idx(id)
+    }
+
+    /// Returns a live shared step, or `None` if the slot is absent or tombstoned.
+    #[must_use]
+    pub fn shared_step(&self, idx: SharedStepIdx) -> Option<&SharedStep> {
+        self.shared_steps.get(idx)
+    }
+
+    /// Resolves a shared step's through item to its public reference. Time O(1).
+    #[must_use]
+    pub fn shared_step_via(&self, idx: SharedStepIdx) -> Option<ItemRef> {
+        self.item_ref(self.shared_step(idx)?.via())
+    }
+
+    /// Iterates live shared steps in `SharedStepId` order.
+    pub fn shared_steps(
+        &self,
+    ) -> impl Iterator<Item = (SharedStepIdx, SharedStepId, &SharedStep)> + '_ {
+        self.shared_steps.iter()
+    }
+
+    /// The public ID of the shared step at `idx`. Time O(1).
+    #[must_use]
+    pub fn shared_step_id(&self, idx: SharedStepIdx) -> Option<SharedStepId> {
+        self.shared_steps.id(idx)
+    }
+
+    /// Returns a live shared step's visual ID (`L00`, `L01`, ...).
+    #[must_use]
+    pub fn shared_step_visual_id(&self, idx: SharedStepIdx) -> Option<String> {
+        self.shared_steps
+            .visual_num(idx)
+            .map(|n| VisualPrefix::SharedStep.format(n))
+    }
+
+    /// The number of live shared steps. Time O(1).
+    #[must_use]
+    pub fn shared_step_count(&self) -> usize {
+        self.shared_steps.len()
+    }
+
     /// The condition indices this element needs, in `ConditionId` order. The
     /// client resolves them to public IDs; time O(1).
     #[must_use]
@@ -3257,6 +3307,9 @@ impl Project {
             ElementRef::Assumption(id) => self
                 .assumption_idx(&id)
                 .and_then(|idx| self.assumption_visual_id(idx)),
+            ElementRef::SharedStep(id) => self
+                .shared_step_idx(&id)
+                .and_then(|idx| self.shared_step_visual_id(idx)),
             ElementRef::Component(id) => self
                 .component_idx(&id)
                 .and_then(|idx| self.component_visual_id(idx)),
@@ -6387,6 +6440,9 @@ impl Project {
         let assumptions = diff_arena(&self.assumptions, &other.assumptions, |x, y| {
             self.same_assumption(x, other, y)
         });
+        let shared_steps = diff_arena(&self.shared_steps, &other.shared_steps, |x, y| {
+            self.same_shared_step(x, other, y)
+        });
         let components = diff_arena(&self.components, &other.components, |x, y| {
             self.same_component(x, other, y)
         });
@@ -6429,6 +6485,7 @@ impl Project {
             parties,
             conditions,
             assumptions,
+            shared_steps,
             elements: self.elements.diff(&other.elements),
             components,
             interfaces,
@@ -6460,6 +6517,7 @@ impl Project {
             (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let (mut controls, mut goals, mut claims, mut assumptions) =
             (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut shared_steps = Vec::new();
         let (mut components, mut interfaces, mut data_flows, mut trust_boundaries) =
             (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for target in changed {
@@ -6476,6 +6534,7 @@ impl Project {
                 ElementRef::Goal(id) => goals.push(id),
                 ElementRef::Claim(id) => claims.push(id),
                 ElementRef::Assumption(id) => assumptions.push(id),
+                ElementRef::SharedStep(id) => shared_steps.push(id),
                 ElementRef::Component(id) => components.push(id),
                 ElementRef::Interface(id) => interfaces.push(id),
                 ElementRef::DataFlow(id) => data_flows.push(id),
@@ -6490,6 +6549,7 @@ impl Project {
         merge_modified(&mut diff.cybersecurity_goals, goals);
         merge_modified(&mut diff.cybersecurity_claims, claims);
         merge_modified(&mut diff.assumptions, assumptions);
+        merge_modified(&mut diff.shared_steps, shared_steps);
         merge_modified(&mut diff.components, components);
         merge_modified(&mut diff.interfaces, interfaces);
         merge_modified(&mut diff.data_flows, data_flows);
@@ -6552,6 +6612,7 @@ impl Project {
                 | ElementRef::Control(_)
                 | ElementRef::DataFlow(_)
                 | ElementRef::TrustBoundary(_)
+                | ElementRef::SharedStep(_)
                 | ElementRef::ItemDescription
                 | ElementRef::ItemScope => {}
             }
@@ -7228,6 +7289,17 @@ impl Project {
                 provenance,
             } => return self.check_set_assumption_excludes(*id, trees, steps, provenance),
             Op::RemoveAssumption { id } => return self.check_remove_assumption(*id),
+            Op::AddSharedStep {
+                id,
+                name,
+                provenance,
+            } => return self.check_add_shared_step(*id, name, provenance),
+            Op::RenameSharedStep {
+                id,
+                name,
+                provenance,
+            } => return self.check_rename_shared_step(*id, name, provenance),
+            Op::RemoveSharedStep { id } => return self.check_remove_shared_step(*id),
             Op::NeedCondition {
                 element,
                 condition,
@@ -7845,6 +7917,17 @@ impl Project {
                 provenance,
             } => self.commit_set_assumption_excludes(id, trees, steps, provenance),
             Op::RemoveAssumption { id } => self.commit_remove_assumption(id),
+            Op::AddSharedStep {
+                id,
+                name,
+                provenance,
+            } => self.commit_add_shared_step(id, name, provenance),
+            Op::RenameSharedStep {
+                id,
+                name,
+                provenance,
+            } => self.commit_rename_shared_step(id, name, provenance),
+            Op::RemoveSharedStep { id } => self.commit_remove_shared_step(id),
             Op::NeedCondition {
                 element,
                 condition,
@@ -8361,6 +8444,16 @@ impl Project {
             .ok_or(ModelError::UnknownAssumption(id))
     }
 
+    fn live_shared_step(
+        &self,
+        id: SharedStepId,
+    ) -> Result<(SharedStepIdx, &SharedStep), ModelError> {
+        self.shared_steps
+            .idx(&id)
+            .and_then(|idx| self.shared_steps.get(idx).map(|s| (idx, s)))
+            .ok_or(ModelError::UnknownSharedStep(id))
+    }
+
     fn live_component(&self, id: ComponentId) -> Result<(ComponentIdx, &Component), ModelError> {
         let idx = self.component_index(id)?;
         let c = self
@@ -8817,6 +8910,7 @@ impl Project {
             ElementRef::Goal(id) => self.live_goal(id).map(|_| ()),
             ElementRef::Claim(id) => self.live_claim(id).map(|_| ()),
             ElementRef::Assumption(id) => self.live_assumption(id).map(|_| ()),
+            ElementRef::SharedStep(id) => self.live_shared_step(id).map(|_| ()),
             ElementRef::Component(id) => self.live_component(id).map(|_| ()),
             ElementRef::Interface(id) => self.live_interface(id).map(|_| ()),
             ElementRef::DataFlow(id) => self.live_data_flow(id).map(|_| ()),
@@ -10055,6 +10149,60 @@ impl Project {
                 assumption: id,
                 excludes,
             });
+        }
+        Ok(())
+    }
+
+    fn check_add_shared_step(
+        &self,
+        id: SharedStepId,
+        name: &str,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        check_name(EntityKind::SharedStep, name)?;
+        check_provenance(provenance)?;
+        if self.shared_steps.len() >= MAX_SHARED_STEPS
+            || self.shared_steps.next_idx(self.slot_limit).is_none()
+        {
+            return Err(ModelError::TooManySharedSteps {
+                max: MAX_SHARED_STEPS,
+            });
+        }
+        if self.shared_steps.idx(&id).is_some() {
+            return Err(ModelError::DuplicateSharedStep(id));
+        }
+        Ok(())
+    }
+
+    fn check_rename_shared_step(
+        &self,
+        id: SharedStepId,
+        name: &str,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        check_name(EntityKind::SharedStep, name)?;
+        check_provenance(provenance)?;
+        self.live_shared_step(id)?;
+        Ok(())
+    }
+
+    fn check_remove_shared_step(&self, id: SharedStepId) -> Result<(), ModelError> {
+        let (idx, step) = self.live_shared_step(id)?;
+        self.require_no_description(ElementRef::SharedStep(id), EntityKind::SharedStep)?;
+        let users = self
+            .refs
+            .shared_step_users
+            .get(idx.index())
+            .copied()
+            .unwrap_or(0);
+        if users > 0 {
+            return Err(ModelError::SharedStepInUse {
+                shared_step: id,
+                users,
+            });
+        }
+        if step.is_rated() {
+            return Err(ModelError::SharedStepIsRated(id));
         }
         Ok(())
     }
@@ -12027,6 +12175,55 @@ impl Project {
         })
     }
 
+    fn commit_add_shared_step(
+        &mut self,
+        id: SharedStepId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let idx = self
+            .shared_steps
+            .push(id, SharedStep::new(name, provenance), self.slot_limit)
+            .ok_or(ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::SharedStep,
+            })?;
+        self.refs.shared_step_users.resize(idx.index() + 1, 0);
+        Ok(Op::RemoveSharedStep { id })
+    }
+
+    fn commit_rename_shared_step(
+        &mut self,
+        id: SharedStepId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let idx = self.live_shared_step(id)?.0;
+        let step = self
+            .shared_steps
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownSharedStep(id))?;
+        let name = std::mem::replace(&mut step.name, name);
+        let provenance = std::mem::replace(&mut step.provenance, provenance);
+        Ok(Op::RenameSharedStep {
+            id,
+            name,
+            provenance,
+        })
+    }
+
+    fn commit_remove_shared_step(&mut self, id: SharedStepId) -> Result<Op, ModelError> {
+        let idx = self.live_shared_step(id)?.0;
+        let step = self
+            .shared_steps
+            .remove(idx)
+            .ok_or(ModelError::UnknownSharedStep(id))?;
+        Ok(Op::AddSharedStep {
+            id,
+            name: step.name,
+            provenance: step.provenance,
+        })
+    }
+
     fn commit_condition_link(
         &mut self,
         element: ElementRef,
@@ -12787,6 +12984,7 @@ impl PartialEq for Project {
             && self.parties.len() == other.parties.len()
             && self.conditions.len() == other.conditions.len()
             && self.assumptions.len() == other.assumptions.len()
+            && self.shared_steps.len() == other.shared_steps.len()
             && self.components.len() == other.components.len()
             && self.interfaces.len() == other.interfaces.len()
             && self.data_flows.len() == other.data_flows.len()
@@ -12824,6 +13022,10 @@ impl PartialEq for Project {
                 .assumptions()
                 .zip(other.assumptions())
                 .all(|((_, a, x), (_, b, y))| a == b && self.same_assumption(x, other, y))
+            && self
+                .shared_steps()
+                .zip(other.shared_steps())
+                .all(|((_, a, x), (_, b, y))| a == b && self.same_shared_step(x, other, y))
             && self
                 .components()
                 .zip(other.components())
@@ -12991,6 +13193,16 @@ impl Project {
                 .all(|(&a, &b)| self.trees.id(a) == other.trees.id(b))
     }
 
+    /// Compares shared steps with through-item indices resolved to public IDs (L29).
+    fn same_shared_step(&self, a: &SharedStep, other: &Self, b: &SharedStep) -> bool {
+        a.name == b.name
+            && a.feasibility == b.feasibility
+            && a.factors == b.factors
+            && self.item_ref(a.via) == other.item_ref(b.via)
+            && a.attack_type == b.attack_type
+            && a.provenance == b.provenance
+    }
+
     /// Compares two threats from two projects by content, with references
     /// resolved to public IDs. O(k).
     fn same_threat(&self, x: &ThreatScenario, other: &Project, y: &ThreatScenario) -> bool {
@@ -13055,6 +13267,37 @@ impl Project {
     }
 
     #[cfg(test)]
+    fn shared_step_invariants(&self) -> Result<(), String> {
+        let m = &*self.methodology;
+        for (_, id, step) in self.shared_steps() {
+            check_name(EntityKind::SharedStep, &step.name)
+                .map_err(|e| format!("shared step {id}: {e}"))?;
+            check_provenance(&step.provenance).map_err(|e| format!("shared step {id}: {e}"))?;
+            if !step.factors.is_empty() && step.factors.len() != m.feasibility_factor_count() {
+                return Err(format!("shared step {id} has invalid factor slots"));
+            }
+            for (factor, level) in m.feasibility_factors().zip(&step.factors) {
+                if let Some(level) = level {
+                    m.check_factor_level(factor, *level)
+                        .map_err(|e| format!("shared step {id}: {e}"))?;
+                }
+            }
+            if let Some(level) = step.feasibility {
+                m.check_feasibility_level(level)
+                    .map_err(|e| format!("shared step {id}: {e}"))?;
+            }
+            if step.via.is_some() && self.item_ref(step.via).is_none() {
+                return Err(format!("shared step {id} references a dead through item"));
+            }
+            if let Some(kind) = step.attack_type {
+                m.check_attack_type(kind)
+                    .map_err(|e| format!("shared step {id}: {e}"))?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
     /// Condition links name live elements and live conditions, sorted and
     /// unique by `ConditionId`, with no empty list kept (job 133).
     fn condition_invariants(&self) -> Result<(), String> {
@@ -13100,8 +13343,10 @@ impl Project {
         arena_invariants("trust_boundary", &self.trust_boundaries)?;
         arena_invariants("condition", &self.conditions)?;
         arena_invariants("assumption", &self.assumptions)?;
+        arena_invariants("shared step", &self.shared_steps)?;
         self.condition_invariants()?;
         self.assumption_invariants()?;
+        self.shared_step_invariants()?;
         self.methodology
             .check_attack_filter(&self.attack_filter.0)
             .map_err(|e| e.to_string())?;
@@ -13133,6 +13378,7 @@ impl Project {
             component_controls,
             interfaces,
             interface_controls,
+            shared_step_users: vec![0; self.shared_steps.slot_count()],
         };
         self.refs_invariants(&want)
     }
@@ -13692,6 +13938,19 @@ impl Project {
                 have.claims, want.claims
             ));
         }
+        if have.shared_step_users.len() != self.shared_steps.slot_count() {
+            return Err(format!(
+                "{} shared-step count rows for {} slots",
+                have.shared_step_users.len(),
+                self.shared_steps.slot_count()
+            ));
+        }
+        if have.shared_step_users != want.shared_step_users {
+            return Err(format!(
+                "shared-step user counts differ from a recount: {:?} vs {:?}",
+                have.shared_step_users, want.shared_step_users
+            ));
+        }
         // The derived `==` must agree with the field-by-field checks.
         if have != want {
             return Err("reference counts differ from a recount".to_owned());
@@ -13814,6 +14073,9 @@ const fn may_change_applicability(op: &Op, filter: &AttackFilter) -> bool {
         | Op::AddAssumption { .. }
         | Op::RenameAssumption { .. }
         | Op::RemoveAssumption { .. }
+        | Op::AddSharedStep { .. }
+        | Op::RenameSharedStep { .. }
+        | Op::RemoveSharedStep { .. }
         | Op::SetThreatFeasibility { .. }
         | Op::SetRiskTreatment { .. }
         | Op::AddSecurityControl { .. }
@@ -14233,6 +14495,9 @@ impl ProjectEvalCache {
             | Op::SetAssumptionHolds { .. }
             | Op::SetAssumptionExcludes { .. }
             | Op::RemoveAssumption { .. }
+            | Op::AddSharedStep { .. }
+            | Op::RenameSharedStep { .. }
+            | Op::RemoveSharedStep { .. }
             | Op::NeedCondition { .. }
             | Op::UnneedCondition { .. }
             | Op::NeedStepCondition { .. }
@@ -15476,6 +15741,30 @@ mod tests {
         assert_eq!(
             check_provenance(&Provenance::human("é".repeat(257), 1)),
             Err(ModelError::ActorTooLong { max: 256 })
+        );
+    }
+
+    #[test]
+    fn shared_step_in_use_guard_is_isolated() {
+        let mut p = Project::new(testkit::builtin());
+        let id = SharedStepId::new_v7();
+        p.apply(Op::AddSharedStep {
+            id,
+            name: "Inject frame".into(),
+            provenance: Provenance::human("alice", 1),
+        })
+        .expect("add shared step");
+        let idx = p.shared_step_idx(&id).expect("shared step index");
+        let step = p.shared_step(idx).expect("shared step");
+        assert!(!step.is_rated());
+        assert!(!p.descriptions.contains_key(&ElementRef::SharedStep(id)));
+        p.refs.shared_step_users[idx.index()] = 2;
+        assert_eq!(
+            p.validate(&Op::RemoveSharedStep { id }),
+            Err(ModelError::SharedStepInUse {
+                shared_step: id,
+                users: 2,
+            })
         );
     }
 

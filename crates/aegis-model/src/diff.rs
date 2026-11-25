@@ -23,7 +23,7 @@ use std::fmt;
 
 use crate::id::{
     AssetId, AssumptionId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
-    ElementId, GoalId, InterfaceId, PartyId, ThreatId, TreeId, TrustBoundaryId,
+    ElementId, GoalId, InterfaceId, PartyId, SharedStepId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::methodology::{FeasibilityLevel, RiskLevel};
 
@@ -571,6 +571,7 @@ pub struct ProjectDiff {
     pub(crate) conditions: EntityDiff<ConditionId>,
     /// Added, removed, and modified assumption IDs in canonical order.
     pub assumptions: EntityDiff<AssumptionId>,
+    pub(crate) shared_steps: EntityDiff<SharedStepId>,
     pub(crate) elements: EntityDiff<ElementId>,
     pub(crate) risk_deltas: Box<[ThreatRiskDelta]>,
     pub(crate) notes_changed: bool,
@@ -799,6 +800,12 @@ impl ProjectDiff {
         &self.assumptions
     }
 
+    /// Returns the added, removed, and modified [`SharedStepId`]s in canonical order.
+    #[must_use]
+    pub fn shared_steps(&self) -> &EntityDiff<SharedStepId> {
+        &self.shared_steps
+    }
+
     /// Returns the added, removed, and modified [`ElementId`]s of generic
     /// elements in canonical order. Element changes add no risk delta.
     ///
@@ -872,6 +879,7 @@ impl ProjectDiff {
             && self.parties.is_empty()
             && self.conditions.is_empty()
             && self.assumptions.is_empty()
+            && self.shared_steps.is_empty()
             && self.elements.is_empty()
             && !self.attack_filter_changed
     }

@@ -9,7 +9,8 @@ use crate::description::ElementRef;
 use crate::element::{AttrValue, ElementKind, LinkTarget};
 use crate::id::{
     AssetId, AssumptionId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
-    ElementId, GoalId, InterfaceId, NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
+    ElementId, GoalId, InterfaceId, NodeId, PartyId, SharedStepId, ThreatId, TreeId,
+    TrustBoundaryId,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -99,6 +100,9 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | `RenameCondition` | the same with the old name and provenance | O(log n) |
 /// | `SetConditionPresent` | the same with the old presence and provenance | O(log n) |
 /// | `RemoveCondition` | `AddCondition` with the old fields and provenance | O(log n) |
+/// | `AddSharedStep` | `RemoveSharedStep` | O(log n) |
+/// | `RenameSharedStep` | the same with the old name and provenance | O(log n) |
+/// | `RemoveSharedStep` | `AddSharedStep` with the old name and provenance | O(log n) |
 /// | `NeedCondition` | `UnneedCondition` with the same provenance | O(log n) |
 /// | `UnneedCondition` | `NeedCondition` with the same provenance | O(log n) |
 /// | `NeedStepCondition` | `UnneedStepCondition` with the same provenance | O(log n) |
@@ -878,6 +882,29 @@ pub enum Op {
         /// Existing assumption.
         id: AssumptionId,
     },
+    /// Adds an unrated shared attack step.
+    AddSharedStep {
+        /// Unused shared step ID.
+        id: SharedStepId,
+        /// Name, non-empty after trimming, at most 256 chars.
+        name: Arc<str>,
+        /// Provenance of the shared step creation.
+        provenance: Provenance,
+    },
+    /// Renames a shared attack step.
+    RenameSharedStep {
+        /// Existing shared step.
+        id: SharedStepId,
+        /// New name.
+        name: Arc<str>,
+        /// Provenance of the rename.
+        provenance: Provenance,
+    },
+    /// Removes an unrated, unused shared step with no description.
+    RemoveSharedStep {
+        /// Existing shared step.
+        id: SharedStepId,
+    },
     /// Records that an element needs a condition, capped at
     /// `MAX_CONDITIONS_PER_ELEMENT` and stored sorted by public ID.
     NeedCondition {
@@ -1321,6 +1348,8 @@ impl Op {
             | Self::SetConditionPresent { provenance, .. }
             | Self::AddAssumption { provenance, .. }
             | Self::RenameAssumption { provenance, .. }
+            | Self::AddSharedStep { provenance, .. }
+            | Self::RenameSharedStep { provenance, .. }
             | Self::SetAssumptionHolds { provenance, .. }
             | Self::SetAssumptionExcludes { provenance, .. }
             | Self::NeedCondition { provenance, .. }
@@ -1365,6 +1394,7 @@ impl Op {
             | Self::RemoveParty { .. }
             | Self::RemoveCondition { .. }
             | Self::RemoveAssumption { .. }
+            | Self::RemoveSharedStep { .. }
             | Self::RemoveElement { .. }
             | Self::RemoveComponent { .. }
             | Self::RemoveInterface { .. }
@@ -1456,6 +1486,8 @@ impl Op {
             | Self::SetConditionPresent { provenance, .. }
             | Self::AddAssumption { provenance, .. }
             | Self::RenameAssumption { provenance, .. }
+            | Self::AddSharedStep { provenance, .. }
+            | Self::RenameSharedStep { provenance, .. }
             | Self::SetAssumptionHolds { provenance, .. }
             | Self::SetAssumptionExcludes { provenance, .. }
             | Self::NeedCondition { provenance, .. }
@@ -1502,6 +1534,7 @@ impl Op {
             | Self::RemoveParty { .. }
             | Self::RemoveCondition { .. }
             | Self::RemoveAssumption { .. }
+            | Self::RemoveSharedStep { .. }
             | Self::RemoveElement { .. }
             | Self::RemoveComponent { .. }
             | Self::RemoveInterface { .. }

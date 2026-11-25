@@ -18,7 +18,7 @@ use aegis_model::{
     GateKind, GoalId, ImpactCategory, ImpactCategoryDef, InterfaceId, ItemRef, Level, LevelDef,
     Methodology, MethodologyDef, Node, NodeId, Op, PartyId, PartyKind, PotentialBandDef, Project,
     Property, PropertyDef, PropertySet, Provenance, ProvenanceSource, RiskLevel, RiskTreatment,
-    SegmentDef, ThreatCategory, ThreatCategoryDef, ThreatId, TreeId,
+    SegmentDef, SharedStepId, ThreatCategory, ThreatCategoryDef, ThreatId, TreeId,
 };
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
@@ -500,6 +500,10 @@ pub fn assumption_id(n: u64) -> aegis_model::AssumptionId {
     aegis_model::AssumptionId::from_uuid(v7(n)).expect("v7")
 }
 
+pub fn shared_step_id(n: u64) -> SharedStepId {
+    SharedStepId::from_uuid(v7(n)).expect("v7")
+}
+
 // ---------------------------------------------------------------------------
 // Vocabulary helpers.
 // ---------------------------------------------------------------------------
@@ -567,7 +571,7 @@ pub struct Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..84,
+        0u8..87,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -786,6 +790,14 @@ impl Gen {
         match nth(existing, sel / 8) {
             Some(id) if !sel.is_multiple_of(8) => id,
             _ => condition_id(self.fresh()),
+        }
+    }
+
+    fn shared_step(&mut self, p: &Project, sel: u16) -> SharedStepId {
+        let existing: Vec<_> = p.shared_steps().map(|(_, id, _)| id).collect();
+        match nth(existing, sel / 8) {
+            Some(id) if !sel.is_multiple_of(8) => id,
+            _ => shared_step_id(self.fresh()),
         }
     }
 
@@ -2102,6 +2114,23 @@ impl Gen {
                 }
                 Op::SetAttackFilter { filter, provenance }
             }
+            84 => Op::AddSharedStep {
+                id: if s.a.is_multiple_of(16) {
+                    self.shared_step(p, s.b)
+                } else {
+                    shared_step_id(self.fresh())
+                },
+                name: self.name(s.c),
+                provenance,
+            },
+            85 => Op::RenameSharedStep {
+                id: self.shared_step(p, s.a),
+                name: self.name(s.c),
+                provenance,
+            },
+            86 => Op::RemoveSharedStep {
+                id: self.shared_step(p, s.a),
+            },
             _ => Op::SetComponentSystem {
                 id: self.component(p, s.a),
                 system: (!s.b.is_multiple_of(4)).then(|| self.system(p, s.b)),

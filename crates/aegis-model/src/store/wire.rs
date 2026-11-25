@@ -58,8 +58,8 @@ use crate::control::{
 use crate::error::{PackError, StoreError};
 use crate::id::{
     AssetId, AssumptionId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
-    ElementId, GoalId, InterfaceId, NodeId, NodeIdx, PartyId, ThreatId, TreeId, TreeIdx,
-    TrustBoundaryId, VisualPrefix,
+    ElementId, GoalId, InterfaceId, NodeId, NodeIdx, PartyId, SharedStepId, ThreatId, TreeId,
+    TreeIdx, TrustBoundaryId, VisualPrefix,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -1883,6 +1883,7 @@ pub(super) enum TargetWire {
     Goal { id: WireId<GoalId> },
     Claim { id: WireId<ClaimId> },
     Assumption { id: WireId<AssumptionId> },
+    SharedStep { id: WireId<SharedStepId> },
     Component { id: WireId<ComponentId> },
     Interface { id: WireId<InterfaceId> },
     DataFlow { id: WireId<DataFlowId> },
@@ -1904,6 +1905,7 @@ impl TargetWire {
             Self::Goal { id } => E::Goal(id.0),
             Self::Claim { id } => E::Claim(id.0),
             Self::Assumption { id } => E::Assumption(id.0),
+            Self::SharedStep { id } => E::SharedStep(id.0),
             Self::Component { id } => E::Component(id.0),
             Self::Interface { id } => E::Interface(id.0),
             Self::DataFlow { id } => E::DataFlow(id.0),
@@ -1927,6 +1929,7 @@ pub(super) enum TargetView {
     Goal { id: Text<GoalId> },
     Claim { id: Text<ClaimId> },
     Assumption { id: Text<AssumptionId> },
+    SharedStep { id: Text<SharedStepId> },
     Component { id: Text<ComponentId> },
     Interface { id: Text<InterfaceId> },
     DataFlow { id: Text<DataFlowId> },
@@ -1948,6 +1951,7 @@ impl From<crate::description::ElementRef> for TargetView {
             E::Goal(id) => Self::Goal { id: Text(id) },
             E::Claim(id) => Self::Claim { id: Text(id) },
             E::Assumption(id) => Self::Assumption { id: Text(id) },
+            E::SharedStep(id) => Self::SharedStep { id: Text(id) },
             E::Component(id) => Self::Component { id: Text(id) },
             E::Interface(id) => Self::Interface { id: Text(id) },
             E::DataFlow(id) => Self::DataFlow { id: Text(id) },
@@ -2807,6 +2811,21 @@ pub(super) enum OpWire {
     },
     RemoveAssumption {
         id: WireId<AssumptionId>,
+    },
+    AddSharedStep {
+        id: WireId<SharedStepId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RenameSharedStep {
+        id: WireId<SharedStepId>,
+        name: Name,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    RemoveSharedStep {
+        id: WireId<SharedStepId>,
     },
     NeedCondition {
         element: TargetWire,
