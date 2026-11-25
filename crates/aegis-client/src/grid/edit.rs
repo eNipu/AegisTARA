@@ -46,6 +46,7 @@ pub(crate) fn target_matches_table(table: TableId, target: Selection) -> bool {
             | (TableId::Controls, Selection::Control(_))
             | (TableId::Goals, Selection::Goal(_))
             | (TableId::Claims, Selection::Claim(_))
+            | (TableId::SharedSteps, Selection::SharedStep(_))
     )
 }
 
@@ -97,6 +98,7 @@ pub(crate) fn target_exists(project: &Project, target: Selection) -> bool {
             .assumption_idx(&id)
             .and_then(|i| p.assumption(i))
             .is_some(),
+        Selection::SharedStep(id) => p.shared_step_idx(&id).is_some(),
     }
 }
 
@@ -207,6 +209,7 @@ pub(crate) fn element_name(p: &Project, target: Selection) -> Option<String> {
         Selection::Claim(id) => p
             .cybersecurity_claim(p.cybersecurity_claim_idx(&id)?)?
             .name(),
+        Selection::SharedStep(id) => p.shared_step(p.shared_step_idx(&id)?)?.name(),
         _ => return None,
     };
     Some(name.to_owned())
@@ -289,6 +292,40 @@ fn rating_editor(
                 allow_clear: true,
             }
         }
+        (TableId::SharedSteps, "feasibility", Selection::SharedStep(id)) => {
+            let Some(step) = p.shared_step_idx(&id).and_then(|idx| p.shared_step(idx)) else {
+                return CellEditorKind::ReadOnly;
+            };
+            if vocab.feasibility.is_empty() {
+                return CellEditorKind::ReadOnly;
+            }
+            let selected = step.feasibility().and_then(|level| {
+                p.methodology()
+                    .feasibility_levels()
+                    .position(|(l, _, _)| l == level)
+            });
+            CellEditorKind::SingleChoice {
+                options: vocab.feasibility.clone(),
+                selected,
+                allow_clear: true,
+            }
+        }
+        (TableId::SharedSteps, "attack-type", Selection::SharedStep(id)) => {
+            let Some(step) = p.shared_step_idx(&id).and_then(|idx| p.shared_step(idx)) else {
+                return CellEditorKind::ReadOnly;
+            };
+            if vocab.attack_types.is_empty() {
+                return CellEditorKind::ReadOnly;
+            }
+            let selected = step
+                .attack_type()
+                .and_then(|attack| p.methodology().attack_types().position(|a| a == attack));
+            CellEditorKind::SingleChoice {
+                options: vocab.attack_types.clone(),
+                selected,
+                allow_clear: true,
+            }
+        }
         _ => CellEditorKind::ReadOnly,
     }
 }
@@ -347,6 +384,7 @@ fn edit_name_cell(target: Selection, col_key: &str, input: &CellInput) -> Result
         Selection::Control(control) => Ok(Edit::RenameControl { control, name }),
         Selection::Goal(goal) => Ok(Edit::RenameGoal { goal, name }),
         Selection::Claim(claim) => Ok(Edit::RenameClaim { claim, name }),
+        Selection::SharedStep(shared_step) => Ok(Edit::RenameSharedStep { shared_step, name }),
         _ => Err(GridError::NotEditable),
     }
 }
@@ -457,6 +495,42 @@ fn edit_rating_cell(
             Ok(Edit::SetTreatment {
                 threat,
                 treatment: *choice,
+            })
+        }
+        (TableId::SharedSteps, "feasibility", Selection::SharedStep(shared_step)) => {
+            let CellInput::SingleChoice(choice) = input else {
+                return Err(unknown_rating(col_key, ""));
+            };
+            let level = match *choice {
+                None => None,
+                Some(ix) => Some(
+                    project
+                        .methodology()
+                        .feasibility_levels()
+                        .nth(ix)
+                        .map(|(level, _, _)| level)
+                        .ok_or_else(|| unknown_rating(col_key, &ix.to_string()))?,
+                ),
+            };
+            Ok(Edit::SetSharedStepFeasibility { shared_step, level })
+        }
+        (TableId::SharedSteps, "attack-type", Selection::SharedStep(shared_step)) => {
+            let CellInput::SingleChoice(choice) = input else {
+                return Err(unknown_rating(col_key, ""));
+            };
+            let attack_type = match *choice {
+                None => None,
+                Some(ix) => Some(
+                    project
+                        .methodology()
+                        .attack_types()
+                        .nth(ix)
+                        .ok_or_else(|| unknown_rating(col_key, &ix.to_string()))?,
+                ),
+            };
+            Ok(Edit::SetSharedStepAttackType {
+                shared_step,
+                attack_type,
             })
         }
         _ => Err(GridError::ReadOnlyColumn),

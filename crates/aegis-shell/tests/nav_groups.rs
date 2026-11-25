@@ -78,8 +78,9 @@ async fn groups_close_open_and_count_their_pages() {
 async fn attacker_profile_nav_dot_tracks_non_default_reset_and_undo() {
     use aegis_model::{AttackFilter, ScalabilityFilter};
 
-    assert_eq!(Page::ALL.len(), 18);
-    assert_eq!(Page::ALL[9], Page::AttackerProfile);
+    assert_eq!(Page::ALL.len(), 19);
+    assert_eq!(Page::ALL[9], Page::SharedBlocks);
+    assert_eq!(Page::ALL[10], Page::AttackerProfile);
     assert_eq!(Page::AttackerProfile.group(), Some(PageGroup::Feasibility));
 
     let server = TestServer::start().await;

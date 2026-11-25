@@ -6,7 +6,7 @@ mod common;
 
 use aegis_model::{
     AttackTree, ConditionId, ElementRef, GateKind, ItemRef, Node, NodeId, Op, Project,
-    ProjectEvalCache, Provenance, ScalabilityFilter, ThreatId, TreeId,
+    ProjectEvalCache, Provenance, ScalabilityFilter, StepTarget, ThreatId, TreeId,
 };
 use common::{accepted, asset_id, builtin, cat, component_id, condition_id, damage_id, feas};
 use common::{interface_id, lvl, node_id, seeds, threat_id, tree_id};
@@ -142,8 +142,7 @@ fn switch_touches_only_its_step_and_threats() -> Res {
 
     let m = p.methodology().clone();
     let rate = |level: &str| Op::SetStepFeasibility {
-        tree: trees[1],
-        node: node_id(201),
+        target: StepTarget::Step(trees[1], node_id(201)),
         level: Some(feas(&m, level)),
         provenance: prov(),
     };
@@ -232,8 +231,7 @@ fn fixture() -> Res<Fixture> {
         (tz, 33, ItemRef::Component(k2)),
     ] {
         p.apply(Op::SetStepVia {
-            tree,
-            node: node_id(node),
+            target: StepTarget::Step(tree, node_id(node)),
             via: Some(via),
             provenance: prov(),
         })?;
@@ -560,8 +558,7 @@ proptest! {
                     let lcount = m.factor_level_count(fac);
                     let lvl = level.map(|i| m.factor_levels(fac).nth(i % lcount).expect("level"));
                     Op::SetStepFactor {
-                        tree,
-                        node,
+                        target: StepTarget::Step(tree, node),
                         factor: fac,
                         level: lvl,
                         provenance: prov(),

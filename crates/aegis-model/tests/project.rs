@@ -11,7 +11,7 @@ use std::sync::Arc;
 use aegis_model::{
     AssetId, AttackTree, CatalogRef, DamageId, Derivation, EntityKind, GateKind, LintCode,
     LintFinding, MAX_STEP_MITIGATIONS, Methodology, ModelError, Node, NodeId, Op, Project,
-    PropertySet, Provenance, ProvenanceSource, RiskTreatment, ThreatId, TreeId,
+    PropertySet, Provenance, ProvenanceSource, RiskTreatment, StepTarget, ThreatId, TreeId,
 };
 use common::{
     SENTINEL, asset_id, builtin, cat, claim_id, control_id, cref, damage_id, factor, factor_lvl,
@@ -735,8 +735,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
         (
             p.clone(),
             Op::SetStepFeasibility {
-                tree: fx.tree1,
-                node: fx.fresh_node,
+                target: StepTarget::Step(fx.tree1, fx.fresh_node),
                 level: None,
                 provenance: Provenance::default(),
             },
@@ -748,8 +747,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
         (
             p.clone(),
             Op::SetStepFeasibility {
-                tree: fx.tree1,
-                node: fx.tree1_root,
+                target: StepTarget::Step(fx.tree1, fx.tree1_root),
                 level: None,
                 provenance: Provenance::default(),
             },
@@ -761,8 +759,7 @@ fn cases(name: &str) -> Vec<(Project, Op, ModelError)> {
         (
             p.clone(),
             Op::SetStepFeasibility {
-                tree: fx.tree1,
-                node: fx.tree1_step,
+                target: StepTarget::Step(fx.tree1, fx.tree1_step),
                 level: Some(bad_flvl),
                 provenance: Provenance::default(),
             },
@@ -1346,14 +1343,12 @@ fn inverse_round_trip() {
             provenance: p_edit.clone(),
         },
         Op::SetStepFeasibility {
-            tree: fx.tree1,
-            node: fx.tree1_step,
+            target: StepTarget::Step(fx.tree1, fx.tree1_step),
             level: Some(feas(&m, "high")),
             provenance: p_edit.clone(),
         },
         Op::SetStepFeasibility {
-            tree: fx.tree1,
-            node: fx.tree1_step,
+            target: StepTarget::Step(fx.tree1, fx.tree1_step),
             level: None,
             provenance: p_edit.clone(),
         },
@@ -1652,8 +1647,7 @@ fn errors_never_contain_names() {
     ok(
         &mut p,
         Op::SetStepFeasibility {
-            tree: fx.tree1,
-            node: fx.tree1_step,
+            target: StepTarget::Step(fx.tree1, fx.tree1_step),
             level: None,
             provenance: Provenance::default(),
         },
@@ -1783,8 +1777,7 @@ fn threat_attack_tree_integrity_and_validation() {
     rejects(
         &mut p,
         Op::SetStepFeasibility {
-            tree: fx.tree1,
-            node: fx.tree1_root,
+            target: StepTarget::Step(fx.tree1, fx.tree1_root),
             level: Some(feas(&m, "low")),
             provenance: Provenance::default(),
         },
@@ -1796,8 +1789,7 @@ fn threat_attack_tree_integrity_and_validation() {
     rejects(
         &mut p,
         Op::SetStepFeasibility {
-            tree: fx.tree1,
-            node: fx.fresh_node,
+            target: StepTarget::Step(fx.tree1, fx.fresh_node),
             level: Some(feas(&m, "low")),
             provenance: Provenance::default(),
         },
@@ -2050,8 +2042,7 @@ fn evaluate_threat_feasibility_and_why_path() {
         let undo_sa = ok(
             &mut p,
             Op::SetStepFeasibility {
-                tree: tree_id,
-                node: sa_id,
+                target: StepTarget::Step(tree_id, sa_id),
                 level: Some(f0),
                 provenance: Provenance::default(),
             },
@@ -2059,8 +2050,7 @@ fn evaluate_threat_feasibility_and_why_path() {
         let undo_sb = ok(
             &mut p,
             Op::SetStepFeasibility {
-                tree: tree_id,
-                node: sb_id,
+                target: StepTarget::Step(tree_id, sb_id),
                 level: Some(f3),
                 provenance: Provenance::default(),
             },
@@ -2081,8 +2071,7 @@ fn evaluate_threat_feasibility_and_why_path() {
         ok(
             &mut p,
             Op::SetStepFeasibility {
-                tree: tree_id,
-                node: sb_id,
+                target: StepTarget::Step(tree_id, sb_id),
                 level: None,
                 provenance: Provenance::default(),
             },
@@ -2450,8 +2439,7 @@ fn provenance_lifecycle_and_undo_redo_across_every_op() {
     record(
         &mut p,
         Op::SetStepFeasibility {
-            tree: tree_id,
-            node: step_id,
+            target: StepTarget::Step(tree_id, step_id),
             level: Some(feas(&m, "high")),
             provenance: p_tree1.clone(),
         },
@@ -2540,8 +2528,7 @@ fn project_equality_compares_provenance_on_every_element_kind() {
     ok(
         &mut p_tree,
         Op::SetStepFeasibility {
-            tree: fx.tree1,
-            node: fx.tree1_step,
+            target: StepTarget::Step(fx.tree1, fx.tree1_step),
             level: Some(feas(&fx.m, "medium")),
             provenance: other,
         },
@@ -2958,8 +2945,7 @@ fn evaluate_risk_across_damages_and_explain_why() {
     ok(
         &mut p,
         Op::SetStepFeasibility {
-            tree: tr,
-            node: step_rf,
+            target: StepTarget::Step(tr, step_rf),
             level: None,
             provenance: Provenance::default(),
         },
@@ -2999,8 +2985,7 @@ fn evaluate_risk_across_damages_and_explain_why() {
     ok(
         &mut p,
         Op::SetStepFeasibility {
-            tree: tr,
-            node: step_rf,
+            target: StepTarget::Step(tr, step_rf),
             level: Some(feas(&m, "low")),
             provenance: Provenance::default(),
         },
@@ -3646,8 +3631,7 @@ fn lint_all_rules_and_resolutions() {
     ok(
         &mut p,
         Op::SetStepFeasibility {
-            tree: tr1,
-            node: s_unrated,
+            target: StepTarget::Step(tr1, s_unrated),
             level: Some(feas(&m, "low")),
             provenance: Provenance::default(),
         },
@@ -3895,8 +3879,7 @@ fn lint_never_contains_names_or_actors() {
     ok(
         &mut p,
         Op::SetStepFactor {
-            tree: tr_unlinked,
-            node: s_incomplete,
+            target: StepTarget::Step(tr_unlinked, s_incomplete),
             factor: f_elapsed,
             level: Some(factor_lvl(&m, f_elapsed, "le-1d")),
             provenance: prov.clone(),
@@ -3914,8 +3897,7 @@ fn lint_never_contains_names_or_actors() {
         ok(
             &mut p,
             Op::SetStepFactor {
-                tree: tr_unlinked,
-                node: s_redundant,
+                target: StepTarget::Step(tr_unlinked, s_redundant),
                 factor: f,
                 level: Some(l),
                 provenance: prov.clone(),
@@ -5180,8 +5162,7 @@ fn project_eval_cache_incremental_updates_and_counters() {
     cache.reset_counters();
     p.apply_cached(
         Op::SetStepFeasibility {
-            tree: tr1,
-            node: s1,
+            target: StepTarget::Step(tr1, s1),
             level: Some(feas(&m, "high")),
             provenance: Provenance::default(),
         },

@@ -13,7 +13,7 @@ use aegis_model::catalog_pack::CatalogPack;
 use aegis_model::library::{ItemNode, LibraryItem, LibraryPack};
 use aegis_model::{
     ElementRef, MAX_ATTACK_TREE_NODES, MAX_LABEL_BYTES, Node, NodeId, Op, Project, Provenance,
-    ThreatId, TreeId,
+    StepTarget, ThreatId, TreeId,
 };
 
 use crate::commands::EditError;
@@ -201,8 +201,7 @@ impl Builder<'_> {
                 err("the item rates a step with a level this methodology does not have")
             })?;
         self.ops.push(Op::SetStepFeasibility {
-            tree: self.tree,
-            node: id,
+            target: StepTarget::Step(self.tree, id),
             level: Some(level),
             provenance: self.prov.clone(),
         });
@@ -222,8 +221,7 @@ impl Builder<'_> {
         };
         if let Some(t) = self.project.methodology().attack_type(key) {
             self.ops.push(Op::SetStepAttackType {
-                tree: self.tree,
-                node: id,
+                target: StepTarget::Step(self.tree, id),
                 attack_type: Some(t),
                 provenance: self.prov.clone(),
             });

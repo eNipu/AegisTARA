@@ -14,7 +14,7 @@ use aegis_client::view::{
     ColumnKind, ColumnLabel, Page, PageLayout, RiskView, TableId, threat_rows,
 };
 use aegis_client::workspace::{Origin, Workspace};
-use aegis_model::{ClaimId, GoalId, Methodology};
+use aegis_model::{ClaimId, GoalId, Methodology, SharedStepId};
 
 /// The sample project plus a goal and a claim, so every table has a row.
 fn workspace_of(m: Methodology) -> Workspace {
@@ -30,6 +30,10 @@ fn workspace_of(m: Methodology) -> Workspace {
         Edit::AddClaim {
             id: ClaimId::new_v7(),
             name: "Firmware is signed by the supplier".into(),
+        },
+        Edit::AddSharedStep {
+            id: SharedStepId::new_v7(),
+            name: "Replay a diagnostic request".into(),
         },
     ];
     for edit in &edits {
@@ -184,6 +188,22 @@ fn every_table_shows_what_its_page_shows_today() {
         })
         .collect();
     assert_eq!(shown(&ws, TableId::Problems), filled(problems));
+
+    let shared = ws
+        .project()
+        .shared_steps()
+        .map(|(idx, _, step)| {
+            vec![
+                ws.project().shared_step_visual_id(idx).unwrap_or_default(),
+                step.name().to_owned(),
+                "not rated".to_owned(),
+                String::new(),
+                "not rated".to_owned(),
+                String::new(),
+            ]
+        })
+        .collect();
+    assert_eq!(shown(&ws, TableId::SharedSteps), filled(shared));
 }
 
 /// Hidden columns have cells too, every column key is known to the cell
@@ -311,6 +331,10 @@ fn only_inputs_are_editable() {
         ["name", "responsible", "assumptions", "conditions"]
     );
     assert_eq!(editable(TableId::Problems), [""; 0]);
+    assert_eq!(
+        editable(TableId::SharedSteps),
+        ["name", "feasibility", "via", "attack-type"]
+    );
 }
 
 #[test]

@@ -27,7 +27,7 @@ use crate::description::ElementRef;
 use crate::error::{EntityKind, ModelError};
 use crate::id::{NodeId, SuggestionId, TreeId};
 use crate::methodology::{CatalogRef, FeasibilityLevel};
-use crate::op::Op;
+use crate::op::{Op, StepTarget};
 use crate::project::{MAX_NAME_CHARS, Project};
 use crate::provenance::{Provenance, ProvenanceSource};
 use crate::tree::{AttackTree, Node};
@@ -257,8 +257,7 @@ fn derive_preview(title: &Arc<str>, ops: &[Op]) -> GhostPreview {
             } => {
                 let feasibility = ops.iter().find_map(|other| match other {
                     Op::SetStepFeasibility {
-                        tree: t,
-                        node: n,
+                        target: StepTarget::Step(t, n),
                         level: Some(lvl),
                         ..
                     } if t == tree && n == id => Some(*lvl),
@@ -729,8 +728,7 @@ mod tests {
                             provenance: Provenance::default(),
                         },
                         Op::SetStepFeasibility {
-                            tree: tree_id,
-                            node: n1,
+                            target: StepTarget::Step(tree_id, n1),
                             level: Some(high),
                             provenance: Provenance::default(),
                         },
@@ -760,8 +758,7 @@ mod tests {
                             provenance: Provenance::default(),
                         },
                         Op::SetStepFeasibility {
-                            tree: tree_id,
-                            node: n2,
+                            target: StepTarget::Step(tree_id, n2),
                             level: Some(low),
                             provenance: Provenance::default(),
                         },

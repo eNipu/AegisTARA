@@ -116,6 +116,7 @@ use crate::applicability::{
     MAX_ASSUMPTION_EXCLUDES, MAX_ASSUMPTIONS, MAX_CLAIM_ASSUMPTIONS, MAX_CONDITIONS,
     MAX_CONDITIONS_PER_ELEMENT,
 };
+use crate::blocks::MAX_SHARED_STEPS;
 use crate::control::{
     MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS,
 };
@@ -385,6 +386,12 @@ pub enum Limit {
         /// The cap, in items.
         max: usize,
     },
+    /// A snapshot lists more than [`MAX_SHARED_STEPS`](crate::MAX_SHARED_STEPS)
+    /// shared steps.
+    SharedSteps {
+        /// The cap, in items.
+        max: usize,
+    },
     /// An element or step needs more than
     /// [`MAX_CONDITIONS_PER_ELEMENT`](crate::MAX_CONDITIONS_PER_ELEMENT)
     /// conditions.
@@ -600,6 +607,9 @@ impl Limit {
     pub(crate) const ASSUMPTIONS: Limit = Limit::Assumptions {
         max: MAX_ASSUMPTIONS,
     };
+    pub(crate) const SHARED_STEPS: Limit = Limit::SharedSteps {
+        max: MAX_SHARED_STEPS,
+    };
     pub(crate) const ASSUMPTION_EXCLUDES: Limit = Limit::AssumptionExcludes {
         max: MAX_ASSUMPTION_EXCLUDES,
     };
@@ -709,6 +719,7 @@ impl fmt::Display for Limit {
             Limit::Parties { max } => write!(f, "more than {max} parties"),
             Limit::Responsible { max } => write!(f, "more than {max} responsible parties"),
             Limit::Conditions { max } => write!(f, "more than {max} conditions"),
+            Limit::SharedSteps { max } => write!(f, "more than {max} shared steps"),
             Limit::Assumptions { max } => write!(f, "more than {max} assumptions"),
             Limit::ConditionLinks { max } => write!(f, "more than {max} conditions on one element"),
             Limit::AssumptionExcludes { max } => {
@@ -844,6 +855,10 @@ mod tests {
             Limit::DAMAGE_LINKS.to_string(),
             "more than 256 damage links"
         );
+        assert_eq!(
+            Limit::SHARED_STEPS.to_string(),
+            "more than 4096 shared steps"
+        );
         for l in [
             Limit::OP_RECORD,
             Limit::NAME,
@@ -861,6 +876,7 @@ mod tests {
             Limit::PARTIES,
             Limit::RESPONSIBLE,
             Limit::CONDITIONS,
+            Limit::SHARED_STEPS,
             Limit::CONDITION_LINKS,
             Limit::CONTROL_TARGETS,
             Limit::CONTROL_RULES,

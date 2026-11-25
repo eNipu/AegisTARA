@@ -9,7 +9,7 @@ use std::sync::Arc;
 use aegis_model::{
     AssetId, AttackTree, ClaimId, ComponentId, ConditionId, ElementRef, GateKind, GoalId,
     InterfaceId, ItemRef, Methodology, Node, NodeId, NodeIdx, Op, Project, Provenance, Reason,
-    ThreatId, TreeId, TreeIdx,
+    StepTarget, ThreatId, TreeId, TreeIdx,
 };
 use proptest::prelude::*;
 
@@ -156,8 +156,7 @@ impl Fx {
 
     fn via(&mut self, tree: TreeId, node: NodeId, item: ItemRef) {
         self.apply(Op::SetStepVia {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
             via: Some(item),
             provenance: who(),
         });
@@ -724,8 +723,7 @@ fn salt(p: &mut Project, choices: &[(usize, usize, u8)]) {
                 let (tree, node) = steps[a % steps.len()];
                 let via = Some(items[b % items.len()]);
                 Op::SetStepVia {
-                    tree,
-                    node,
+                    target: StepTarget::Step(tree, node),
                     via,
                     provenance: who(),
                 }

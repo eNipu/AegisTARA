@@ -18,8 +18,8 @@ use aegis_client::view::{ColumnKind, Selection, TableId};
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
     AssetId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, ElementId, ElementRef, GoalId,
-    ItemRef, Methodology, Op, PartyId, PartyKind, Project, Provenance, SystemSet, SystemUse,
-    ThreatId, TreeId,
+    ItemRef, Methodology, Op, PartyId, PartyKind, Project, Provenance, SharedStepId, SystemSet,
+    SystemUse, ThreatId, TreeId,
 };
 
 fn prov() -> Provenance {
@@ -116,6 +116,8 @@ struct Fx {
     goal: GoalId,
     claim: ClaimId,
     cond: ConditionId,
+    shared1: SharedStepId,
+    shared2: SharedStepId,
 }
 
 fn fixture() -> Fx {
@@ -150,6 +152,28 @@ fn fixture() -> Fx {
     let t1 = add_threat(&mut ws, "Spoof brake", a1, d1);
     let t2 = add_threat(&mut ws, "Blinding camera", a2, d1);
     let t3 = add_threat(&mut ws, "Tamper loose", a3, d2);
+
+    let shared1 = SharedStepId::new_v7();
+    let shared2 = SharedStepId::new_v7();
+    for (id, name, via) in [
+        (shared1, "Replay brake frame", caliper),
+        (shared2, "Blind the camera", camera),
+    ] {
+        run(
+            &mut ws,
+            &Edit::AddSharedStep {
+                id,
+                name: name.into(),
+            },
+        );
+        run(
+            &mut ws,
+            &Edit::SetSharedStepVia {
+                shared_step: id,
+                via: Some(ItemRef::Component(via)),
+            },
+        );
+    }
 
     run(
         &mut ws,
@@ -292,6 +316,8 @@ fn fixture() -> Fx {
         goal,
         claim,
         cond,
+        shared1,
+        shared2,
     }
 }
 
@@ -466,6 +492,7 @@ fn independent_system_set(p: &Project, u: &SystemUse, s: Selection) -> Option<Sy
         Selection::Control(id) => p.security_control_idx(&id).map(|i| u.control(i)),
         Selection::Goal(id) => p.cybersecurity_goal_idx(&id).map(|i| u.goal(i)),
         Selection::Claim(id) => p.cybersecurity_claim_idx(&id).map(|i| u.claim(i)),
+        Selection::SharedStep(id) => p.shared_step_idx(&id).map(|i| u.shared_step(i)),
         Selection::Party(_) | Selection::Condition(_) | Selection::Assumption(_) => None,
     }
 }
@@ -473,12 +500,16 @@ fn independent_system_set(p: &Project, u: &SystemUse, s: Selection) -> Option<Sy
 fn is_shared(s: Selection) -> bool {
     matches!(
         s,
-        Selection::Damage(_) | Selection::Control(_) | Selection::Goal(_) | Selection::Claim(_)
+        Selection::Damage(_)
+            | Selection::Control(_)
+            | Selection::Goal(_)
+            | Selection::Claim(_)
+            | Selection::SharedStep(_)
     )
 }
 
 #[test]
-fn owner_filtering_matches_system_use_across_all_eight_tables() {
+fn owner_filtering_matches_system_use_across_all_nine_tables() {
     let fx = fixture();
     let (vocab, catalog) = english(&fx.ws);
     let project = fx.ws.project();
@@ -508,7 +539,11 @@ fn owner_filtering_matches_system_use_across_all_eight_tables() {
                     Owner::Unassigned => {
                         if matches!(
                             table,
-                            TableId::Damage | TableId::Controls | TableId::Goals | TableId::Claims
+                            TableId::Damage
+                                | TableId::Controls
+                                | TableId::Goals
+                                | TableId::Claims
+                                | TableId::SharedSteps
                         ) {
                             false
                         } else {
@@ -569,12 +604,51 @@ fn owner_filtering_matches_system_use_across_all_eight_tables() {
         TableId::Controls,
         TableId::Goals,
         TableId::Claims,
+        TableId::SharedSteps,
     ] {
         assert!(
             table_rows_for_owner(&fx.ws, shared, Owner::Unassigned, &vocab, &catalog).is_empty(),
             "{shared:?} must be empty for Owner::Unassigned"
         );
     }
+
+    assert_eq!(
+        table_rows_for_owner(
+            &fx.ws,
+            TableId::SharedSteps,
+            Owner::System(fx.s1),
+            &vocab,
+            &catalog
+        )
+        .iter()
+        .map(|r| r.target)
+        .collect::<Vec<_>>(),
+        vec![Some(Selection::SharedStep(fx.shared1))]
+    );
+    assert_eq!(
+        table_rows_for_owner(
+            &fx.ws,
+            TableId::SharedSteps,
+            Owner::System(fx.s2),
+            &vocab,
+            &catalog
+        )
+        .iter()
+        .map(|r| r.target)
+        .collect::<Vec<_>>(),
+        vec![Some(Selection::SharedStep(fx.shared2))]
+    );
+    assert_eq!(
+        table_rows_for_owner(
+            &fx.ws,
+            TableId::SharedSteps,
+            Owner::Project,
+            &vocab,
+            &catalog
+        )
+        .len(),
+        2
+    );
 
     // Folder <-> TableId and table_key mappings.
     let pairs = [
@@ -586,6 +660,7 @@ fn owner_filtering_matches_system_use_across_all_eight_tables() {
         (Folder::Goals, TableId::Goals, "goals"),
         (Folder::Claims, TableId::Claims, "claims"),
         (Folder::Problems, TableId::Problems, "problems"),
+        (Folder::SharedSteps, TableId::SharedSteps, "shared-steps"),
     ];
     for (folder, table, key) in pairs {
         assert_eq!(table_for_folder(folder), Some(table));
@@ -758,6 +833,7 @@ fn table_source_json_matches_workspace_files_and_handles_problems() {
         (TableId::Controls, "shared/controls.json"),
         (TableId::Goals, "shared/goals.json"),
         (TableId::Claims, "shared/claims.json"),
+        (TableId::SharedSteps, "shared/steps.json"),
     ];
     for (table, expected_path) in paths {
         let file = files
@@ -780,7 +856,13 @@ fn table_source_json_matches_workspace_files_and_handles_problems() {
         let val: serde_json::Value = serde_json::from_str(&json).expect("valid json");
         assert_eq!(val["format"], "aegis-workspace", "{table:?}");
         assert_eq!(val["version"], 1, "{table:?}");
-        assert_eq!(val["items"], serde_json::json!([]), "{table:?}");
+        let field = if table == TableId::SharedSteps {
+            assert_eq!(val["kind"], "shared-steps", "{table:?}");
+            "shared_steps"
+        } else {
+            "items"
+        };
+        assert_eq!(val[field], serde_json::json!([]), "{table:?}");
     }
     assert_eq!(
         table_source_json(empty.project(), TableId::Problems),

@@ -2410,6 +2410,9 @@ pub fn selection_visual_id(project: &Project, s: Selection) -> String {
         Selection::Assumption(id) => project
             .assumption_idx(&id)
             .and_then(|i| project.assumption_visual_id(i)),
+        Selection::SharedStep(id) => project
+            .shared_step_idx(&id)
+            .and_then(|i| project.shared_step_visual_id(i)),
     }
     .unwrap_or_default()
 }
@@ -2478,6 +2481,10 @@ fn named(project: &Project, s: Selection) -> &str {
             .assumption_idx(&id)
             .and_then(|i| project.assumption(i))
             .map(aegis_model::Assumption::name),
+        Selection::SharedStep(id) => project
+            .shared_step_idx(&id)
+            .and_then(|i| project.shared_step(i))
+            .map(aegis_model::SharedStep::name),
     }
     .unwrap_or("?")
 }
@@ -3308,6 +3315,7 @@ pub(crate) fn page_count(p: &Project, page: Page, baselines: usize, lint: usize)
         Page::Assets => p.asset_count(),
         Page::Threats | Page::Risks => p.threat_scenario_count(),
         Page::Trees => p.attack_tree_count(),
+        Page::SharedBlocks => p.shared_step_count(),
         Page::AttackerProfile => 0,
         Page::Controls => p.security_control_count(),
         Page::Goals => p.cybersecurity_goal_count() + p.cybersecurity_claim_count(),
@@ -3332,6 +3340,7 @@ pub fn page_of(s: Selection) -> crate::view::Page {
         Selection::Damage(_) => Page::Damage,
         Selection::Threat(_) => Page::Threats,
         Selection::Tree(_) | Selection::TreeNode(_, _) => Page::Trees,
+        Selection::SharedStep(_) => Page::SharedBlocks,
         Selection::Control(_) => Page::Controls,
         Selection::Goal(_) | Selection::Claim(_) | Selection::Party(_) => Page::Goals,
         Selection::Condition(_) => Page::Configuration,
@@ -3369,6 +3378,10 @@ pub fn select(ui: &mut UiState, s: Selection) {
         Selection::Assumption(id) => {
             ui.selected_assumption = Some(id);
             ui.page = Page::Assumptions;
+        }
+        Selection::SharedStep(id) => {
+            ui.selected_shared_step = Some(id);
+            ui.page = Page::SharedBlocks;
         }
         Selection::Condition(id) => ui.selected_condition = Some(id),
     }
@@ -3430,6 +3443,14 @@ pub fn palette_elements(ws: &Workspace) -> Vec<PaletteElement> {
                 .unwrap_or_default(),
             kind: names.attack_tree.singular.to_string(),
             target: Selection::Tree(id),
+        });
+    }
+    for (idx, id, step) in p.shared_steps() {
+        out.push(PaletteElement {
+            visual_id: p.shared_step_visual_id(idx).unwrap_or_default(),
+            name: step.name().to_owned(),
+            kind: "Shared step".to_owned(),
+            target: Selection::SharedStep(id),
         });
     }
     for (idx, id, c) in p.security_controls() {
@@ -3700,6 +3721,7 @@ pub fn comparison_in(
         Selection::Threat
     );
     entity!("Attack tree", diff.attack_trees(), Selection::Tree);
+    entity!("Shared step", diff.shared_steps(), Selection::SharedStep);
     {
         let set = diff.security_controls();
         for id in set.added() {

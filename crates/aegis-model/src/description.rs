@@ -19,7 +19,7 @@ use std::sync::Arc;
 use crate::error::ModelError;
 use crate::id::{
     AssetId, AssumptionId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId,
-    InterfaceId, ThreatId, TreeId, TrustBoundaryId,
+    InterfaceId, SharedStepId, ThreatId, TreeId, TrustBoundaryId,
 };
 use crate::provenance::Provenance;
 
@@ -79,6 +79,8 @@ pub enum ElementRef {
     Claim(ClaimId),
     /// An assumption.
     Assumption(AssumptionId),
+    /// A shared attack step.
+    SharedStep(SharedStepId),
     /// An item-definition component.
     Component(ComponentId),
     /// An item-definition interface.

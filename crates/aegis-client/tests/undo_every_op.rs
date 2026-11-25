@@ -17,11 +17,12 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use aegis_client::workspace::{Origin, Workspace};
+use aegis_model::ItemRef;
 use aegis_model::{
     AssetId, AssumptionId, AttackTree, AttrValue, ClaimId, ComponentId, ConditionId, ControlId,
     DamageId, DataFlowId, ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId,
-    LinkTarget, Methodology, Node, NodeId, Op, PartyId, PartyKind, Project, Provenance, StepRef,
-    ThreatId, TreeId, TrustBoundaryId,
+    LinkTarget, Methodology, Node, NodeId, Op, PartyId, PartyKind, Project, Provenance,
+    SharedStepId, StepRef, StepTarget, ThreatId, TreeId, TrustBoundaryId,
 };
 
 /// The variant names declared in `op.rs`: lines like `    AddAsset {`.
@@ -829,6 +830,101 @@ fn walk_assumptions(seen: &mut BTreeSet<String>) {
     }
 }
 
+fn walk_shared_steps(seen: &mut BTreeSet<String>) {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let mut ws = Workspace::empty(Arc::clone(&m));
+    let id = SharedStepId::new_v7();
+    let component = ComponentId::new_v7();
+    let tree = TreeId::new_v7();
+    let node = NodeId::new_v7();
+    let target = StepTarget::Shared(id);
+    let factor = m.feasibility_factors().next().expect("factor");
+    let level = m.factor_levels(factor).next().expect("factor level");
+    let attack_type = m.attack_type("debug-access").expect("attack type");
+    for op in [
+        Op::AddComponent {
+            id: component,
+            name: "Gateway".into(),
+            parent: None,
+            provenance: who(),
+        },
+        Op::AddAttackTree {
+            id: tree,
+            tree: AttackTree::new(node, Node::step("Inject frame")).expect("tree"),
+            step_feasibility: Vec::new(),
+            provenance: who(),
+        },
+        Op::AddSharedStep {
+            id,
+            name: "Inject frame".into(),
+            provenance: who(),
+        },
+        Op::RenameSharedStep {
+            id,
+            name: "Spoof frame".into(),
+            provenance: who(),
+        },
+        Op::SetStepFeasibility {
+            target,
+            level: Some(m.feasibility_level("high").expect("feasibility")),
+            provenance: who(),
+        },
+        Op::SetStepFeasibility {
+            target,
+            level: None,
+            provenance: who(),
+        },
+        Op::SetStepFactor {
+            target,
+            factor,
+            level: Some(level),
+            provenance: who(),
+        },
+        Op::SetStepFactor {
+            target,
+            factor,
+            level: None,
+            provenance: who(),
+        },
+        Op::SetStepVia {
+            target,
+            via: Some(ItemRef::Component(component)),
+            provenance: who(),
+        },
+        Op::SetStepVia {
+            target,
+            via: None,
+            provenance: who(),
+        },
+        Op::SetStepAttackType {
+            target,
+            attack_type: Some(attack_type),
+            provenance: who(),
+        },
+        Op::SetStepAttackType {
+            target,
+            attack_type: None,
+            provenance: who(),
+        },
+        Op::UseSharedStep {
+            tree,
+            node,
+            step: id,
+            provenance: who(),
+        },
+        Op::UnuseSharedStep {
+            tree,
+            node,
+            provenance: who(),
+        },
+        Op::RemoveSharedStep { id },
+        Op::RemoveAttackTree { id: tree },
+        Op::RemoveComponent { id: component },
+    ] {
+        apply_undo_redo(&mut ws, seen, op);
+    }
+}
+
 #[test]
 fn every_op_kind_is_undone_and_redone_exactly() {
     let m = common::second();
@@ -842,6 +938,7 @@ fn every_op_kind_is_undone_and_redone_exactly() {
     walk_parties(&mut seen);
     walk_conditions(&mut seen);
     walk_assumptions(&mut seen);
+    walk_shared_steps(&mut seen);
     assert_eq!(seen, declared_variants(), "an Op variant is not exercised");
 }
 

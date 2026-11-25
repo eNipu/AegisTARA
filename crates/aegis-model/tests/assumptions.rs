@@ -11,7 +11,7 @@ use aegis_model::{
     LintFinding, LintSeverity, MAX_ASSUMPTION_EXCLUDES, MAX_ASSUMPTIONS, MAX_CLAIM_ASSUMPTIONS,
     MAX_DESCRIPTION_CHARS, MAX_NAME_BYTES, MAX_NAME_CHARS, Methodology, ModelError, Node, NodeId,
     Op, OpCodec, OpLogReader, OpLogWriter, Project, ProjectDiff, ProjectEvalCache, Provenance,
-    Reason, RiskLevel, StepRef, StoreError, ThreatId, TreeId, VisualPrefix,
+    Reason, RiskLevel, StepRef, StepTarget, StoreError, ThreatId, TreeId, VisualPrefix,
 };
 use proptest::prelude::*;
 use serde_json::{Value, json};
@@ -1869,22 +1869,19 @@ fn cache_fixture() -> CacheFixture {
         .expect("tree");
     }
     p.apply(Op::SetStepVia {
-        tree: tid1,
-        node: s11,
+        target: StepTarget::Step(tid1, s11),
         via: Some(ItemRef::Component(k1)),
         provenance: who("alice", 2),
     })
     .expect("via1");
     p.apply(Op::SetStepVia {
-        tree: tid2,
-        node: s22,
+        target: StepTarget::Step(tid2, s22),
         via: Some(ItemRef::Interface(iface)),
         provenance: who("alice", 2),
     })
     .expect("via2");
     p.apply(Op::SetStepVia {
-        tree: tid3,
-        node: s33,
+        target: StepTarget::Step(tid3, s33),
         via: Some(ItemRef::Component(k2)),
         provenance: who("alice", 2),
     })
@@ -2080,8 +2077,7 @@ fn build_cache_op(f: &CacheFixture, edit: CacheEdit) -> Op {
             }
         }
         CacheEdit::RateStep(s, l) => Op::SetStepFeasibility {
-            tree: f.steps[s].0,
-            node: f.steps[s].1,
+            target: StepTarget::Step(f.steps[s].0, f.steps[s].1),
             level: Some(feas(f.p.methodology(), levels[l])),
             provenance: who("bob", 15),
         },

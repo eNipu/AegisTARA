@@ -436,9 +436,8 @@ pub fn selection_systems(
         Selection::Control(id) => Some(usage.control(project.security_control_idx(&id)?)),
         Selection::Goal(id) => Some(usage.goal(project.cybersecurity_goal_idx(&id)?)),
         Selection::Claim(id) => Some(usage.claim(project.cybersecurity_claim_idx(&id)?)),
-        // Parties belong to the project, not to any item system.
+        Selection::SharedStep(id) => Some(usage.shared_step(project.shared_step_idx(&id)?)),
         Selection::Party(_) => None,
-        // Conditions and assumptions belong to the project, not to any item system.
         Selection::Condition(_) | Selection::Assumption(_) => None,
     }
 }
@@ -459,6 +458,7 @@ fn element_selection(r: aegis_model::ElementRef) -> Option<Selection> {
         R::Control(id) => Some(Selection::Control(id)),
         R::Goal(id) => Some(Selection::Goal(id)),
         R::Claim(id) => Some(Selection::Claim(id)),
+        R::SharedStep(id) => Some(Selection::SharedStep(id)),
         R::Project | R::ItemDescription | R::ItemScope | R::Assumption(_) => None,
     }
 }

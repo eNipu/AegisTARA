@@ -6,14 +6,14 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use aegis_model::{
-    AttackTree, DataFlowId, ElementRef, Methodology, Node, Op, Project, Provenance, StoreError,
-    TrustBoundaryId, WorkspaceFile, WorkspaceProblem,
+    AttackTree, DataFlowId, ElementRef, Limit, MAX_SHARED_STEPS, Methodology, ModelError, Node, Op,
+    Project, Provenance, StoreError, TrustBoundaryId, WorkspaceFile, WorkspaceProblem,
 };
 use common::{
-    asset_id, builtin, component_id, interface_id, node_id, props, record_every_op, save, second,
-    tree_id,
+    asset_id, builtin, component_id, interface_id, linked_shared_project, node_id, props,
+    record_every_op, save, second, shared_step_id, tree_id,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn data_flow_id(n: u64) -> DataFlowId {
     DataFlowId::from_uuid(common::v7(n)).expect("v7")
@@ -525,4 +525,172 @@ fn old_fixture_has_no_systems() {
     .expect("fixture");
     let p = Project::load(bytes.as_slice(), m).expect("load");
     assert_eq!(p.element_count(aegis_model::ElementKind::System), 0);
+}
+
+#[test]
+fn shared_steps_workspace_round_trips_linked_trees() {
+    let m = builtin();
+    let (p, shared, _, node) = linked_shared_project();
+    let all = files(&p);
+    let steps = all
+        .iter()
+        .find(|f| f.path == "shared/steps.json")
+        .expect("file");
+    let root = json(steps);
+    assert_eq!(root["format"], "aegis-workspace");
+    assert_eq!(root["version"], 1);
+    assert_eq!(root["kind"], "shared-steps");
+    assert_eq!(root["shared_steps"][0]["id"], shared.to_string());
+    let tree = all
+        .iter()
+        .find(|f| f.path.starts_with("systems/main/trees/"))
+        .expect("tree file");
+    let tree = json(tree)["attack_trees"][0].clone();
+    assert!(
+        tree["step_feasibility"]
+            .as_object()
+            .is_some_and(|f| f.is_empty())
+    );
+    for key in ["step_factors", "step_via", "step_attack_type"] {
+        assert!(
+            tree.get(key).is_none(),
+            "{key} must not duplicate shared ratings"
+        );
+    }
+    assert_eq!(
+        tree["step_shared"],
+        json!([{"node": node.to_string(), "shared_step": shared.to_string()}])
+    );
+    let mut reversed = all;
+    reversed.reverse();
+    let back = read(&reversed, &m).expect("read reversed");
+    assert_eq!(back, p);
+    assert_eq!(save(&back), save(&p));
+    assert_eq!(
+        back.description_translation(ElementRef::SharedStep(shared), "ja"),
+        Some("共有の診断アクセス")
+    );
+}
+
+#[test]
+fn shared_steps_workspace_shapes_are_strict() {
+    let m = builtin();
+    let (p, _, _, _) = linked_shared_project();
+    let mut all = files(&p);
+    rewrite(&mut all, "shared/steps.json", |v| v["extra"] = json!(1));
+    assert!(matches!(
+        read(&all, &m),
+        Err(StoreError::WorkspaceUnknownField { path, field })
+            if path == "shared/steps.json" && field == "extra"
+    ));
+
+    let mut all = files(&p);
+    rewrite(&mut all, "shared/steps.json", |v| {
+        v["shared_steps"][0]["extra"] = json!(1)
+    });
+    let Err(StoreError::InWorkspace { path, source }) = read(&all, &m) else {
+        panic!("expected inner wire failure");
+    };
+    assert_eq!(path, "aegis.json");
+    assert!(matches!(*source, StoreError::Decode { .. }));
+
+    let mut all = files(&p);
+    let tree_path = all
+        .iter()
+        .find(|f| text(f).contains("step_shared"))
+        .expect("tree")
+        .path
+        .clone();
+    rewrite(&mut all, &tree_path, |v| {
+        v["attack_trees"][0]["step_shared"][0]["extra"] = json!(1)
+    });
+    let Err(StoreError::InWorkspace { path, source }) = read(&all, &m) else {
+        panic!("expected inner wire failure");
+    };
+    assert_eq!(path, "aegis.json");
+    assert!(matches!(*source, StoreError::Decode { .. }));
+
+    let mut all = files(&p);
+    rewrite(&mut all, &tree_path, |v| {
+        let link = v["attack_trees"][0]["step_shared"][0].clone();
+        v["attack_trees"][0]["step_shared"]
+            .as_array_mut()
+            .expect("links")
+            .push(link);
+    });
+    let Err(StoreError::InWorkspace { path, source }) = read(&all, &m) else {
+        panic!("expected duplicate link failure");
+    };
+    assert_eq!(path, "aegis.json");
+    assert!(matches!(*source, StoreError::DuplicateEntry));
+}
+
+#[test]
+fn v1_workspace_without_shared_steps_file_loads() {
+    let m = builtin();
+    let (p, _, _, _) = linked_shared_project();
+    let mut all = files(&p);
+    all.retain(|f| f.path != "shared/steps.json" && f.path != "descriptions.json");
+    for f in all
+        .iter_mut()
+        .filter(|f| f.path.starts_with("systems/main/trees/"))
+    {
+        let mut value = json(f);
+        value["attack_trees"][0]
+            .as_object_mut()
+            .expect("tree")
+            .remove("step_shared");
+        f.bytes = serde_json::to_vec(&value).expect("json");
+    }
+    let back = read(&all, &m).expect("v1 workspace loads");
+    assert_eq!(back.shared_step_count(), 0);
+    assert_eq!(back.attack_tree_count(), 1);
+    assert!(files(&back).iter().all(|f| f.path != "shared/steps.json"));
+}
+
+#[test]
+fn duplicate_shared_step_blame_routes_to_its_file() {
+    let m = builtin();
+    let (p, shared, _, _) = linked_shared_project();
+    let mut all = files(&p);
+    rewrite(&mut all, "shared/steps.json", |v| {
+        let first = v["shared_steps"][0].clone();
+        v["shared_steps"].as_array_mut().expect("steps").push(first);
+    });
+    let Err(StoreError::InWorkspace { path, source }) = read(&all, &m) else {
+        panic!("expected duplicate shared step");
+    };
+    assert_eq!(path, "shared/steps.json");
+    assert!(matches!(
+        *source,
+        StoreError::Model(ModelError::DuplicateSharedStep(id)) if id == shared
+    ));
+}
+
+#[test]
+fn shared_steps_workspace_cap_is_isolated() {
+    let m = builtin();
+    let mut all = files(&Project::new(Arc::clone(&m)));
+    let steps: Vec<Value> = (0..=MAX_SHARED_STEPS)
+        .map(|i| json!({"id": shared_step_id(3_000_000 + i as u64).to_string(), "name": "s"}))
+        .collect();
+    all.push(WorkspaceFile {
+        path: "shared/steps.json".into(),
+        bytes: serde_json::to_vec(&json!({
+            "format": "aegis-workspace",
+            "version": 1,
+            "kind": "shared-steps",
+            "shared_steps": steps,
+        }))
+        .expect("json"),
+    });
+    let Err(StoreError::InWorkspace { source, .. }) = read(&all, &m) else {
+        panic!("expected shared-step cap");
+    };
+    assert!(matches!(
+        *source,
+        StoreError::LimitExceeded(Limit::SharedSteps {
+            max: MAX_SHARED_STEPS
+        })
+    ));
 }

@@ -4,16 +4,17 @@
 use aegis_canvas::Tone;
 use aegis_model::{
     CeilingSource, ElementRef, Evaluation, FeasibilityLevel, GateKind, ItemRef, Methodology, Node,
-    PartyKind, Project, Reason, StepCeiling, ThreatId, TreeId, TreeIdx,
+    PartyKind, Project, Reason, StepCeiling, StepTarget, ThreatId, TreeId, TreeIdx,
 };
 
+use crate::commands::step_op_target;
 use crate::i18n::Catalog;
 use crate::pages::{self, selection_visual_id};
 use crate::relations::{ElementKind, RELATIONS, RelationKey};
 use crate::table::{
     LinkChip, selection_element_ref, selection_exclusion, selection_label, selection_system_set,
 };
-use crate::view::{Selection, steps_through, through_label};
+use crate::view::{Selection, format_shared_step_line, steps_through, through_label};
 use crate::workspace::Workspace;
 
 /// One forward or reverse relation row in the inspector (WBX-06, UI-15).
@@ -83,6 +84,8 @@ pub struct InspectorView {
     pub changed: String,
     /// Description text, empty when unset.
     pub description: String,
+    /// Shared-step usage line for a linked tree node.
+    pub shared_note: Option<String>,
     /// Summary property and rating fields.
     pub fields: Vec<InspectorField>,
     /// Explain-why derivation trace and cause links, if applicable.
@@ -109,7 +112,8 @@ pub fn reverse_relation_label(key: RelationKey, catalog: &Catalog) -> String {
         RelationKey::GOAL_RESPONSIBLE => "inspector-rev-goal-responsible",
         RelationKey::CLAIM_RESPONSIBLE => "inspector-rev-claim-responsible",
         RelationKey::CONTROL_TARGETS => "inspector-rev-control-targets",
-        RelationKey::STEP_VIA => "inspector-rev-step-via",
+        RelationKey::STEP_VIA | RelationKey::SHARED_STEP_VIA => "inspector-rev-step-via",
+        RelationKey::SHARED_STEP_USED_IN => "inspector-rev-shared-step-used-in",
         RelationKey::STEP_MITIGATIONS => "inspector-rev-step-mitigations",
         RelationKey::DATAFLOW_FROM => "inspector-rev-dataflow-from",
         RelationKey::DATAFLOW_TO => "inspector-rev-dataflow-to",
@@ -140,6 +144,7 @@ pub(crate) fn reason_target(reason: Reason) -> Option<Selection> {
             ElementRef::DataFlow(id) => Some(Selection::DataFlow(id)),
             ElementRef::TrustBoundary(id) => Some(Selection::TrustBoundary(id)),
             ElementRef::Assumption(id) => Some(Selection::Assumption(id)),
+            ElementRef::SharedStep(_) => None,
             _ => None,
         },
         Reason::ViaExcluded(ItemRef::Component(cid)) => Some(Selection::Component(cid)),
@@ -152,7 +157,9 @@ fn exclusion_targets(project: &Project, sel: Selection) -> Vec<Selection> {
     let app = project.applicability();
     let reasons = match sel {
         Selection::TreeNode(tree, node) => app.node_reasons(tree, node),
-        Selection::Party(_) | Selection::Condition(_) => return Vec::new(),
+        Selection::SharedStep(_) | Selection::Party(_) | Selection::Condition(_) => {
+            return Vec::new();
+        }
         Selection::Asset(id) => app.reasons(ElementRef::Asset(id)),
         Selection::Damage(id) => app.reasons(ElementRef::Damage(id)),
         Selection::Threat(id) => app.reasons(ElementRef::Threat(id)),
@@ -752,6 +759,43 @@ pub fn inspector_view(ws: &Workspace, sel: Selection, catalog: &Catalog) -> Opti
                 .unwrap_or_default();
             (kind.to_owned(), changed)
         }
+        Selection::SharedStep(id) => {
+            let idx = project.shared_step_idx(&id)?;
+            let shared = project.shared_step(idx)?;
+            if let Some(level) = shared.feasibility() {
+                fields.push(field(
+                    catalog.tr("feasibility"),
+                    feasibility_text(m, lang, level),
+                    Some(feasibility_tone(m, level)),
+                ));
+            }
+            for factor in m.feasibility_factors() {
+                if let Some(level) = shared.factor(factor) {
+                    let label = m.feasibility_factor_label(factor).unwrap_or("?");
+                    let level_label = m.factor_level_label(factor, level).unwrap_or("?");
+                    let points = m.factor_level_points(factor, level).unwrap_or(0);
+                    fields.push(field(label, format!("{level_label} ({points})"), None));
+                }
+            }
+            if let Some(via) = project.shared_step_via(idx) {
+                fields.push(field(
+                    catalog.tr("through"),
+                    through_label(project, via),
+                    None,
+                ));
+            }
+            if let Some(attack_type) = shared.attack_type() {
+                let label = m
+                    .attack_type_label_for_lang(attack_type, lang)
+                    .or_else(|| m.attack_type_label(attack_type))
+                    .unwrap_or("?");
+                fields.push(field(catalog.tr("attack-type"), label, None));
+            }
+            (
+                catalog.tr("inspector-rev-shared-step-used-in"),
+                pages::changed_text(shared.provenance()),
+            )
+        }
         Selection::Control(id) => {
             let c = project.security_control(project.security_control_idx(&id)?)?;
             if let Some(k) = c.kind()
@@ -859,6 +903,15 @@ pub fn inspector_view(ws: &Workspace, sel: Selection, catalog: &Catalog) -> Opti
     };
 
     let elem_kind = ElementKind::kind_of(sel);
+    let shared_note = match sel {
+        Selection::TreeNode(tree, node) => match step_op_target(project, tree, node) {
+            StepTarget::Shared(id) => project
+                .shared_step_idx(&id)
+                .and_then(|shared| format_shared_step_line(project, shared, catalog)),
+            _ => None,
+        },
+        _ => None,
+    };
     let relations = RELATIONS
         .iter()
         .filter(|rel| Some(rel.from) == elem_kind)
@@ -879,7 +932,14 @@ pub fn inspector_view(ws: &Workspace, sel: Selection, catalog: &Catalog) -> Opti
             (Selection::Component(cid), RelationKey::STEP_VIA) => {
                 steps_through(project, ItemRef::Component(cid))
                     .into_iter()
-                    .map(|s| Selection::TreeNode(s.tree, s.node))
+                    .filter_map(|s| {
+                        let t = project.attack_tree_idx(&s.tree)?;
+                        let n = project.attack_tree(t)?.idx_of(&s.node)?;
+                        project
+                            .step_shared(t, n)
+                            .is_none()
+                            .then_some(Selection::TreeNode(s.tree, s.node))
+                    })
                     .collect()
             }
             (Selection::Control(cid), RelationKey::STEP_MITIGATIONS) => {
@@ -921,6 +981,7 @@ pub fn inspector_view(ws: &Workspace, sel: Selection, catalog: &Catalog) -> Opti
         exclusion_causes: exclusion_causes(project, sel, catalog),
         changed,
         description,
+        shared_note,
         fields,
         explain: explain_selection(ws, sel, catalog),
         primary_cause: primary_cause(ws, sel),

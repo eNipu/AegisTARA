@@ -11,7 +11,7 @@ use aegis_model::{
     AssetId, AttackTree, AttrValue, ClaimId, ComponentId, ConditionId, ControlId, DamageId,
     DataFlowId, ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId, ItemRef,
     LinkTarget, Methodology, Node, NodeId, Op, PartyId, PartyKind, Provenance, RiskTreatment,
-    ThreatId, TreeId, TrustBoundaryId,
+    StepTarget, ThreatId, TreeId, TrustBoundaryId,
 };
 
 fn who() -> Provenance {
@@ -194,20 +194,17 @@ fn loaded() -> (Workspace, Ids) {
             provenance: p(),
         },
         Op::SetStepFeasibility {
-            tree: i.tree,
-            node: i.step,
+            target: StepTarget::Step(i.tree, i.step),
             level: Some(low),
             provenance: p(),
         },
         Op::SetStepVia {
-            tree: i.tree,
-            node: i.step,
+            target: StepTarget::Step(i.tree, i.step),
             via: Some(ItemRef::Interface(i.iface)),
             provenance: p(),
         },
         Op::SetStepAttackType {
-            tree: i.tree,
-            node: i.step,
+            target: StepTarget::Step(i.tree, i.step),
             attack_type: Some(attack_type),
             provenance: p(),
         },

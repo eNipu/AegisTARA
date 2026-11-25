@@ -4,7 +4,7 @@
 //! as it was before them. Element names appear only in these user-facing
 //! strings, never in logs.
 
-use aegis_model::{ElementRef, Op, Project};
+use aegis_model::{ElementRef, Op, Project, StepTarget};
 
 use crate::view::Selection;
 
@@ -67,6 +67,7 @@ impl Label {
             Selection::Tree(id) | Selection::TreeNode(id, _) => {
                 project.attack_tree_idx(&id).is_some()
             }
+            Selection::SharedStep(id) => project.shared_step_idx(&id).is_some(),
             Selection::Control(id) => project.security_control_idx(&id).is_some(),
             Selection::Goal(id) => project.cybersecurity_goal_idx(&id).is_some(),
             Selection::Claim(id) => project.cybersecurity_claim_idx(&id).is_some(),
@@ -264,18 +265,28 @@ fn target_of(op: &Op) -> Option<Selection> {
         Op::AddTreeNode { tree, id: node, .. }
         | Op::RenameTreeNode { tree, id: node, .. }
         | Op::SetTreeNodeGate { tree, id: node, .. }
-        | Op::SetStepFeasibility { tree, node, .. }
-        | Op::SetStepFactor { tree, node, .. }
         | Op::SetStepMitigation { tree, node, .. }
-        | Op::SetStepVia { tree, node, .. }
-        | Op::SetStepAttackType { tree, node, .. }
         | Op::SetReviewMark { tree, node, .. }
+        | Op::UnuseSharedStep { tree, node, .. }
         | Op::LinkTreeNode {
             tree, child: node, ..
         }
         | Op::UnlinkTreeNode {
             tree, child: node, ..
         } => Selection::TreeNode(*tree, *node),
+        Op::SetStepFeasibility { target, .. }
+        | Op::SetStepFactor { target, .. }
+        | Op::SetStepVia { target, .. }
+        | Op::SetStepAttackType { target, .. } => {
+            return match target {
+                StepTarget::Step(tree, node) => Some(Selection::TreeNode(*tree, *node)),
+                StepTarget::Shared(id) => Some(Selection::SharedStep(*id)),
+            };
+        }
+        Op::AddSharedStep { id, .. }
+        | Op::RenameSharedStep { id, .. }
+        | Op::RemoveSharedStep { id } => Selection::SharedStep(*id),
+        Op::UseSharedStep { step, .. } => Selection::SharedStep(*step),
         Op::AddSecurityControl { id, .. }
         | Op::RenameSecurityControl { id, .. }
         | Op::RemoveSecurityControl { id } => Selection::Control(*id),
@@ -345,6 +356,7 @@ fn target_of(op: &Op) -> Option<Selection> {
                 ElementRef::DataFlow(id) => Selection::DataFlow(*id),
                 ElementRef::TrustBoundary(id) => Selection::TrustBoundary(*id),
                 ElementRef::Assumption(id) => Selection::Assumption(*id),
+                ElementRef::SharedStep(id) => Selection::SharedStep(*id),
                 _ => return None,
             }
         }
@@ -367,6 +379,7 @@ fn parts(op: &Op, p: &Project) -> Parts {
     let flow = |id: &_| name_of(p, &ElementRef::DataFlow(*id));
     let boundary = |id: &_| name_of(p, &ElementRef::TrustBoundary(*id));
     let assumption = |id: &_| name_of(p, &ElementRef::Assumption(*id));
+    let shared = |id: &_| name_of(p, &ElementRef::SharedStep(*id));
     let some = |n: &str| Some(n.to_owned());
     let condition = |id: &aegis_model::ConditionId| {
         p.condition_idx(id)
@@ -449,6 +462,22 @@ fn parts(op: &Op, p: &Project) -> Parts {
         Op::RemoveTreeNode { .. } => ("remove", "attack tree node", None),
         Op::UnlinkTreeNode { .. } => ("unlink", "attack tree node", None),
         Op::RenameTreeNode { .. } => ("rename", "attack tree node", None),
+        Op::SetStepFeasibility {
+            target: StepTarget::Shared(id),
+            ..
+        } => ("rate", "shared step", shared(id)),
+        Op::SetStepFactor {
+            target: StepTarget::Shared(id),
+            ..
+        } => ("change", "factors of shared step", shared(id)),
+        Op::SetStepVia {
+            target: StepTarget::Shared(id),
+            ..
+        } => ("change", "what a shared step goes through", shared(id)),
+        Op::SetStepAttackType {
+            target: StepTarget::Shared(id),
+            ..
+        } => ("change", "attack type of shared step", shared(id)),
         Op::SetStepVia { .. } => ("change", "what a step goes through in attack tree", None),
         Op::SetStepAttackType { .. } => ("change", "attack type of a step in attack tree", None),
         Op::LinkTreeNode { .. }
@@ -457,6 +486,12 @@ fn parts(op: &Op, p: &Project) -> Parts {
         | Op::SetStepFeasibility { .. }
         | Op::SetStepFactor { .. }
         | Op::SetStepMitigation { .. } => ("change", "attack tree", None),
+
+        Op::AddSharedStep { name, .. } => ("add", "shared step", some(name)),
+        Op::RenameSharedStep { id, .. } => ("rename", "shared step", shared(id)),
+        Op::RemoveSharedStep { id } => ("remove", "shared step", shared(id)),
+        Op::UseSharedStep { step, .. } => ("use", "shared step", shared(step)),
+        Op::UnuseSharedStep { .. } => ("unuse", "shared step", None),
 
         Op::AddSecurityControl { name, .. } => ("add", "security control", some(name)),
         Op::RenameSecurityControl { id, .. } => ("rename", "security control", control(id)),
@@ -587,6 +622,7 @@ fn name_of(p: &Project, e: &ElementRef) -> Option<String> {
         ElementRef::DataFlow(id) => p.data_flow(p.data_flow_idx(id)?)?.name(),
         ElementRef::TrustBoundary(id) => p.trust_boundary(p.trust_boundary_idx(id)?)?.name(),
         ElementRef::Assumption(id) => p.assumption(p.assumption_idx(id)?)?.name(),
+        ElementRef::SharedStep(id) => p.shared_step(p.shared_step_idx(id)?)?.name(),
         _ => return None,
     };
     Some(name.to_owned())

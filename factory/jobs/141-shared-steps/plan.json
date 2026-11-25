@@ -145,6 +145,7 @@
         "crates/aegis-client/src/table.rs",
         "crates/aegis-client/src/pages.rs",
         "crates/aegis-client/src/session.rs",
+        "crates/aegis-client/src/systems.rs",
         "crates/aegis-client/src/grid/*",
         "crates/aegis-client/locales/*",
         "crates/aegis-client/tests/*",

@@ -15,7 +15,7 @@ use aegis_client::view::{Selection, TableId};
 use aegis_model::{
     AssetId, AttackTree, ComponentId, ConditionId, ControlId, DamageId, ElementId, ElementKind,
     ElementRef, GateKind, GoalId, ItemRef, Methodology, Node, NodeId, Op, Project, Provenance,
-    RiskTreatment, ThreatId, TreeId,
+    RiskTreatment, SharedStepId, StepTarget, ThreatId, TreeId,
 };
 use aegis_workbench::app::{InspectorPanel, Workbench, apply_appearance, bind_all};
 use gpui::{AppContext as _, Entity, Focusable as _, TestAppContext, VisualTestContext};
@@ -135,8 +135,7 @@ fn build_fixture() -> Fixture {
             provenance: prov(),
         },
         Op::SetStepVia {
-            tree: tree_id,
-            node: step_deciding,
+            target: StepTarget::Step(tree_id, step_deciding),
             via: Some(ItemRef::Component(comp)),
             provenance: prov(),
         },
@@ -502,4 +501,95 @@ fn inspector_renders_across_light_dark_themes_and_en_ja_pseudo_locales(cx: &mut 
             }
         }
     }
+}
+
+#[gpui::test]
+fn shared_step_note_renders_above_fields_for_five_distinct_trees(cx: &mut TestAppContext) {
+    let mut fx = build_fixture();
+    let shared = SharedStepId::new_v7();
+    let high = fx
+        .project
+        .methodology()
+        .feasibility_level("high")
+        .expect("high");
+    for op in [
+        Op::AddSharedStep {
+            id: shared,
+            name: "Reusable injection".into(),
+            provenance: prov(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Shared(shared),
+            level: Some(high),
+            provenance: prov(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Step(fx.tree_id, fx.step_deciding),
+            level: None,
+            provenance: prov(),
+        },
+        Op::SetStepVia {
+            target: StepTarget::Step(fx.tree_id, fx.step_deciding),
+            via: None,
+            provenance: prov(),
+        },
+        Op::UseSharedStep {
+            tree: fx.tree_id,
+            node: fx.step_deciding,
+            step: shared,
+            provenance: prov(),
+        },
+    ] {
+        fx.project.apply(op).expect("shared setup");
+    }
+    for index in 0..4 {
+        let tree_id = TreeId::new_v7();
+        let root = NodeId::new_v7();
+        let step = NodeId::new_v7();
+        let mut tree =
+            AttackTree::new(root, Node::gate(GateKind::Or, format!("Tree {index}"))).expect("root");
+        tree.add_child(tree.root(), step, Node::step("Reusable injection"))
+            .expect("step");
+        fx.project
+            .apply(Op::AddAttackTree {
+                id: tree_id,
+                tree,
+                step_feasibility: Vec::new(),
+                provenance: prov(),
+            })
+            .expect("tree");
+        fx.project
+            .apply(Op::UseSharedStep {
+                tree: tree_id,
+                node: step,
+                step: shared,
+                provenance: prov(),
+            })
+            .expect("use shared");
+    }
+
+    let (wb, inspector, vcx) = open_workbench(cx, Language::En, Appearance::Light);
+    wb.update_in(vcx, |w, window, cx| {
+        w.show_project(fx.project, "Shared note fixture", None, window, cx);
+        w.select_element(Some(Selection::TreeNode(fx.tree_id, fx.step_deciding)), cx);
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    vcx.read_entity(&inspector, |i, _| {
+        let view = i.view().expect("linked step view");
+        assert_eq!(
+            view.shared_note.as_deref(),
+            Some("Shared step L00, used in 5 trees")
+        );
+        assert!(!view.fields.is_empty());
+    });
+    let note = vcx
+        .debug_bounds("inspector-shared-step-note")
+        .expect("note row rendered");
+    let fields = vcx
+        .debug_bounds("inspector-fields")
+        .expect("fields rendered");
+    assert!(
+        note.bottom() <= fields.top(),
+        "note {note:?} is not above fields {fields:?}"
+    );
 }

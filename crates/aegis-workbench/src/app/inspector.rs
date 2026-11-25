@@ -359,7 +359,7 @@ impl InspectorPanel {
             })
     }
 
-    fn render_fields(&self, fields: &[InspectorField], cx: &Context<Self>) -> Div {
+    fn render_fields(&self, fields: &[InspectorField], cx: &Context<Self>) -> Stateful<Div> {
         let is_dark = cx.theme().mode.is_dark();
         let tokens = if is_dark { &self.dark } else { &self.light };
         let (muted, fg) = (cx.theme().muted_foreground, cx.theme().foreground);
@@ -379,6 +379,8 @@ impl InspectorPanel {
                 .child(val)
         });
         v_flex()
+            .id("inspector-fields")
+            .debug_selector(|| String::from("inspector-fields"))
             .gap_1p5()
             .child(section_heading(self.catalog.tr("inspector-details"), muted))
             .children(rows)
@@ -517,6 +519,19 @@ impl Render for InspectorPanel {
             .upgrade()
             .is_some_and(|wb| wb.read(cx).read_only().is_some());
         let header = self.render_header(view, cx);
+        let shared_note = view.shared_note.as_ref().map(|note| {
+            div()
+                .id("inspector-shared-step-note")
+                .debug_selector(|| String::from("inspector-shared-step-note"))
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .border_1()
+                .border_color(cx.theme().border)
+                .rounded_md()
+                .px_2()
+                .py_1()
+                .child(note.clone())
+        });
         let fields = (!view.fields.is_empty()).then(|| self.render_fields(&view.fields, cx));
         let explain = view
             .explain
@@ -536,6 +551,7 @@ impl Render for InspectorPanel {
             .collect();
         let muted = cx.theme().muted_foreground;
         root.child(header)
+            .children(shared_note)
             .children(fields)
             .children(explain)
             .when(!fwd_rows.is_empty(), |d| {

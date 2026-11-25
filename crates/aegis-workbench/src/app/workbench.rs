@@ -173,7 +173,10 @@ fn kind(names: &ElementNamesDef, sel: Selection) -> Option<String> {
         Selection::Control(_) => &names.security_control,
         Selection::Goal(_) => &names.cybersecurity_goal,
         Selection::Claim(_) => &names.cybersecurity_claim,
-        Selection::Party(_) | Selection::Condition(_) | Selection::Assumption(_) => return None,
+        Selection::Party(_)
+        | Selection::Condition(_)
+        | Selection::Assumption(_)
+        | Selection::SharedStep(_) => return None,
     };
     Some(n.singular.to_string())
 }
@@ -408,6 +411,7 @@ impl Workbench {
             TableId::Goals => self.names.cybersecurity_goal.plural.to_string().into(),
             TableId::Claims => self.names.cybersecurity_claim.plural.to_string().into(),
             TableId::Problems => self.catalog.tr("explorer-problems").into(),
+            TableId::SharedSteps => self.catalog.tr("page-shared-blocks").into(),
         }
     }
 

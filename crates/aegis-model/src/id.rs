@@ -651,6 +651,14 @@ entity_ids! {
 }
 
 entity_ids! {
+    /// Arena index of a [`SharedStep`](crate::SharedStep) in a [`Project`](crate::Project).
+    pub struct SharedStepIdx;
+    index_example {}
+    /// Stable public ID of a [`SharedStep`](crate::SharedStep): an RFC 9562 version 7 UUID.
+    pub struct SharedStepId;
+}
+
+entity_ids! {
     /// Internal index of a cybersecurity claim in a [`Project`](crate::Project)
     /// arena.
     ///
@@ -1147,11 +1155,13 @@ pub enum VisualPrefix {
     DataFlow,
     /// Item-definition trust boundary (`TB00`, `TB01`, ...).
     TrustBoundary,
+    /// Shared attack step (`L00`, `L01`, ...).
+    SharedStep,
 }
 
 impl VisualPrefix {
     /// The uppercase ASCII prefix string (`"A"`, `"D"`, `"T"`, `"AT"`,
-    /// `"SC"`, `"G"`, `"CF"`, `"AS"`, `"CL"`, `"P"`, `"C"`, `"IF"`, `"DF"`, `"TB"`).
+    /// `"SC"`, `"G"`, `"CF"`, `"AS"`, `"CL"`, `"P"`, `"C"`, `"IF"`, `"DF"`, `"TB"`, `"L"`).
     /// Time O(1).
     ///
     /// ```
@@ -1178,6 +1188,7 @@ impl VisualPrefix {
             Self::Interface => "IF",
             Self::DataFlow => "DF",
             Self::TrustBoundary => "TB",
+            Self::SharedStep => "L",
         }
     }
 

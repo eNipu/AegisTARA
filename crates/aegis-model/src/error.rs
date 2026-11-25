@@ -7,7 +7,8 @@ use crate::control::RiskTreatment;
 use crate::description::ElementRef;
 use crate::id::{
     AssetId, AssumptionId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
-    ElementId, GoalId, InterfaceId, NodeId, NodeIdx, PartyId, ThreatId, TreeId, TrustBoundaryId,
+    ElementId, GoalId, InterfaceId, NodeId, NodeIdx, PartyId, SharedStepId, ThreatId, TreeId,
+    TrustBoundaryId,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -59,6 +60,8 @@ pub enum EntityKind {
     CybersecurityClaim,
     /// An assumption ([`Assumption`](crate::Assumption)).
     Assumption,
+    /// A shared attack step ([`SharedStep`](crate::SharedStep)).
+    SharedStep,
     /// An element of a generic kind ([`Element`](crate::Element)).
     Element,
 }
@@ -91,6 +94,7 @@ impl EntityKind {
             Self::CybersecurityGoal => "cybersecurity goal",
             Self::CybersecurityClaim => "cybersecurity claim",
             Self::Assumption => "assumption",
+            Self::SharedStep => "shared step",
             Self::Element => "element",
         }
     }
@@ -309,6 +313,9 @@ pub enum ModelError {
     /// An assumption with this ID already exists in the project.
     #[error("assumption {0} already exists in the project")]
     DuplicateAssumptionId(AssumptionId),
+    /// A shared step with this ID already exists in the project.
+    #[error("duplicate shared step {0}")]
+    DuplicateSharedStep(SharedStepId),
     /// An element with this ID already exists in the project.
     #[error("element {0} already exists in the project")]
     DuplicateElement(ElementId),
@@ -473,6 +480,9 @@ pub enum ModelError {
     /// No assumption with this ID is in the project.
     #[error("assumption {0} is not in the project")]
     UnknownAssumption(AssumptionId),
+    /// No shared step with this ID is in the project.
+    #[error("unknown shared step {0}")]
+    UnknownSharedStep(SharedStepId),
     /// No element with this ID is in the project.
     #[error("element {0} is not in the project")]
     UnknownElement(ElementId),
@@ -529,6 +539,37 @@ pub enum ModelError {
     /// them first.
     #[error("the step {0} still has a rating, factors or controls")]
     NodeIsRated(NodeId),
+    /// A shared step still has its own rating data and cannot be removed.
+    #[error("shared step {0} still has its own rating, factors, through item, or attack type")]
+    SharedStepIsRated(SharedStepId),
+    /// A tree step with its own rating or settings cannot use a shared step.
+    #[error(
+        "step {node} in attack tree {tree} still has its own rating, factors, through item, or attack type"
+    )]
+    StepIsRated {
+        /// The attack tree.
+        tree: TreeId,
+        /// The rated step.
+        node: NodeId,
+    },
+    /// A tree step already uses a shared step.
+    #[error("step {node} in attack tree {tree} already uses shared step {shared_step}")]
+    NodeUsesSharedStep {
+        /// The attack tree.
+        tree: TreeId,
+        /// The linked step.
+        node: NodeId,
+        /// The shared step it already uses.
+        shared_step: SharedStepId,
+    },
+    /// A tree step does not use a shared step.
+    #[error("step {node} in attack tree {tree} does not use a shared step")]
+    NodeNotShared {
+        /// The attack tree.
+        tree: TreeId,
+        /// The unlinked step.
+        node: NodeId,
+    },
     /// `child` is not an extra child of `parent` (there is no such edge, or
     /// it is the owner's edge, which unlinking does not remove).
     #[error("{child} is not linked under {parent}")]
@@ -660,6 +701,12 @@ pub enum ModelError {
         /// The limit.
         max: usize,
     },
+    /// A project holds at most `max` shared steps.
+    #[error("cannot add more than {max} shared steps")]
+    TooManySharedSteps {
+        /// The limit.
+        max: usize,
+    },
     /// The element does not need this condition.
     #[error("element {element:?} does not need condition {condition}")]
     ConditionNotLinked {
@@ -742,6 +789,14 @@ pub enum ModelError {
         assumption: AssumptionId,
         /// How many claims reference it.
         claims: usize,
+    },
+    /// A shared step cannot be removed while attack steps use it.
+    #[error("shared step {shared_step} is used by {users} attack step(s)")]
+    SharedStepInUse {
+        /// The shared step still in use.
+        shared_step: SharedStepId,
+        /// How many attack steps use it.
+        users: u32,
     },
     /// An assumption would exclude more than `max` trees and steps combined.
     #[error("assumption would exclude more than {max} trees and steps")]

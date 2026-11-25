@@ -12,7 +12,8 @@ use aegis_client::view::Selection;
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId,
-    ItemRef, Methodology, Op, PartyId, PartyKind, Provenance, ThreatId, TreeId, TrustBoundaryId,
+    ItemRef, Methodology, Op, PartyId, PartyKind, Provenance, SharedStepId, ThreatId, TreeId,
+    TrustBoundaryId,
 };
 
 fn workspace() -> Workspace {
@@ -112,6 +113,9 @@ struct Fx {
     t1: ThreatId,
     t2: ThreatId,
     party: PartyId,
+    shared_brake: SharedStepId,
+    shared_adas: SharedStepId,
+    shared_unused: SharedStepId,
 }
 
 /// Brake (Caliper with child Pad), ADAS (Camera), Loose in no system; an
@@ -166,6 +170,31 @@ fn fixture() -> Fx {
     let a1 = add_asset(&mut ws, "A1", caliper);
     let a2 = add_asset(&mut ws, "A2", camera);
     let a3 = add_asset(&mut ws, "A3", loose);
+    let shared_brake = SharedStepId::new_v7();
+    let shared_adas = SharedStepId::new_v7();
+    let shared_unused = SharedStepId::new_v7();
+    for (id, name, via) in [
+        (shared_brake, "Replay brake frame", Some(caliper)),
+        (shared_adas, "Blind the camera", Some(camera)),
+        (shared_unused, "Unused building block", None),
+    ] {
+        run(
+            &mut ws,
+            &Edit::AddSharedStep {
+                id,
+                name: name.into(),
+            },
+        );
+        if let Some(component) = via {
+            run(
+                &mut ws,
+                &Edit::SetSharedStepVia {
+                    shared_step: id,
+                    via: Some(ItemRef::Component(component)),
+                },
+            );
+        }
+    }
     let d1 = DamageId::new_v7();
     run(
         &mut ws,
@@ -252,6 +281,9 @@ fn fixture() -> Fx {
         t1,
         t2,
         party,
+        shared_brake,
+        shared_adas,
+        shared_unused,
     }
 }
 
@@ -314,6 +346,7 @@ fn every_folder_has_the_hand_counted_number() {
             (F::Controls, Some(1)),
             (F::Goals, Some(1)),
             (F::Claims, Some(1)),
+            (F::SharedSteps, Some(3)),
             (F::Systems, Some(2)),
         ],
     );
@@ -334,6 +367,7 @@ fn every_folder_has_the_hand_counted_number() {
             (F::Damage, Some(1)),
             (F::Threats, Some(1)),
             (F::Trees, Some(1)),
+            (F::SharedSteps, Some(1)),
             (F::Controls, Some(1)),
             (F::Risks, Some(1)),
             (F::GoalsAndClaims, Some(1)),
@@ -355,6 +389,7 @@ fn every_folder_has_the_hand_counted_number() {
             (F::Damage, Some(1)),
             (F::Threats, Some(1)),
             (F::Trees, Some(0)),
+            (F::SharedSteps, Some(1)),
             (F::Controls, Some(0)),
             (F::Risks, Some(1)),
             (F::GoalsAndClaims, Some(0)),
@@ -376,6 +411,7 @@ fn every_folder_has_the_hand_counted_number() {
             (F::Damage, Some(0)),
             (F::Threats, Some(0)),
             (F::Trees, Some(0)),
+            (F::SharedSteps, Some(0)),
             (F::Controls, Some(0)),
             (F::Risks, Some(0)),
             (F::GoalsAndClaims, Some(0)),
@@ -437,6 +473,7 @@ fn a_system_without_elements_keeps_every_folder_at_zero() {
             F::Damage,
             F::Threats,
             F::Trees,
+            F::SharedSteps,
             F::Controls,
             F::Risks,
             F::GoalsAndClaims,
@@ -538,6 +575,41 @@ fn marks_climb_to_the_root_and_the_worst_wins() {
 }
 
 #[test]
+fn shared_steps_are_project_owned_linked_to_systems_and_never_unassigned() {
+    use Folder as F;
+    let fx = fixture();
+    let rows = all_rows(&index(&fx.ws));
+    for (owner, id) in [
+        (Owner::Project, fx.shared_brake),
+        (Owner::System(fx.brake), fx.shared_brake),
+        (Owner::System(fx.adas), fx.shared_adas),
+    ] {
+        let element = ExplorerKey::Element(owner, F::SharedSteps, Selection::SharedStep(id));
+        assert!(rows.iter().any(|r| r.key == element), "missing {element:?}");
+    }
+    let project = row(&rows, ExplorerKey::Folder(Owner::Project, F::SharedSteps));
+    assert!(!project.linked);
+    for owner in [Owner::System(fx.brake), Owner::System(fx.adas)] {
+        let folder = row(&rows, ExplorerKey::Folder(owner, F::SharedSteps));
+        assert!(folder.linked);
+    }
+    assert_eq!(count(&rows, Owner::Unassigned, F::SharedSteps), Some(0));
+    assert!(
+        !rows.iter().any(|r| {
+            matches!(
+                r.key,
+                ExplorerKey::Element(
+                    Owner::Unassigned,
+                    F::SharedSteps,
+                    Selection::SharedStep(id)
+                ) if id == fx.shared_unused
+            )
+        }),
+        "unused shared steps must not create an Unassigned element"
+    );
+}
+
+#[test]
 fn keyboard_walks_to_a_party_and_back() {
     use Folder as F;
     let fx = fixture();
@@ -583,7 +655,7 @@ fn keyboard_walks_to_a_party_and_back() {
         .iter()
         .map(|r| r.key)
         .collect();
-    assert_eq!(keys.len(), 12);
+    assert_eq!(keys.len(), 13);
     assert_eq!(keys.last(), Some(&ExplorerKey::Unassigned));
     state.toggle(ExplorerKey::Root);
     assert_eq!(ix.rows(&state).len(), 1);

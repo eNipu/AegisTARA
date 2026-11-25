@@ -16,7 +16,8 @@ use aegis_client::view::Selection;
 use aegis_model::{
     AssetId, AssumptionId, AttackTree, ClaimId, ComponentId, ConditionId, ControlId, DamageId,
     DataFlowId, GateKind, GoalId, InterfaceId, ItemRef, Methodology, Node, NodeId, Op, PartyId,
-    PartyIdx, PartyKind, Project, Provenance, StepRef, ThreatId, TreeId, TrustBoundaryId,
+    PartyIdx, PartyKind, Project, Provenance, SharedStepId, StepRef, StepTarget, ThreatId, TreeId,
+    TrustBoundaryId,
 };
 
 /// `Selection` has no `Ord`, and the orphan rule forbids adding one here. This
@@ -43,6 +44,7 @@ impl Sel {
             Selection::Party(_) => 12,
             Selection::Condition(_) => 13,
             Selection::Assumption(_) => 14,
+            Selection::SharedStep(_) => 15,
         };
         let s = self.0;
         (rank, format!("{s:?}"))
@@ -89,6 +91,8 @@ fn project() -> Project {
         ThreatId::new_v7(),
     );
     let (tree_id, root, step) = (TreeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    let (shared_step, shared_user_a, shared_user_b) =
+        (SharedStepId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
     let (control1, control2, goal, goal2, claim) = (
         ControlId::new_v7(),
         ControlId::new_v7(),
@@ -101,6 +105,10 @@ fn project() -> Project {
     let mut tree = AttackTree::new(root, Node::gate(GateKind::Or, "root")).expect("tree");
     tree.add_child(tree.root(), step, Node::step("step"))
         .expect("child");
+    tree.add_child(tree.root(), shared_user_a, Node::step("shared a"))
+        .expect("shared a");
+    tree.add_child(tree.root(), shared_user_b, Node::step("shared b"))
+        .expect("shared b");
 
     let ops = vec![
         Op::AddComponent {
@@ -180,9 +188,30 @@ fn project() -> Project {
             provenance: provenance.clone(),
         },
         Op::SetStepVia {
-            tree: tree_id,
-            node: step,
+            target: StepTarget::Step(tree_id, step),
             via: Some(ItemRef::Interface(iface)),
+            provenance: provenance.clone(),
+        },
+        Op::AddSharedStep {
+            id: shared_step,
+            name: "shared".into(),
+            provenance: provenance.clone(),
+        },
+        Op::SetStepVia {
+            target: StepTarget::Shared(shared_step),
+            via: Some(ItemRef::Interface(iface)),
+            provenance: provenance.clone(),
+        },
+        Op::UseSharedStep {
+            tree: tree_id,
+            node: shared_user_a,
+            step: shared_step,
+            provenance: provenance.clone(),
+        },
+        Op::UseSharedStep {
+            tree: tree_id,
+            node: shared_user_b,
+            step: shared_step,
             provenance: provenance.clone(),
         },
         Op::AddSecurityControl {
@@ -385,6 +414,7 @@ fn sources_of(project: &Project, kind: ElementKind) -> Vec<Selection> {
             .flat_map(|(_, id, tree)| tree.iter().filter(|(_, _, n)| n.gate_kind().is_none()).map(move |(_, node, _)| Selection::TreeNode(id, node)))
             .collect(),
         ElementKind::Assumption => project.assumptions().map(|(_, id, _)| Selection::Assumption(id)).collect(),
+        ElementKind::SharedStep => project.shared_steps().map(|(_, id, _)| Selection::SharedStep(id)).collect(),
         _ => Vec::new(),
     }
 }
@@ -437,6 +467,22 @@ fn model_links(project: &Project) -> BTreeSet<(Sel, Sel)> {
         for &control in goal.controls() {
             if let Some(control) = project.security_control_id(control) {
                 out.insert((Sel(Selection::Goal(id)), Sel(Selection::Control(control))));
+            }
+        }
+    }
+
+    for (idx, id, _) in project.shared_steps() {
+        if let Some(item) = project.shared_step_via(idx).and_then(item_selection) {
+            out.insert((Sel(Selection::SharedStep(id)), Sel(item)));
+        }
+    }
+    for (t_idx, tree_id, tree) in project.attack_trees() {
+        for (n_idx, node_id, _) in tree.iter() {
+            if let Some(shared) = project
+                .step_shared_id(t_idx, n_idx)
+                .map(Selection::SharedStep)
+            {
+                out.insert((Sel(shared), Sel(Selection::TreeNode(tree_id, node_id))));
             }
         }
     }
@@ -582,9 +628,10 @@ fn model_links(project: &Project) -> BTreeSet<(Sel, Sel)> {
     for (tree_idx, tree_id, tree) in project.attack_trees() {
         for (node_idx, node_id, _) in tree.iter() {
             let source = Sel(Selection::TreeNode(tree_id, node_id));
-            if let Some(via) = project
-                .step_via(tree_idx, node_idx)
-                .and_then(item_selection)
+            if project.step_shared(tree_idx, node_idx).is_none()
+                && let Some(via) = project
+                    .step_via(tree_idx, node_idx)
+                    .and_then(item_selection)
             {
                 out.insert((source, Sel(via)));
             }
@@ -682,6 +729,8 @@ fn keys_and_labels_are_valid() {
         (RelationKey::CLAIM_RESPONSIBLE, "claim-responsible"),
         (RelationKey::CONTROL_TARGETS, "control-targets"),
         (RelationKey::STEP_VIA, "step-via"),
+        (RelationKey::SHARED_STEP_VIA, "shared-step-via"),
+        (RelationKey::SHARED_STEP_USED_IN, "shared-step-used-in"),
         (RelationKey::STEP_MITIGATIONS, "step-mitigations"),
         (RelationKey::DATAFLOW_FROM, "dataflow-from"),
         (RelationKey::DATAFLOW_TO, "dataflow-to"),

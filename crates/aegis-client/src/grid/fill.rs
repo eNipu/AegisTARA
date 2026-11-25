@@ -232,6 +232,26 @@ fn source_rating_input(
                 .and_then(|tr| TREATMENTS.iter().position(|x| *x == tr));
             Some(CellInput::SingleChoice(choice))
         }
+        (TableId::SharedSteps, "feasibility", Selection::SharedStep(id)) => {
+            let step = project.shared_step(project.shared_step_idx(&id)?)?;
+            let selected = step.feasibility().and_then(|level| {
+                project
+                    .methodology()
+                    .feasibility_levels()
+                    .position(|(l, _, _)| l == level)
+            });
+            Some(CellInput::SingleChoice(selected))
+        }
+        (TableId::SharedSteps, "attack-type", Selection::SharedStep(id)) => {
+            let step = project.shared_step(project.shared_step_idx(&id)?)?;
+            let selected = step.attack_type().and_then(|attack| {
+                project
+                    .methodology()
+                    .attack_types()
+                    .position(|a| a == attack)
+            });
+            Some(CellInput::SingleChoice(selected))
+        }
         _ => None,
     }
 }

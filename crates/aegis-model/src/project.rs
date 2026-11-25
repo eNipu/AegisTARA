@@ -1,7 +1,7 @@
 //! The project: assets, damage scenarios, threat scenarios, and attack
 //! trees over one methodology, changed only through typed [`Op`]s.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use crate::applicability::{
@@ -9,6 +9,7 @@ use crate::applicability::{
     MAX_CLAIM_ASSUMPTIONS, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT, StepRef,
 };
 use crate::asset::{Asset, PropertySet};
+use crate::blocks::{MAX_SHARED_STEPS, SharedStep};
 use crate::control::{
     CeilingSource, ControlRule, ControlStatus, CybersecurityClaim, CybersecurityGoal, DecidingStep,
     MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment,
@@ -27,8 +28,8 @@ use crate::id::{
     ArenaIndex, AssetId, AssetIdx, AssumptionId, AssumptionIdx, ClaimId, ClaimIdx, ComponentId,
     ComponentIdx, ConditionId, ConditionIdx, ControlId, ControlIdx, DamageId, DamageIdx,
     DataFlowId, DataFlowIdx, ElementId, GoalId, GoalIdx, InterfaceId, InterfaceIdx, NodeId,
-    NodeIdx, PartyId, PartyIdx, ThreatId, ThreatIdx, TreeId, TreeIdx, TrustBoundaryId,
-    TrustBoundaryIdx, VisualPrefix,
+    NodeIdx, PartyId, PartyIdx, SharedStepId, SharedStepIdx, ThreatId, ThreatIdx, TreeId, TreeIdx,
+    TrustBoundaryId, TrustBoundaryIdx, VisualPrefix,
 };
 use crate::item::{
     Component, DataFlow, Interface, ItemIdx, ItemRef, MAX_COMPONENT_DEPTH,
@@ -40,7 +41,7 @@ use crate::methodology::{
     FeasibilityLevel, ImpactCategory, InterfaceKind, Level, Methodology, Property, RiskLevel,
     ThreatCategory,
 };
-use crate::op::Op;
+use crate::op::{Op, StepTarget};
 use crate::party::{MAX_PARTIES, MAX_RESPONSIBLE, Party, PartyKind};
 use crate::paths::{AttackPath, ChokePoint};
 use crate::provenance::Provenance;
@@ -206,6 +207,7 @@ struct StepLinks {
     via: Vec<Option<ItemIdx>>,
     attack_type: Vec<Option<AttackType>>,
     condition: Vec<Vec<ConditionIdx>>,
+    shared: Vec<Option<SharedStepIdx>>,
 }
 
 impl StepLinks {
@@ -213,6 +215,7 @@ impl StepLinks {
         self.via.iter().all(Option::is_none)
             && self.attack_type.iter().all(Option::is_none)
             && self.condition.iter().all(Vec::is_empty)
+            && self.shared.iter().all(Option::is_none)
     }
 }
 
@@ -230,6 +233,10 @@ impl TreeEntry {
             .flatten()
     }
 
+    fn shared_at(&self, i: usize) -> Option<SharedStepIdx> {
+        self.step_links.as_ref()?.shared.get(i).copied().flatten()
+    }
+
     /// The slots that have a "through" item, with the item.
     fn vias(&self) -> impl Iterator<Item = (usize, ItemIdx)> + '_ {
         self.step_links
@@ -245,7 +252,10 @@ impl TreeEntry {
                 .iter()
                 .zip(&l.attack_type)
                 .zip(&l.condition)
-                .filter(|((v, t), c)| v.is_some() || t.is_some() || !c.is_empty())
+                .zip(&l.shared)
+                .filter(|(((v, t), c), s)| {
+                    v.is_some() || t.is_some() || !c.is_empty() || s.is_some()
+                })
                 .count()
         })
     }
@@ -267,6 +277,7 @@ impl TreeEntry {
                 via: vec![None; len],
                 attack_type: vec![None; len],
                 condition: vec![Vec::new(); len],
+                shared: vec![None; len],
             })
         });
         let old = field(links)
@@ -278,11 +289,22 @@ impl TreeEntry {
         old
     }
 
+    fn set_shared(
+        &mut self,
+        at: usize,
+        len: usize,
+        value: Option<SharedStepIdx>,
+    ) -> Option<SharedStepIdx> {
+        debug_assert_eq!(len, self.tree.len());
+        self.set_link(at, value, |l| &mut l.shared)
+    }
+
     fn insert_links(&mut self, i: usize) {
         if let Some(l) = self.step_links.as_mut() {
             l.via.insert(i, None);
             l.attack_type.insert(i, None);
             l.condition.insert(i, Vec::new());
+            l.shared.insert(i, None);
         }
     }
 
@@ -291,6 +313,10 @@ impl TreeEntry {
             l.via.remove(i);
             l.attack_type.remove(i);
             l.condition.remove(i);
+            l.shared.remove(i);
+            if l.is_empty() {
+                self.step_links = None;
+            }
         }
     }
 
@@ -311,6 +337,7 @@ impl TreeEntry {
                 via: vec![None; len],
                 attack_type: vec![None; len],
                 condition: vec![Vec::new(); len],
+                shared: vec![None; len],
             })
         });
         if let Some(slot) = links.condition.get_mut(i) {
@@ -392,6 +419,8 @@ struct RefCounts {
     goals: Vec<u32>,
     /// Per cybersecurity claim slot: how many live threats reference it.
     claims: Vec<u32>,
+    /// Per shared step slot: how many attack steps use it.
+    shared_step_users: Vec<u32>,
     /// Per component slot: how many live child components reference it as `parent`.
     component_children: Vec<u32>,
     /// Per component slot: how many live interfaces belong to it.
@@ -415,6 +444,31 @@ struct RefCounts {
 fn bump(v: &mut [u32], i: Option<usize>, up: bool) {
     if let Some(c) = i.and_then(|i| v.get_mut(i)) {
         *c = step(*c, up);
+    }
+}
+
+/// Sets or clears one factor, allocating a full row on the first rating and
+/// collapsing it again when the last rating is cleared.
+fn set_factor_slot(
+    row: &mut Box<[Option<FactorLevel>]>,
+    factor_count: usize,
+    factor: FeasibilityFactor,
+    level: Option<FactorLevel>,
+) -> Result<Option<FactorLevel>, ModelError> {
+    if let Some(new_level) = level {
+        if row.is_empty() {
+            *row = vec![None; factor_count].into_boxed_slice();
+        }
+        Ok(row
+            .get_mut(factor.index())
+            .ok_or(ModelError::UnknownFeasibilityFactor(factor))?
+            .replace(new_level))
+    } else {
+        let old = row.get_mut(factor.index()).and_then(Option::take);
+        if row.iter().all(Option::is_none) {
+            *row = Box::default();
+        }
+        Ok(old)
     }
 }
 
@@ -645,6 +699,7 @@ pub struct Project {
     parties: Arena<PartyId, PartyIdx, Party>,
     conditions: Arena<ConditionId, ConditionIdx, Condition>,
     assumptions: Arena<AssumptionId, AssumptionIdx, Assumption>,
+    shared_steps: Arena<SharedStepId, SharedStepIdx, SharedStep>,
     /// Conditions needed by each element (job 133). Sparse: an element with
     /// no conditions has no entry. Lists are sorted by public `ConditionId`.
     condition_links: BTreeMap<ElementRef, Vec<ConditionIdx>>,
@@ -806,6 +861,7 @@ impl Project {
             parties: Arena::new(),
             conditions: Arena::new(),
             assumptions: Arena::new(),
+            shared_steps: Arena::new(),
             condition_links: BTreeMap::new(),
             components: Arena::new(),
             interfaces: Arena::new(),
@@ -1359,12 +1415,55 @@ impl Project {
     /// ```
     #[must_use]
     pub fn step_feasibility(&self, tree: TreeIdx, node: NodeIdx) -> Option<FeasibilityLevel> {
+        let entry = self.trees.get(tree)?;
+        match entry.shared_at(node.index()) {
+            Some(shared) => self.shared_steps.get(shared)?.feasibility(),
+            None => self.own_step_feasibility(tree, node),
+        }
+    }
+
+    /// The shared step used by `node`, if any. Time O(1).
+    #[must_use]
+    pub fn step_shared(&self, tree: TreeIdx, node: NodeIdx) -> Option<SharedStepIdx> {
+        self.trees.get(tree)?.shared_at(node.index())
+    }
+
+    /// The public ID of the shared step used by `node`, if any. Time O(1).
+    #[must_use]
+    pub fn step_shared_id(&self, tree: TreeIdx, node: NodeIdx) -> Option<SharedStepId> {
+        self.step_shared(tree, node)
+            .and_then(|idx| self.shared_step_id(idx))
+    }
+
+    /// How many attack-tree steps use `shared`. Time O(1).
+    #[must_use]
+    pub fn shared_step_users_count(&self, shared: SharedStepIdx) -> u32 {
+        self.refs
+            .shared_step_users
+            .get(shared.index())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn own_step_feasibility(
+        &self,
+        tree: TreeIdx,
+        node: NodeIdx,
+    ) -> Option<FeasibilityLevel> {
         self.trees
             .get(tree)?
             .step_feasibility
             .get(node.index())
             .copied()
             .flatten()
+    }
+
+    pub(crate) fn own_step_via(&self, tree: TreeIdx, node: NodeIdx) -> Option<ItemIdx> {
+        self.trees.get(tree)?.via_at(node.index())
+    }
+
+    pub(crate) fn own_step_attack_type(&self, tree: TreeIdx, node: NodeIdx) -> Option<AttackType> {
+        self.trees.get(tree)?.attack_type_at(node.index())
     }
 
     /// Returns the per-node step feasibility slice in `NodeIdx` order in
@@ -1414,7 +1513,7 @@ impl Project {
     /// let eq = m.feasibility_factor("equipment").ok_or("no factor")?;
     /// let bespoke = m.factor_level(eq, "bespoke").ok_or("no level")?;
     /// project.apply(Op::SetStepFactor {
-    ///     tree: tree_id, node: step, factor: eq, level: Some(bespoke),
+    ///     target: aegis_model::StepTarget::Step(tree_id, step), factor: eq, level: Some(bespoke),
     ///     provenance: Provenance::default(),
     /// })?;
     /// let idx = project.attack_tree_idx(&tree_id).ok_or("missing")?;
@@ -1429,10 +1528,7 @@ impl Project {
         node: NodeIdx,
         factor: FeasibilityFactor,
     ) -> Option<FactorLevel> {
-        self.trees
-            .get(tree)?
-            .step_factors
-            .get(node.index())?
+        self.step_factor_slice(tree, node)
             .get(factor.index())
             .copied()
             .flatten()
@@ -1459,7 +1555,7 @@ impl Project {
     /// let eq = m.feasibility_factor("equipment").ok_or("no factor")?;
     /// let bespoke = m.factor_level(eq, "bespoke").ok_or("no level")?;
     /// project.apply(Op::SetStepFactor {
-    ///     tree: tree_id, node: step, factor: eq, level: Some(bespoke),
+    ///     target: aegis_model::StepTarget::Step(tree_id, step), factor: eq, level: Some(bespoke),
     ///     provenance: Provenance::default(),
     /// })?;
     /// let idx = project.attack_tree_idx(&tree_id).ok_or("missing")?;
@@ -1482,11 +1578,29 @@ impl Project {
 
     /// Raw per-factor slice for `node` in `tree` (empty when no factor is
     /// rated on `node`). Time O(1).
-    pub(crate) fn step_factor_slice(&self, tree: TreeIdx, node: NodeIdx) -> &[Option<FactorLevel>] {
+    pub(crate) fn own_step_factor_slice(
+        &self,
+        tree: TreeIdx,
+        node: NodeIdx,
+    ) -> &[Option<FactorLevel>] {
         self.trees
             .get(tree)
             .and_then(|e| e.step_factors.get(node.index()))
             .map_or(&[][..], Box::as_ref)
+    }
+
+    /// Raw per-factor slice for `node` in `tree`, resolving shared steps.
+    pub(crate) fn step_factor_slice(&self, tree: TreeIdx, node: NodeIdx) -> &[Option<FactorLevel>] {
+        let Some(entry) = self.trees.get(tree) else {
+            return &[];
+        };
+        match entry.shared_at(node.index()) {
+            Some(shared) => self
+                .shared_steps
+                .get(shared)
+                .map_or(&[], |s| s.factor_slice()),
+            None => self.own_step_factor_slice(tree, node),
+        }
     }
 
     /// Evaluates the complete attack potential breakdown ([`AttackPotential`])
@@ -1520,7 +1634,7 @@ impl Project {
     ///     let f = m.feasibility_factor(f_key).ok_or("no factor")?;
     ///     let l = m.factor_level(f, l_key).ok_or("no level")?;
     ///     project.apply(Op::SetStepFactor {
-    ///         tree: tree_id, node: step, factor: f, level: Some(l),
+    ///         target: aegis_model::StepTarget::Step(tree_id, step), factor: f, level: Some(l),
     ///         provenance: Provenance::default(),
     ///     })?;
     /// }
@@ -1533,9 +1647,13 @@ impl Project {
     /// ```
     #[must_use]
     pub fn step_attack_potential(&self, tree: TreeIdx, node: NodeIdx) -> Option<AttackPotential> {
-        self.trees
-            .get(tree)?
-            .step_attack_potential(&self.methodology, node)
+        let entry = self.trees.get(tree)?;
+        match entry.shared_at(node.index()) {
+            Some(shared) => self
+                .methodology
+                .resolve_attack_potential(self.shared_steps.get(shared)?.factor_slice()),
+            None => entry.step_attack_potential(&self.methodology, node),
+        }
     }
 
     /// Returns the effective inherent feasibility of `node` in `tree`: if all
@@ -1572,8 +1690,8 @@ impl Project {
         node: NodeIdx,
     ) -> Option<FeasibilityLevel> {
         self.trees
-            .get(tree)?
-            .effective_step_feasibility(&self.methodology, node)
+            .get(tree)
+            .and_then(|entry| self.entry_effective_step_feasibility(entry, node))
     }
 
     // -- Security controls -------------------------------------------------------
@@ -2193,6 +2311,54 @@ impl Project {
     pub fn assumption_visual_id(&self, idx: AssumptionIdx) -> Option<String> {
         self.assumption_visual_num(idx)
             .map(|n| VisualPrefix::Assumption.format(n))
+    }
+
+    /// Resolves a live shared step's public ID to its arena index.
+    #[must_use]
+    pub fn shared_step_idx(&self, id: &SharedStepId) -> Option<SharedStepIdx> {
+        self.shared_steps.idx(id)
+    }
+
+    /// Returns a live shared step, or `None` if the slot is absent or tombstoned.
+    #[must_use]
+    pub fn shared_step(&self, idx: SharedStepIdx) -> Option<&SharedStep> {
+        self.shared_steps.get(idx)
+    }
+
+    /// Resolves a shared step's through item to its public reference. Time O(1).
+    #[must_use]
+    pub fn shared_step_via(&self, idx: SharedStepIdx) -> Option<ItemRef> {
+        self.item_ref(self.shared_step(idx)?.via())
+    }
+
+    /// Iterates live shared steps in `SharedStepId` order.
+    pub fn shared_steps(
+        &self,
+    ) -> impl Iterator<Item = (SharedStepIdx, SharedStepId, &SharedStep)> + '_ {
+        self.shared_steps.iter()
+    }
+
+    /// The public ID of the shared step at `idx`. Time O(1).
+    #[must_use]
+    pub fn shared_step_id(&self, idx: SharedStepIdx) -> Option<SharedStepId> {
+        self.shared_steps.id(idx)
+    }
+
+    /// Returns a live shared step's visual ID (`L00`, `L01`, ...).
+    #[must_use]
+    pub fn shared_step_visual_id(&self, idx: SharedStepIdx) -> Option<String> {
+        self.shared_step_visual_num(idx)
+            .map(|n| VisualPrefix::SharedStep.format(n))
+    }
+
+    pub(crate) fn shared_step_visual_num(&self, idx: SharedStepIdx) -> Option<u32> {
+        self.shared_steps.visual_num(idx)
+    }
+
+    /// The number of live shared steps. Time O(1).
+    #[must_use]
+    pub fn shared_step_count(&self) -> usize {
+        self.shared_steps.len()
     }
 
     /// The condition indices this element needs, in `ConditionId` order. The
@@ -3257,6 +3423,9 @@ impl Project {
             ElementRef::Assumption(id) => self
                 .assumption_idx(&id)
                 .and_then(|idx| self.assumption_visual_id(idx)),
+            ElementRef::SharedStep(id) => self
+                .shared_step_idx(&id)
+                .and_then(|idx| self.shared_step_visual_id(idx)),
             ElementRef::Component(id) => self
                 .component_idx(&id)
                 .and_then(|idx| self.component_visual_id(idx)),
@@ -3302,6 +3471,10 @@ impl Project {
 
     pub(crate) fn set_party_loaded_visual(&mut self, id: &PartyId, vis: u32, next: u32) {
         self.parties.set_loaded_visual(id, vis, next);
+    }
+
+    pub(crate) fn set_shared_step_loaded_visual(&mut self, id: &SharedStepId, vis: u32, next: u32) {
+        self.shared_steps.set_loaded_visual(id, vis, next);
     }
 
     /// The public ID of the condition at `idx`. Time O(1).
@@ -3430,7 +3603,7 @@ impl Project {
     ///     id: tree_id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepVia {
-    ///     tree: tree_id, node: step, via: Some(ItemRef::Component(ecu)),
+    ///     target: aegis_model::StepTarget::Step(tree_id, step), via: Some(ItemRef::Component(ecu)),
     ///     provenance: Provenance::default(),
     /// })?;
     /// let tree_idx = project.attack_tree_idx(&tree_id).ok_or("missing")?;
@@ -3441,13 +3614,16 @@ impl Project {
     /// ```
     #[must_use]
     pub fn step_via(&self, tree: TreeIdx, node: NodeIdx) -> Option<ItemRef> {
-        self.item_ref(self.trees.get(tree)?.via_at(node.index()))
+        let entry = self.trees.get(tree)?;
+        self.item_ref(self.entry_step_via_idx(entry, node.index()))
     }
 
     /// The attack type of the step `node` of `tree`, if any (CFG-02). O(1).
     #[must_use]
     pub fn step_attack_type(&self, tree: TreeIdx, node: NodeIdx) -> Option<AttackType> {
-        self.trees.get(tree)?.attack_type_at(node.index())
+        self.trees
+            .get(tree)
+            .and_then(|entry| self.entry_step_attack_type(entry, node.index()))
     }
 
     /// Every step that goes through `item` itself (a component's list does
@@ -3459,9 +3635,10 @@ impl Project {
             .iter()
             .filter(move |_| want.is_some())
             .flat_map(move |(t, _, e)| {
-                e.vias()
-                    .filter(move |(_, v)| Some(*v) == want)
-                    .filter_map(move |(i, _)| Some((t, NodeIdx::try_from_usize(i)?)))
+                e.tree.iter().filter_map(move |(node, _, _)| {
+                    let via = self.entry_step_via_idx(e, node.index())?;
+                    (Some(via) == want).then_some((t, node))
+                })
             })
     }
 
@@ -3572,10 +3749,10 @@ impl Project {
     ///     id: tree_id, tree, step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepVia {
-    ///     tree: tree_id, node: step, via: Some(ItemRef::Component(ecu)), provenance: Provenance::default(),
+    ///     target: aegis_model::StepTarget::Step(tree_id, step), via: Some(ItemRef::Component(ecu)), provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepAttackType {
-    ///     tree: tree_id, node: step, attack_type: Some(spoof), provenance: Provenance::default(),
+    ///     target: aegis_model::StepTarget::Step(tree_id, step), attack_type: Some(spoof), provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepMitigation {
     ///     tree: tree_id, node: step, control: ctrl, feasibility: Some(med), provenance: Provenance::default(),
@@ -3619,8 +3796,8 @@ impl Project {
             }
         }
         if let (Some(via), Some(attack_type)) = (
-            entry.via_at(node.index()),
-            entry.attack_type_at(node.index()),
+            self.entry_step_via_idx(entry, node.index()),
+            self.entry_step_attack_type(entry, node.index()),
         ) {
             let owner = self.item_owner_component(via);
             if self.item_control_count(via) > 0
@@ -3716,11 +3893,11 @@ impl Project {
     ///     id: tree_id, tree, step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepVia {
-    ///     tree: tree_id, node: step, via: Some(ItemRef::Component(comp)),
+    ///     target: aegis_model::StepTarget::Step(tree_id, step), via: Some(ItemRef::Component(comp)),
     ///     provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepAttackType {
-    ///     tree: tree_id, node: step, attack_type: Some(phys), provenance: Provenance::default(),
+    ///     target: aegis_model::StepTarget::Step(tree_id, step), attack_type: Some(phys), provenance: Provenance::default(),
     /// })?;
     /// let t_idx = project.attack_tree_idx(&tree_id).ok_or("no tree")?;
     /// let residual = project.evaluate_residual_tree(tree_id)?;
@@ -3765,6 +3942,20 @@ impl Project {
         })
     }
 
+    fn entry_step_via_idx(&self, entry: &TreeEntry, i: usize) -> Option<ItemIdx> {
+        match entry.shared_at(i) {
+            Some(shared) => self.shared_steps.get(shared)?.via(),
+            None => entry.via_at(i),
+        }
+    }
+
+    fn entry_step_attack_type(&self, entry: &TreeEntry, i: usize) -> Option<AttackType> {
+        match entry.shared_at(i) {
+            Some(shared) => self.shared_steps.get(shared)?.attack_type(),
+            None => entry.attack_type_at(i),
+        }
+    }
+
     fn item_owner_component(&self, item: ItemIdx) -> Option<ItemIdx> {
         match item {
             ItemIdx::Component(_) => None,
@@ -3793,9 +3984,10 @@ impl Project {
     }
 
     fn entry_step_has_rule_ceiling(&self, entry: &TreeEntry, step_pos: usize) -> bool {
-        let (Some(via), Some(attack_type)) =
-            (entry.via_at(step_pos), entry.attack_type_at(step_pos))
-        else {
+        let (Some(via), Some(attack_type)) = (
+            self.entry_step_via_idx(entry, step_pos),
+            self.entry_step_attack_type(entry, step_pos),
+        ) else {
             return false;
         };
         let owner = self.item_owner_component(via);
@@ -3811,13 +4003,29 @@ impl Project {
         })
     }
 
+    fn entry_effective_step_feasibility(
+        &self,
+        entry: &TreeEntry,
+        idx: NodeIdx,
+    ) -> Option<FeasibilityLevel> {
+        match entry.shared_at(idx.index()) {
+            Some(shared) => {
+                let step = self.shared_steps.get(shared)?;
+                self.methodology
+                    .resolve_attack_potential_feasibility(step.factor_slice())
+                    .or(step.feasibility())
+            }
+            None => entry.effective_step_feasibility(&self.methodology, idx),
+        }
+    }
+
     fn entry_step_feasibility_for(
         &self,
         entry: &TreeEntry,
         idx: NodeIdx,
         residual: bool,
     ) -> Option<FeasibilityLevel> {
-        let mut res = entry.effective_step_feasibility(&self.methodology, idx)?;
+        let mut res = self.entry_effective_step_feasibility(entry, idx)?;
         if let Some(mitigations) = entry.step_mitigations.get(idx.index()) {
             for m in mitigations {
                 if self
@@ -3829,9 +4037,10 @@ impl Project {
                 }
             }
         }
-        if let (Some(via), Some(attack_type)) =
-            (entry.via_at(idx.index()), entry.attack_type_at(idx.index()))
-        {
+        if let (Some(via), Some(attack_type)) = (
+            self.entry_step_via_idx(entry, idx.index()),
+            self.entry_step_attack_type(entry, idx.index()),
+        ) {
             let owner = self.item_owner_component(via);
             if self.item_control_count(via) > 0
                 || owner.is_some_and(|o| self.item_control_count(o) > 0)
@@ -5720,7 +5929,7 @@ impl Project {
     /// let mut cache = project.eval_cache();
     /// project.apply_cached(
     ///     Op::SetStepFeasibility {
-    ///         tree: tree_id, node: step, level: Some(low), provenance: Provenance::default(),
+    ///         target: aegis_model::StepTarget::Step(tree_id, step), level: Some(low), provenance: Provenance::default(),
     ///     },
     ///     &mut cache,
     /// )?;
@@ -6047,28 +6256,26 @@ impl Project {
                         }
                     }
                     Node::Step { .. } => {
-                        if entry
-                            .effective_step_feasibility(&self.methodology, node_idx)
-                            .is_none()
-                        {
+                        if self.effective_step_feasibility(idx, node_idx).is_none() {
                             findings.push(LintFinding::new(LintCode::AttackTreeStepUnrated {
                                 tree: id,
                                 node: node_id,
                             }));
                         }
                         if any_rules
-                            && entry.via_at(node_idx.index()).is_some()
-                                != entry.attack_type_at(node_idx.index()).is_some()
+                            && self.step_via(idx, node_idx).is_some()
+                                != self.step_attack_type(idx, node_idx).is_some()
                         {
                             findings.push(LintFinding::new(LintCode::StepSettingsIncomplete {
                                 tree: id,
                                 node: node_id,
                             }));
                         }
-                        let rated_factors = entry
-                            .step_factors
-                            .get(node_idx.index())
-                            .map_or(0, |r| r.iter().filter(|l| l.is_some()).count());
+                        let rated_factors = self
+                            .step_factor_slice(idx, node_idx)
+                            .iter()
+                            .filter(|l| l.is_some())
+                            .count();
                         if rated_factors > 0 && rated_factors < factor_count {
                             findings.push(LintFinding::new(
                                 LintCode::AttackTreeStepIncompleteFactors {
@@ -6078,12 +6285,7 @@ impl Project {
                             ));
                         } else if rated_factors == factor_count
                             && factor_count > 0
-                            && entry
-                                .step_feasibility
-                                .get(node_idx.index())
-                                .copied()
-                                .flatten()
-                                .is_some()
+                            && self.step_feasibility(idx, node_idx).is_some()
                         {
                             findings.push(LintFinding::new(LintCode::RedundantStepFeasibility {
                                 tree: id,
@@ -6387,6 +6589,9 @@ impl Project {
         let assumptions = diff_arena(&self.assumptions, &other.assumptions, |x, y| {
             self.same_assumption(x, other, y)
         });
+        let shared_steps = diff_arena(&self.shared_steps, &other.shared_steps, |x, y| {
+            self.same_shared_step(x, other, y)
+        });
         let components = diff_arena(&self.components, &other.components, |x, y| {
             self.same_component(x, other, y)
         });
@@ -6415,6 +6620,7 @@ impl Project {
             &security_controls,
             &cybersecurity_goals,
             &cybersecurity_claims,
+            &shared_steps,
         );
         // A changed description changes no number, so it is merged after the
         // risk deltas: it marks the element modified and nothing more.
@@ -6429,6 +6635,7 @@ impl Project {
             parties,
             conditions,
             assumptions,
+            shared_steps,
             elements: self.elements.diff(&other.elements),
             components,
             interfaces,
@@ -6460,6 +6667,7 @@ impl Project {
             (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let (mut controls, mut goals, mut claims, mut assumptions) =
             (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut shared_steps = Vec::new();
         let (mut components, mut interfaces, mut data_flows, mut trust_boundaries) =
             (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for target in changed {
@@ -6476,6 +6684,7 @@ impl Project {
                 ElementRef::Goal(id) => goals.push(id),
                 ElementRef::Claim(id) => claims.push(id),
                 ElementRef::Assumption(id) => assumptions.push(id),
+                ElementRef::SharedStep(id) => shared_steps.push(id),
                 ElementRef::Component(id) => components.push(id),
                 ElementRef::Interface(id) => interfaces.push(id),
                 ElementRef::DataFlow(id) => data_flows.push(id),
@@ -6490,6 +6699,7 @@ impl Project {
         merge_modified(&mut diff.cybersecurity_goals, goals);
         merge_modified(&mut diff.cybersecurity_claims, claims);
         merge_modified(&mut diff.assumptions, assumptions);
+        merge_modified(&mut diff.shared_steps, shared_steps);
         merge_modified(&mut diff.components, components);
         merge_modified(&mut diff.interfaces, interfaces);
         merge_modified(&mut diff.data_flows, data_flows);
@@ -6552,6 +6762,7 @@ impl Project {
                 | ElementRef::Control(_)
                 | ElementRef::DataFlow(_)
                 | ElementRef::TrustBoundary(_)
+                | ElementRef::SharedStep(_)
                 | ElementRef::ItemDescription
                 | ElementRef::ItemScope => {}
             }
@@ -6582,6 +6793,7 @@ impl Project {
         controls: &EntityDiff<ControlId>,
         goals: &EntityDiff<GoalId>,
         claims: &EntityDiff<ClaimId>,
+        shared_steps: &EntityDiff<SharedStepId>,
     ) -> Box<[ThreatRiskDelta]> {
         let (app_a, app_b) = (self.applicability(), other.applicability());
         let mut deltas = Vec::new();
@@ -6616,8 +6828,17 @@ impl Project {
                         let tree_a = t_a.attack_tree.and_then(|i| self.trees.id(i));
                         if !app_a.same_for_threat(&app_b, id_a, tree_a)
                             || self.is_threat_affected(
-                                other, id_a, t_a, assets, damages, threats, trees, controls, goals,
+                                other,
+                                id_a,
+                                t_a,
+                                assets,
+                                damages,
+                                threats,
+                                trees,
+                                controls,
+                                goals,
                                 claims,
+                                shared_steps,
                             )
                         {
                             let (inh_a, res_a) = self.threat_risk_snapshots(id_a);
@@ -6667,6 +6888,7 @@ impl Project {
         controls: &EntityDiff<ControlId>,
         goals: &EntityDiff<GoalId>,
         claims: &EntityDiff<ClaimId>,
+        shared_steps: &EntityDiff<SharedStepId>,
     ) -> bool {
         if threats.modified().binary_search(&id).is_ok() {
             return true;
@@ -6694,6 +6916,18 @@ impl Project {
                 return true;
             }
             if !controls.is_empty() && self.tree_affected_by_controls(other, tree_idx, controls) {
+                return true;
+            }
+            if !shared_steps.modified().is_empty()
+                && self.trees.get(tree_idx).is_some_and(|entry| {
+                    entry.tree.iter().any(|(node, _, _)| {
+                        entry
+                            .shared_at(node.index())
+                            .and_then(|s| self.shared_step_id(s))
+                            .is_some_and(|s| shared_steps.modified().binary_search(&s).is_ok())
+                    })
+                })
+            {
                 return true;
             }
         }
@@ -6740,7 +6974,10 @@ impl Project {
         {
             return true;
         }
-        for (_, via) in entry.vias() {
+        for (i, _, _) in entry.tree.iter() {
+            let Some(via) = self.entry_step_via_idx(entry, i.index()) else {
+                continue;
+            };
             if self.item_affected_by_controls(via, &[controls.removed(), controls.modified()]) {
                 return true;
             }
@@ -7057,25 +7294,58 @@ impl Project {
                 step_feasibility,
                 provenance,
             } => return self.check_add_tree(*id, tree, step_feasibility, provenance),
-            Op::SetStepFeasibility {
-                tree, node, level, ..
-            } => self.check_set_step_feasibility(*tree, *node, *level)?,
-            Op::SetStepVia {
-                tree, node, via, ..
-            } => self.check_set_step_via(*tree, *node, *via)?,
+            Op::SetStepFeasibility { target, level, .. } => match target {
+                StepTarget::Step(tree, node) => {
+                    self.check_set_step_feasibility(*tree, *node, *level)?;
+                }
+                StepTarget::Shared(id) => {
+                    self.live_shared_step(*id)?;
+                    if let Some(level) = level {
+                        self.methodology.check_feasibility_level(*level)?;
+                    }
+                }
+            },
+            Op::SetStepVia { target, via, .. } => match target {
+                StepTarget::Step(tree, node) => self.check_set_step_via(*tree, *node, *via)?,
+                StepTarget::Shared(id) => {
+                    self.live_shared_step(*id)?;
+                    if let Some(item) = via {
+                        self.item_idx(*item)?;
+                    }
+                }
+            },
             Op::SetStepAttackType {
-                tree,
-                node,
+                target,
                 attack_type,
                 ..
-            } => self.check_set_step_attack_type(*tree, *node, *attack_type)?,
+            } => match target {
+                StepTarget::Step(tree, node) => {
+                    self.check_set_step_attack_type(*tree, *node, *attack_type)?;
+                }
+                StepTarget::Shared(id) => {
+                    self.live_shared_step(*id)?;
+                    if let Some(t) = attack_type {
+                        self.methodology.check_attack_type(*t)?;
+                    }
+                }
+            },
             Op::SetStepFactor {
-                tree,
-                node,
+                target,
                 factor,
                 level,
                 ..
-            } => self.check_set_step_factor(*tree, *node, *factor, *level)?,
+            } => match target {
+                StepTarget::Step(tree, node) => {
+                    self.check_set_step_factor(*tree, *node, *factor, *level)?;
+                }
+                StepTarget::Shared(id) => {
+                    self.live_shared_step(*id)?;
+                    match level {
+                        Some(level) => self.methodology.check_factor_level(*factor, *level)?,
+                        None => self.methodology.check_feasibility_factor(*factor)?,
+                    }
+                }
+            },
             Op::SetThreatFeasibility { threat, level, .. } => {
                 self.check_set_threat_feasibility(*threat, *level)?;
             }
@@ -7228,6 +7498,28 @@ impl Project {
                 provenance,
             } => return self.check_set_assumption_excludes(*id, trees, steps, provenance),
             Op::RemoveAssumption { id } => return self.check_remove_assumption(*id),
+            Op::AddSharedStep {
+                id,
+                name,
+                provenance,
+            } => return self.check_add_shared_step(*id, name, provenance),
+            Op::RenameSharedStep {
+                id,
+                name,
+                provenance,
+            } => return self.check_rename_shared_step(*id, name, provenance),
+            Op::RemoveSharedStep { id } => return self.check_remove_shared_step(*id),
+            Op::UseSharedStep {
+                tree,
+                node,
+                step,
+                provenance,
+            } => return self.check_use_shared_step(*tree, *node, *step, provenance),
+            Op::UnuseSharedStep {
+                tree,
+                node,
+                provenance,
+            } => return self.check_unuse_shared_step(*tree, *node, provenance),
             Op::NeedCondition {
                 element,
                 condition,
@@ -7640,30 +7932,52 @@ impl Project {
                 provenance,
             } => self.commit_add_tree(id, tree, step_feasibility, provenance),
             Op::SetStepFeasibility {
-                tree,
-                node,
+                target,
                 level,
                 provenance,
-            } => self.commit_set_step_feasibility(tree, node, level, provenance),
+            } => match target {
+                StepTarget::Step(tree, node) => {
+                    self.commit_set_step_feasibility(tree, node, level, provenance)
+                }
+                StepTarget::Shared(id) => {
+                    self.commit_set_shared_step_feasibility(id, level, provenance)
+                }
+            },
             Op::SetStepVia {
-                tree,
-                node,
+                target,
                 via,
                 provenance,
-            } => self.commit_set_step_via(tree, node, via, provenance),
+            } => match target {
+                StepTarget::Step(tree, node) => {
+                    self.commit_set_step_via(tree, node, via, provenance)
+                }
+                StepTarget::Shared(id) => self.commit_set_shared_step_via(id, via, provenance),
+            },
             Op::SetStepAttackType {
-                tree,
-                node,
+                target,
                 attack_type,
                 provenance,
-            } => self.commit_set_step_attack_type(tree, node, attack_type, provenance),
+            } => match target {
+                StepTarget::Step(tree, node) => {
+                    self.commit_set_step_attack_type(tree, node, attack_type, provenance)
+                }
+                StepTarget::Shared(id) => {
+                    self.commit_set_shared_step_attack_type(id, attack_type, provenance)
+                }
+            },
             Op::SetStepFactor {
-                tree,
-                node,
+                target,
                 factor,
                 level,
                 provenance,
-            } => self.commit_set_step_factor(tree, node, factor, level, provenance),
+            } => match target {
+                StepTarget::Step(tree, node) => {
+                    self.commit_set_step_factor(tree, node, factor, level, provenance)
+                }
+                StepTarget::Shared(id) => {
+                    self.commit_set_shared_step_factor(id, factor, level, provenance)
+                }
+            },
             Op::SetThreatFeasibility {
                 threat,
                 level,
@@ -7845,6 +8159,28 @@ impl Project {
                 provenance,
             } => self.commit_set_assumption_excludes(id, trees, steps, provenance),
             Op::RemoveAssumption { id } => self.commit_remove_assumption(id),
+            Op::AddSharedStep {
+                id,
+                name,
+                provenance,
+            } => self.commit_add_shared_step(id, name, provenance),
+            Op::RenameSharedStep {
+                id,
+                name,
+                provenance,
+            } => self.commit_rename_shared_step(id, name, provenance),
+            Op::RemoveSharedStep { id } => self.commit_remove_shared_step(id),
+            Op::UseSharedStep {
+                tree,
+                node,
+                step,
+                provenance,
+            } => self.commit_use_shared_step(tree, node, step, provenance),
+            Op::UnuseSharedStep {
+                tree,
+                node,
+                provenance,
+            } => self.commit_unuse_shared_step(tree, node, provenance),
             Op::NeedCondition {
                 element,
                 condition,
@@ -8361,6 +8697,23 @@ impl Project {
             .ok_or(ModelError::UnknownAssumption(id))
     }
 
+    fn live_shared_step(
+        &self,
+        id: SharedStepId,
+    ) -> Result<(SharedStepIdx, &SharedStep), ModelError> {
+        self.shared_steps
+            .idx(&id)
+            .and_then(|idx| self.shared_steps.get(idx).map(|s| (idx, s)))
+            .ok_or(ModelError::UnknownSharedStep(id))
+    }
+
+    fn shared_step_mut(&mut self, id: SharedStepId) -> Result<&mut SharedStep, ModelError> {
+        let idx = self.live_shared_step(id)?.0;
+        self.shared_steps
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownSharedStep(id))
+    }
+
     fn live_component(&self, id: ComponentId) -> Result<(ComponentIdx, &Component), ModelError> {
         let idx = self.component_index(id)?;
         let c = self
@@ -8466,7 +8819,11 @@ impl Project {
             .iter()
             .flat_map(|(_, _, e)| e.vias())
             .filter(|(_, v)| *v == item)
-            .count();
+            .count()
+            + self
+                .shared_steps()
+                .filter(|(_, _, step)| step.via() == Some(item))
+                .count();
         u32::try_from(n).unwrap_or(u32::MAX)
     }
 
@@ -8631,6 +8988,9 @@ impl Project {
     ) -> Result<(), ModelError> {
         let (entry, idx) = self.tree_node(tree, id)?;
         entry.tree.check_remove(idx)?;
+        if let Some(shared) = entry.shared_at(idx.index()) {
+            return Err(self.shared_link_error(tree, id, shared));
+        }
         let rated = self.review_marks.contains(&(tree, id))
             || entry
                 .step_feasibility
@@ -8817,6 +9177,7 @@ impl Project {
             ElementRef::Goal(id) => self.live_goal(id).map(|_| ()),
             ElementRef::Claim(id) => self.live_claim(id).map(|_| ()),
             ElementRef::Assumption(id) => self.live_assumption(id).map(|_| ()),
+            ElementRef::SharedStep(id) => self.live_shared_step(id).map(|_| ()),
             ElementRef::Component(id) => self.live_component(id).map(|_| ()),
             ElementRef::Interface(id) => self.live_interface(id).map(|_| ()),
             ElementRef::DataFlow(id) => self.live_data_flow(id).map(|_| ()),
@@ -9464,20 +9825,68 @@ impl Project {
         Ok(())
     }
 
+    fn shared_link_error(&self, tree: TreeId, node: NodeId, shared: SharedStepIdx) -> ModelError {
+        ModelError::NodeUsesSharedStep {
+            tree,
+            node,
+            shared_step: self.shared_steps.ids[shared.index()],
+        }
+    }
+
+    fn check_use_shared_step(
+        &self,
+        tree: TreeId,
+        node: NodeId,
+        step: SharedStepId,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let (entry, idx) = self.tree_node(tree, node)?;
+        if !matches!(entry.tree.get(idx), Some(Node::Step { .. })) {
+            return Err(ModelError::NotAStep { tree, node });
+        }
+        self.live_shared_step(step)?;
+        check_provenance(provenance)?;
+        if let Some(shared) = entry.shared_at(idx.index()) {
+            return Err(self.shared_link_error(tree, node, shared));
+        }
+        let tree_idx = self.live_tree(tree)?.0;
+        let rated = self.own_step_feasibility(tree_idx, idx).is_some()
+            || self
+                .own_step_factor_slice(tree_idx, idx)
+                .iter()
+                .any(Option::is_some)
+            || self.own_step_via(tree_idx, idx).is_some()
+            || self.own_step_attack_type(tree_idx, idx).is_some();
+        if rated {
+            return Err(ModelError::StepIsRated { tree, node });
+        }
+        Ok(())
+    }
+
+    fn check_unuse_shared_step(
+        &self,
+        tree: TreeId,
+        node: NodeId,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let (entry, idx) = self.tree_node(tree, node)?;
+        if !matches!(entry.tree.get(idx), Some(Node::Step { .. })) {
+            return Err(ModelError::NotAStep { tree, node });
+        }
+        check_provenance(provenance)?;
+        entry
+            .shared_at(idx.index())
+            .ok_or(ModelError::NodeNotShared { tree, node })
+            .map(|_| ())
+    }
+
     fn check_set_step_feasibility(
         &self,
         tree: TreeId,
         node: NodeId,
         level: Option<FeasibilityLevel>,
     ) -> Result<(), ModelError> {
-        let (_, entry) = self.live_tree(tree)?;
-        let node_idx = entry
-            .tree
-            .idx_of(&node)
-            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
-        if !matches!(entry.tree.get(node_idx), Some(Node::Step { .. })) {
-            return Err(ModelError::NotAStep { tree, node });
-        }
+        self.unshared_step_slot(tree, node)?;
         if let Some(level) = level {
             self.methodology.check_feasibility_level(level)?;
         }
@@ -9497,13 +9906,22 @@ impl Project {
         Ok(node_idx)
     }
 
+    fn unshared_step_slot(&self, tree: TreeId, node: NodeId) -> Result<NodeIdx, ModelError> {
+        let node_idx = self.step_slot(tree, node)?;
+        let (_, entry) = self.live_tree(tree)?;
+        if let Some(shared) = entry.shared_at(node_idx.index()) {
+            return Err(self.shared_link_error(tree, node, shared));
+        }
+        Ok(node_idx)
+    }
+
     fn check_set_step_via(
         &self,
         tree: TreeId,
         node: NodeId,
         via: Option<ItemRef>,
     ) -> Result<(), ModelError> {
-        self.step_slot(tree, node)?;
+        self.unshared_step_slot(tree, node)?;
         if let Some(item) = via {
             self.item_idx(item)?;
         }
@@ -9516,7 +9934,7 @@ impl Project {
         node: NodeId,
         attack_type: Option<AttackType>,
     ) -> Result<(), ModelError> {
-        self.step_slot(tree, node)?;
+        self.unshared_step_slot(tree, node)?;
         if let Some(t) = attack_type {
             self.methodology.check_attack_type(t)?;
         }
@@ -9530,14 +9948,7 @@ impl Project {
         factor: FeasibilityFactor,
         level: Option<FactorLevel>,
     ) -> Result<(), ModelError> {
-        let (_, entry) = self.live_tree(tree)?;
-        let node_idx = entry
-            .tree
-            .idx_of(&node)
-            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
-        if !matches!(entry.tree.get(node_idx), Some(Node::Step { .. })) {
-            return Err(ModelError::NotAStep { tree, node });
-        }
+        self.unshared_step_slot(tree, node)?;
         match level {
             Some(level) => self.methodology.check_factor_level(factor, level)?,
             None => self.methodology.check_feasibility_factor(factor)?,
@@ -9590,6 +10001,14 @@ impl Project {
         let threats = self.refs.trees.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
             return Err(ModelError::AttackTreeInUse { tree: id, threats });
+        }
+        if let Some((node, shared)) = entry
+            .tree
+            .iter()
+            .filter_map(|(i, node, _)| entry.shared_at(i.index()).map(|s| (node, s)))
+            .min_by_key(|(node, _)| *node)
+        {
+            return Err(self.shared_link_error(id, node, shared));
         }
         let factors: usize = entry
             .step_factors
@@ -10055,6 +10474,60 @@ impl Project {
                 assumption: id,
                 excludes,
             });
+        }
+        Ok(())
+    }
+
+    fn check_add_shared_step(
+        &self,
+        id: SharedStepId,
+        name: &str,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        check_name(EntityKind::SharedStep, name)?;
+        check_provenance(provenance)?;
+        if self.shared_steps.len() >= MAX_SHARED_STEPS
+            || self.shared_steps.next_idx(self.slot_limit).is_none()
+        {
+            return Err(ModelError::TooManySharedSteps {
+                max: MAX_SHARED_STEPS,
+            });
+        }
+        if self.shared_steps.idx(&id).is_some() {
+            return Err(ModelError::DuplicateSharedStep(id));
+        }
+        Ok(())
+    }
+
+    fn check_rename_shared_step(
+        &self,
+        id: SharedStepId,
+        name: &str,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        check_name(EntityKind::SharedStep, name)?;
+        check_provenance(provenance)?;
+        self.live_shared_step(id)?;
+        Ok(())
+    }
+
+    fn check_remove_shared_step(&self, id: SharedStepId) -> Result<(), ModelError> {
+        let (idx, step) = self.live_shared_step(id)?;
+        self.require_no_description(ElementRef::SharedStep(id), EntityKind::SharedStep)?;
+        let users = self
+            .refs
+            .shared_step_users
+            .get(idx.index())
+            .copied()
+            .unwrap_or(0);
+        if users > 0 {
+            return Err(ModelError::SharedStepInUse {
+                shared_step: id,
+                users,
+            });
+        }
+        if step.is_rated() {
+            return Err(ModelError::SharedStepIsRated(id));
         }
         Ok(())
     }
@@ -11074,8 +11547,23 @@ impl Project {
         let level = std::mem::replace(slot, level);
         let provenance = std::mem::replace(&mut entry.provenance, provenance);
         Ok(Op::SetStepFeasibility {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
+            level,
+            provenance,
+        })
+    }
+
+    fn commit_set_shared_step_feasibility(
+        &mut self,
+        id: SharedStepId,
+        level: Option<FeasibilityLevel>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let shared = self.shared_step_mut(id)?;
+        let level = std::mem::replace(&mut shared.feasibility, level);
+        let provenance = std::mem::replace(&mut shared.provenance, provenance);
+        Ok(Op::SetStepFeasibility {
+            target: StepTarget::Shared(id),
             level,
             provenance,
         })
@@ -11097,8 +11585,24 @@ impl Project {
         let old = entry.set_link(node_idx.index(), new, |l| &mut l.via);
         let provenance = std::mem::replace(&mut entry.provenance, provenance);
         Ok(Op::SetStepVia {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
+            via: self.item_ref(old),
+            provenance,
+        })
+    }
+
+    fn commit_set_shared_step_via(
+        &mut self,
+        id: SharedStepId,
+        via: Option<ItemRef>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let new = via.map(|item| self.item_idx(item)).transpose()?;
+        let shared = self.shared_step_mut(id)?;
+        let old = std::mem::replace(&mut shared.via, new);
+        let provenance = std::mem::replace(&mut shared.provenance, provenance);
+        Ok(Op::SetStepVia {
+            target: StepTarget::Shared(id),
             via: self.item_ref(old),
             provenance,
         })
@@ -11119,8 +11623,23 @@ impl Project {
         let attack_type = entry.set_link(node_idx.index(), attack_type, |l| &mut l.attack_type);
         let provenance = std::mem::replace(&mut entry.provenance, provenance);
         Ok(Op::SetStepAttackType {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
+            attack_type,
+            provenance,
+        })
+    }
+
+    fn commit_set_shared_step_attack_type(
+        &mut self,
+        id: SharedStepId,
+        attack_type: Option<AttackType>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let shared = self.shared_step_mut(id)?;
+        let attack_type = std::mem::replace(&mut shared.attack_type, attack_type);
+        let provenance = std::mem::replace(&mut shared.provenance, provenance);
+        Ok(Op::SetStepAttackType {
+            target: StepTarget::Shared(id),
             attack_type,
             provenance,
         })
@@ -11144,25 +11663,29 @@ impl Project {
             .step_factors
             .get_mut(node_idx.index())
             .ok_or(ModelError::UnknownTreeNode { tree, node })?;
-        let old = if let Some(new_l) = level {
-            if row.is_empty() {
-                *row = vec![None; factor_count].into_boxed_slice();
-            }
-            let slot = row
-                .get_mut(factor.index())
-                .ok_or(ModelError::UnknownFeasibilityFactor(factor))?;
-            slot.replace(new_l)
-        } else {
-            let old = row.get_mut(factor.index()).and_then(Option::take);
-            if row.iter().all(Option::is_none) {
-                *row = Box::default();
-            }
-            old
-        };
+        let old = set_factor_slot(row, factor_count, factor, level)?;
         let provenance = std::mem::replace(&mut entry.provenance, provenance);
         Ok(Op::SetStepFactor {
-            tree,
-            node,
+            target: StepTarget::Step(tree, node),
+            factor,
+            level: old,
+            provenance,
+        })
+    }
+
+    fn commit_set_shared_step_factor(
+        &mut self,
+        id: SharedStepId,
+        factor: FeasibilityFactor,
+        level: Option<FactorLevel>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let factor_count = self.methodology.feasibility_factor_count();
+        let shared = self.shared_step_mut(id)?;
+        let old = set_factor_slot(&mut shared.factors, factor_count, factor, level)?;
+        let provenance = std::mem::replace(&mut shared.provenance, provenance);
+        Ok(Op::SetStepFactor {
+            target: StepTarget::Shared(id),
             factor,
             level: old,
             provenance,
@@ -12027,6 +12550,108 @@ impl Project {
         })
     }
 
+    fn commit_add_shared_step(
+        &mut self,
+        id: SharedStepId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let idx = self
+            .shared_steps
+            .push(id, SharedStep::new(name, provenance), self.slot_limit)
+            .ok_or(ModelError::ProjectCapacityExceeded {
+                kind: EntityKind::SharedStep,
+            })?;
+        self.refs.shared_step_users.resize(idx.index() + 1, 0);
+        Ok(Op::RemoveSharedStep { id })
+    }
+
+    fn commit_rename_shared_step(
+        &mut self,
+        id: SharedStepId,
+        name: Arc<str>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let idx = self.live_shared_step(id)?.0;
+        let step = self
+            .shared_steps
+            .get_mut(idx)
+            .ok_or(ModelError::UnknownSharedStep(id))?;
+        let name = std::mem::replace(&mut step.name, name);
+        let provenance = std::mem::replace(&mut step.provenance, provenance);
+        Ok(Op::RenameSharedStep {
+            id,
+            name,
+            provenance,
+        })
+    }
+
+    fn commit_remove_shared_step(&mut self, id: SharedStepId) -> Result<Op, ModelError> {
+        let idx = self.live_shared_step(id)?.0;
+        let step = self
+            .shared_steps
+            .remove(idx)
+            .ok_or(ModelError::UnknownSharedStep(id))?;
+        Ok(Op::AddSharedStep {
+            id,
+            name: step.name,
+            provenance: step.provenance,
+        })
+    }
+
+    fn commit_use_shared_step(
+        &mut self,
+        tree: TreeId,
+        node: NodeId,
+        step: SharedStepId,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let shared_idx = self.live_shared_step(step)?.0;
+        let (_, node_idx) = self.tree_node(tree, node)?;
+        let entry = self.tree_mut(tree)?;
+        let len = entry.tree.len();
+        entry.set_shared(node_idx.index(), len, Some(shared_idx));
+        bump(
+            &mut self.refs.shared_step_users,
+            Some(shared_idx.index()),
+            true,
+        );
+        Ok(Op::UnuseSharedStep {
+            tree,
+            node,
+            provenance,
+        })
+    }
+
+    fn commit_unuse_shared_step(
+        &mut self,
+        tree: TreeId,
+        node: NodeId,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let (entry, node_idx) = self.tree_node(tree, node)?;
+        let shared_idx = entry
+            .shared_at(node_idx.index())
+            .ok_or(ModelError::NodeNotShared { tree, node })?;
+        let step = self
+            .shared_step_id(shared_idx)
+            .expect("linked shared step is live");
+        let entry = self.tree_mut(tree)?;
+        let len = entry.tree.len();
+        entry.set_shared(node_idx.index(), len, None);
+        bump(
+            &mut self.refs.shared_step_users,
+            Some(shared_idx.index()),
+            false,
+        );
+        Ok(Op::UseSharedStep {
+            tree,
+            node,
+            step,
+            provenance,
+        })
+    }
+
     fn commit_condition_link(
         &mut self,
         element: ElementRef,
@@ -12787,6 +13412,7 @@ impl PartialEq for Project {
             && self.parties.len() == other.parties.len()
             && self.conditions.len() == other.conditions.len()
             && self.assumptions.len() == other.assumptions.len()
+            && self.shared_steps.len() == other.shared_steps.len()
             && self.components.len() == other.components.len()
             && self.interfaces.len() == other.interfaces.len()
             && self.data_flows.len() == other.data_flows.len()
@@ -12824,6 +13450,10 @@ impl PartialEq for Project {
                 .assumptions()
                 .zip(other.assumptions())
                 .all(|((_, a, x), (_, b, y))| a == b && self.same_assumption(x, other, y))
+            && self
+                .shared_steps()
+                .zip(other.shared_steps())
+                .all(|((_, a, x), (_, b, y))| a == b && self.same_shared_step(x, other, y))
             && self
                 .components()
                 .zip(other.components())
@@ -12864,6 +13494,8 @@ impl Project {
             && (0..x.tree.len()).all(|i| {
                 x.attack_type_at(i) == y.attack_type_at(i)
                     && self.item_ref(x.via_at(i)) == other.item_ref(y.via_at(i))
+                    && x.shared_at(i).and_then(|s| self.shared_step_id(s))
+                        == y.shared_at(i).and_then(|s| other.shared_step_id(s))
             })
             && x.provenance == y.provenance
             && x.step_mitigations.len() == y.step_mitigations.len()
@@ -12991,6 +13623,16 @@ impl Project {
                 .all(|(&a, &b)| self.trees.id(a) == other.trees.id(b))
     }
 
+    /// Compares shared steps with through-item indices resolved to public IDs (L29).
+    fn same_shared_step(&self, a: &SharedStep, other: &Self, b: &SharedStep) -> bool {
+        a.name == b.name
+            && a.feasibility == b.feasibility
+            && a.factors == b.factors
+            && self.item_ref(a.via) == other.item_ref(b.via)
+            && a.attack_type == b.attack_type
+            && a.provenance == b.provenance
+    }
+
     /// Compares two threats from two projects by content, with references
     /// resolved to public IDs. O(k).
     fn same_threat(&self, x: &ThreatScenario, other: &Project, y: &ThreatScenario) -> bool {
@@ -13055,6 +13697,37 @@ impl Project {
     }
 
     #[cfg(test)]
+    fn shared_step_invariants(&self) -> Result<(), String> {
+        let m = &*self.methodology;
+        for (_, id, step) in self.shared_steps() {
+            check_name(EntityKind::SharedStep, &step.name)
+                .map_err(|e| format!("shared step {id}: {e}"))?;
+            check_provenance(&step.provenance).map_err(|e| format!("shared step {id}: {e}"))?;
+            if !step.factors.is_empty() && step.factors.len() != m.feasibility_factor_count() {
+                return Err(format!("shared step {id} has invalid factor slots"));
+            }
+            for (factor, level) in m.feasibility_factors().zip(&step.factors) {
+                if let Some(level) = level {
+                    m.check_factor_level(factor, *level)
+                        .map_err(|e| format!("shared step {id}: {e}"))?;
+                }
+            }
+            if let Some(level) = step.feasibility {
+                m.check_feasibility_level(level)
+                    .map_err(|e| format!("shared step {id}: {e}"))?;
+            }
+            if step.via.is_some() && self.item_ref(step.via).is_none() {
+                return Err(format!("shared step {id} references a dead through item"));
+            }
+            if let Some(kind) = step.attack_type {
+                m.check_attack_type(kind)
+                    .map_err(|e| format!("shared step {id}: {e}"))?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
     /// Condition links name live elements and live conditions, sorted and
     /// unique by `ConditionId`, with no empty list kept (job 133).
     fn condition_invariants(&self) -> Result<(), String> {
@@ -13100,8 +13773,10 @@ impl Project {
         arena_invariants("trust_boundary", &self.trust_boundaries)?;
         arena_invariants("condition", &self.conditions)?;
         arena_invariants("assumption", &self.assumptions)?;
+        arena_invariants("shared step", &self.shared_steps)?;
         self.condition_invariants()?;
         self.assumption_invariants()?;
+        self.shared_step_invariants()?;
         self.methodology
             .check_attack_filter(&self.attack_filter.0)
             .map_err(|e| e.to_string())?;
@@ -13114,7 +13789,7 @@ impl Project {
             component_boundaries,
             interfaces,
         ) = self.item_invariants()?;
-        let controls = self.tree_invariants()?;
+        let (controls, shared_step_users) = self.tree_invariants()?;
         let (asset_properties, assets, damages, trees, goals, claims) = self.threat_invariants()?;
         let want = RefCounts {
             asset_properties,
@@ -13125,6 +13800,7 @@ impl Project {
             control_goals,
             goals,
             claims,
+            shared_step_users,
             component_children,
             component_interfaces,
             component_flows,
@@ -13496,12 +14172,34 @@ impl Project {
             && (links.via.len() != entry.tree.len()
                 || links.attack_type.len() != entry.tree.len()
                 || links.condition.len() != entry.tree.len()
+                || links.shared.len() != entry.tree.len()
                 || links.is_empty())
         {
-            return Err(format!("tree {id} has malformed via slots"));
+            return Err(format!("tree {id} has malformed step link slots"));
         }
         for (i, (_, node_id, node)) in entry.tree.iter().enumerate() {
             let (via, attack_type) = (entry.via_at(i), entry.attack_type_at(i));
+            let shared = entry.shared_at(i);
+            if let Some(shared) = shared {
+                if self.shared_steps.get(shared).is_none() {
+                    return Err(format!("tree {id} node {node_id} links a dead shared step"));
+                }
+                if matches!(node, Node::Gate { .. }) {
+                    return Err(format!("tree {id} gate {node_id} uses a shared step"));
+                }
+                if entry.step_feasibility.get(i).is_some_and(Option::is_some)
+                    || entry
+                        .step_factors
+                        .get(i)
+                        .is_some_and(|row| row.iter().any(Option::is_some))
+                    || via.is_some()
+                    || attack_type.is_some()
+                {
+                    return Err(format!(
+                        "tree {id} node {node_id} uses a shared step and has own settings"
+                    ));
+                }
+            }
             if matches!(node, Node::Gate { .. }) && (via.is_some() || attack_type.is_some()) {
                 return Err(format!("tree {id} gate {node_id} has a via or attack type"));
             }
@@ -13520,9 +14218,10 @@ impl Project {
     }
 
     #[cfg(test)]
-    fn tree_invariants(&self) -> Result<Vec<u32>, String> {
+    fn tree_invariants(&self) -> Result<(Vec<u32>, Vec<u32>), String> {
         let m = &*self.methodology;
         let mut controls = vec![0u32; self.controls.slot_count()];
+        let mut shared_step_users = vec![0u32; self.shared_steps.slot_count()];
         for (_, id, entry) in self.trees.iter() {
             check_provenance(&entry.provenance).map_err(|e| format!("tree {id}: {e}"))?;
             if entry.step_feasibility.len() != entry.tree.len() {
@@ -13548,7 +14247,7 @@ impl Project {
                 .tree
                 .topological_order()
                 .map_err(|e| format!("tree {id}: {e}"))?;
-            for ((((_, node_id, node), &level), factors), mitigations) in entry
+            for ((((node_idx, node_id, node), &level), factors), mitigations) in entry
                 .tree
                 .iter()
                 .zip(&entry.step_feasibility)
@@ -13557,6 +14256,9 @@ impl Project {
             {
                 check_name(EntityKind::TreeNode, node.label())
                     .map_err(|e| format!("tree {id} node {node_id}: {e}"))?;
+                if let Some(shared) = entry.shared_at(node_idx.index()) {
+                    bump(&mut shared_step_users, Some(shared.index()), true);
+                }
                 match (node, level) {
                     (Node::Gate { .. }, Some(_)) => {
                         return Err(format!("tree {id} gate {node_id} has a feasibility rating"));
@@ -13615,7 +14317,7 @@ impl Project {
                 }
             }
         }
-        Ok(controls)
+        Ok((controls, shared_step_users))
     }
 
     /// Checks that the reference counts are canonical and equal a recount
@@ -13690,6 +14392,19 @@ impl Project {
             return Err(format!(
                 "claim counts differ from a recount: {:?} vs {:?}",
                 have.claims, want.claims
+            ));
+        }
+        if have.shared_step_users.len() != self.shared_steps.slot_count() {
+            return Err(format!(
+                "{} shared-step count rows for {} slots",
+                have.shared_step_users.len(),
+                self.shared_steps.slot_count()
+            ));
+        }
+        if have.shared_step_users != want.shared_step_users {
+            return Err(format!(
+                "shared-step user counts differ from a recount: {:?} vs {:?}",
+                have.shared_step_users, want.shared_step_users
             ));
         }
         // The derived `==` must agree with the field-by-field checks.
@@ -13779,6 +14494,8 @@ const fn may_change_applicability(op: &Op, filter: &AttackFilter) -> bool {
         | Op::RemoveThreatScenario { .. }
         | Op::SetThreatAttackTree { .. }
         | Op::SetStepVia { .. }
+        | Op::UseSharedStep { .. }
+        | Op::UnuseSharedStep { .. }
         | Op::AddAttackTree { .. }
         | Op::RemoveAttackTree { .. }
         | Op::AddTreeNode { .. }
@@ -13814,6 +14531,9 @@ const fn may_change_applicability(op: &Op, filter: &AttackFilter) -> bool {
         | Op::AddAssumption { .. }
         | Op::RenameAssumption { .. }
         | Op::RemoveAssumption { .. }
+        | Op::AddSharedStep { .. }
+        | Op::RenameSharedStep { .. }
+        | Op::RemoveSharedStep { .. }
         | Op::SetThreatFeasibility { .. }
         | Op::SetRiskTreatment { .. }
         | Op::AddSecurityControl { .. }
@@ -13994,6 +14714,8 @@ pub struct ProjectEvalCache {
     threats: Vec<Option<CachedThreatEval>>,
     tree_threats: Vec<Vec<ThreatIdx>>,
     damage_threats: Vec<Vec<ThreatIdx>>,
+    shared_users: Vec<Vec<(TreeIdx, NodeId)>>,
+    node_shared: HashMap<(TreeIdx, NodeId), SharedStepIdx>,
     recomputed_nodes: u64,
     recomputed_threats: u64,
 }
@@ -14005,6 +14727,8 @@ impl PartialEq for ProjectEvalCache {
             && self.threats == other.threats
             && self.tree_threats == other.tree_threats
             && self.damage_threats == other.damage_threats
+            && self.shared_users == other.shared_users
+            && self.node_shared == other.node_shared
     }
 }
 
@@ -14035,6 +14759,8 @@ impl ProjectEvalCache {
             threats: Vec::new(),
             tree_threats: Vec::new(),
             damage_threats: Vec::new(),
+            shared_users: Vec::new(),
+            node_shared: HashMap::new(),
             recomputed_nodes: 0,
             recomputed_threats: 0,
         };
@@ -14073,10 +14799,18 @@ impl ProjectEvalCache {
         self.threats.clear();
         self.threats
             .resize_with(project.threats.slot_count(), || None);
+        self.shared_users = vec![Vec::new(); project.shared_steps.slot_count()];
+        self.node_shared.clear();
         self.recomputed_nodes = 0;
         self.recomputed_threats = 0;
 
         for (idx, id, entry) in project.trees.iter() {
+            for (node_idx, node_id, _) in entry.tree.iter() {
+                if let Some(shared) = entry.shared_at(node_idx.index()) {
+                    self.node_shared.insert((idx, node_id), shared);
+                    insert_shared_user(&mut self.shared_users, shared, (idx, node_id));
+                }
+            }
             let cached = self.build_tree_eval(project, id, entry);
             if let Some(slot) = self.trees.get_mut(idx.index()) {
                 *slot = Some(cached);
@@ -14158,7 +14892,7 @@ impl ProjectEvalCache {
     ///
     /// let mut cache = ProjectEvalCache::new(&project);
     /// let inv = project.apply(Op::SetStepFeasibility {
-    ///     tree: tree_id, node: step, level: Some(low), provenance: Provenance::default(),
+    ///     target: aegis_model::StepTarget::Step(tree_id, step), level: Some(low), provenance: Provenance::default(),
     /// })?;
     /// cache.update(&project, &inv);
     /// assert_eq!(cache.evaluate_risk(&project, threat)?, &project.evaluate_risk(threat)?);
@@ -14167,6 +14901,10 @@ impl ProjectEvalCache {
     /// ```
     #[allow(clippy::too_many_lines)] // one arm per op kind
     pub fn update(&mut self, project: &Project, op: &Op) {
+        if matches!(op, Op::AddSharedStep { .. } | Op::RemoveSharedStep { .. }) {
+            self.shared_users
+                .resize_with(project.shared_steps.slot_count(), Vec::new);
+        }
         if !self.arenas_compatible(project, op) {
             self.rebuild(project);
             return;
@@ -14233,6 +14971,9 @@ impl ProjectEvalCache {
             | Op::SetAssumptionHolds { .. }
             | Op::SetAssumptionExcludes { .. }
             | Op::RemoveAssumption { .. }
+            | Op::AddSharedStep { .. }
+            | Op::RenameSharedStep { .. }
+            | Op::RemoveSharedStep { .. }
             | Op::NeedCondition { .. }
             | Op::UnneedCondition { .. }
             | Op::NeedStepCondition { .. }
@@ -14281,8 +15022,15 @@ impl ProjectEvalCache {
             | Op::LinkTreeNode { tree, .. }
             | Op::UnlinkTreeNode { tree, .. }
             | Op::SetTreeNodeGate { tree, .. } => self.update_tree_structure(project, *tree),
-            Op::SetStepFeasibility { tree, node, .. } | Op::SetStepFactor { tree, node, .. } => {
-                self.update_step(project, *tree, *node, true);
+            Op::UseSharedStep { tree, node, .. } | Op::UnuseSharedStep { tree, node, .. } => {
+                self.update_shared_link(project, *tree, *node);
+            }
+            Op::SetStepFeasibility { target, .. } | Op::SetStepFactor { target, .. } => {
+                if let StepTarget::Step(tree, node) = target {
+                    self.update_step(project, *tree, *node, true);
+                } else if let StepTarget::Shared(shared) = target {
+                    self.update_shared_step_users(project, *shared, true);
+                }
             }
             Op::SetStepMitigation {
                 tree,
@@ -14296,12 +15044,16 @@ impl ProjectEvalCache {
                     .is_some_and(|c| c.status.counts_for_initial());
                 self.update_step(project, *tree, *node, include_inherent);
             }
-            Op::SetStepVia { tree, node, .. } | Op::SetStepAttackType { tree, node, .. } => {
+            Op::SetStepVia { target, .. } | Op::SetStepAttackType { target, .. } => {
                 let include_inherent = project
                     .controls
                     .iter()
                     .any(|(_, _, c)| c.status.counts_for_initial());
-                self.update_step(project, *tree, *node, include_inherent);
+                if let StepTarget::Step(tree, node) = target {
+                    self.update_step(project, *tree, *node, include_inherent);
+                } else if let StepTarget::Shared(shared) = target {
+                    self.update_shared_step_users(project, *shared, include_inherent);
+                }
             }
             Op::ApplyControl {
                 control, target, ..
@@ -14812,7 +15564,11 @@ impl ProjectEvalCache {
             }
             _ => self.damage_threats.len() == project.damages.slot_count(),
         };
-        trees_ok && threats_ok && damages_ok && self.tree_threats.len() == self.trees.len()
+        trees_ok
+            && threats_ok
+            && damages_ok
+            && self.shared_users.len() == project.shared_steps.slot_count()
+            && self.tree_threats.len() == self.trees.len()
     }
 
     fn build_tree_eval(&self, project: &Project, id: TreeId, entry: &TreeEntry) -> CachedTreeEval {
@@ -15042,6 +15798,46 @@ impl ProjectEvalCache {
         self.update_tree_mode(project, tree_idx, entry, &[node_idx], true);
     }
 
+    fn update_shared_link(&mut self, project: &Project, tree: TreeId, node: NodeId) {
+        let Some((tree_idx, node_idx)) = project.attack_tree_idx(&tree).and_then(|tree| {
+            let entry = project.trees.get(tree)?;
+            Some((tree, entry.tree.idx_of(&node)?))
+        }) else {
+            return;
+        };
+        let user = (tree_idx, node);
+        if let Some(shared) = project.step_shared(tree_idx, node_idx) {
+            self.node_shared.insert(user, shared);
+            insert_shared_user(&mut self.shared_users, shared, user);
+        } else if let Some(shared) = self.node_shared.remove(&user)
+            && let Some(users) = self.shared_users.get_mut(shared.index())
+        {
+            users.retain(|candidate| *candidate != user);
+        }
+        self.update_step(project, tree, node, true);
+    }
+
+    fn update_shared_step_users(
+        &mut self,
+        project: &Project,
+        shared: SharedStepId,
+        include_inherent: bool,
+    ) {
+        let Some(idx) = project.shared_step_idx(&shared) else {
+            return;
+        };
+        let users = self
+            .shared_users
+            .get(idx.index())
+            .cloned()
+            .unwrap_or_default();
+        for (tree, node) in users {
+            if let Some(tree_id) = project.trees.id(tree) {
+                self.update_step(project, tree_id, node, include_inherent);
+            }
+        }
+    }
+
     fn update_control_target(
         &mut self,
         project: &Project,
@@ -15053,13 +15849,14 @@ impl ProjectEvalCache {
         };
         for (tree_idx, _, entry) in project.trees.iter() {
             let dirty: Vec<NodeIdx> = entry
-                .vias()
-                .filter(|&(i, via)| {
-                    entry.attack_type_at(i).is_some()
-                        && (via == target_idx
-                            || project.item_owner_component(via) == Some(target_idx))
+                .tree
+                .iter()
+                .filter_map(|(i, _, _)| {
+                    let via = project.entry_step_via_idx(entry, i.index())?;
+                    project.entry_step_attack_type(entry, i.index())?;
+                    (via == target_idx || project.item_owner_component(via) == Some(target_idx))
+                        .then_some(i)
                 })
-                .filter_map(|(i, _)| NodeIdx::try_from_usize(i))
                 .collect();
             if !dirty.is_empty() {
                 if include_inherent {
@@ -15088,15 +15885,18 @@ impl ProjectEvalCache {
         let include_inherent = ctrl.status.counts_for_initial();
         for (tree_idx, _, entry) in project.trees.iter() {
             let dirty: Vec<NodeIdx> = entry
-                .vias()
-                .filter(|&(i, via)| {
-                    entry.attack_type_at(i) == Some(attack_type)
+                .tree
+                .iter()
+                .filter_map(|(i, _, _)| {
+                    let via = project.entry_step_via_idx(entry, i.index())?;
+                    let matches = project.entry_step_attack_type(entry, i.index())
+                        == Some(attack_type)
                         && (ctrl.targets.contains(&via)
                             || project
                                 .item_owner_component(via)
-                                .is_some_and(|o| ctrl.targets.contains(&o)))
+                                .is_some_and(|o| ctrl.targets.contains(&o)));
+                    matches.then_some(i)
                 })
-                .filter_map(|(i, _)| NodeIdx::try_from_usize(i))
                 .collect();
             if !dirty.is_empty() {
                 if include_inherent {
@@ -15120,9 +15920,9 @@ impl ProjectEvalCache {
                 let by_mit = mitigations.iter().any(|m| m.control == ctrl_idx);
                 let by_rule = !ctrl.targets.is_empty()
                     && !ctrl.rules.is_empty()
-                    && entry.via_at(i).is_some_and(|via| {
-                        entry
-                            .attack_type_at(i)
+                    && project.entry_step_via_idx(entry, i).is_some_and(|via| {
+                        project
+                            .entry_step_attack_type(entry, i)
                             .is_some_and(|at| ctrl.rule_for(at).is_some())
                             && (ctrl.targets.contains(&via)
                                 || project
@@ -15425,6 +16225,21 @@ fn insert_sorted_unique(list: &mut Vec<ThreatIdx>, idx: ThreatIdx) {
     }
 }
 
+fn insert_shared_user(
+    users: &mut Vec<Vec<(TreeIdx, NodeId)>>,
+    shared: SharedStepIdx,
+    user: (TreeIdx, NodeId),
+) {
+    if users.len() <= shared.index() {
+        users.resize_with(shared.index() + 1, Vec::new);
+    }
+    let list = &mut users[shared.index()];
+    let key = (user.0.index(), user.1);
+    if let Err(pos) = list.binary_search_by(|&(tree, node)| (tree.index(), node).cmp(&key)) {
+        list.insert(pos, user);
+    }
+}
+
 fn remove_sorted(list: &mut Vec<ThreatIdx>, idx: ThreatIdx) {
     if let Ok(pos) = list.binary_search_by_key(&idx.index(), |x| x.index()) {
         list.remove(pos);
@@ -15476,6 +16291,30 @@ mod tests {
         assert_eq!(
             check_provenance(&Provenance::human("é".repeat(257), 1)),
             Err(ModelError::ActorTooLong { max: 256 })
+        );
+    }
+
+    #[test]
+    fn shared_step_in_use_guard_is_isolated() {
+        let mut p = Project::new(testkit::builtin());
+        let id = SharedStepId::new_v7();
+        p.apply(Op::AddSharedStep {
+            id,
+            name: "Inject frame".into(),
+            provenance: Provenance::human("alice", 1),
+        })
+        .expect("add shared step");
+        let idx = p.shared_step_idx(&id).expect("shared step index");
+        let step = p.shared_step(idx).expect("shared step");
+        assert!(!step.is_rated());
+        assert!(!p.descriptions.contains_key(&ElementRef::SharedStep(id)));
+        p.refs.shared_step_users[idx.index()] = 2;
+        assert_eq!(
+            p.validate(&Op::RemoveSharedStep { id }),
+            Err(ModelError::SharedStepInUse {
+                shared_step: id,
+                users: 2,
+            })
         );
     }
 
@@ -15868,8 +16707,7 @@ mod tests {
         let le_1w = testkit::factor_lvl(&meth, et, "le-1w");
         assert_eq!(
             proj.validate(&Op::SetStepFactor {
-                tree: testkit::tree_id(99),
-                node: s1_id,
+                target: StepTarget::Step(testkit::tree_id(99), s1_id),
                 factor: et,
                 level: Some(le_1w),
                 provenance: Provenance::default(),
@@ -15878,8 +16716,7 @@ mod tests {
         );
         assert_eq!(
             proj.validate(&Op::SetStepFactor {
-                tree: tr,
-                node: testkit::node_id(99),
+                target: StepTarget::Step(tr, testkit::node_id(99)),
                 factor: et,
                 level: Some(le_1w),
                 provenance: Provenance::default(),
@@ -15891,8 +16728,7 @@ mod tests {
         );
         assert_eq!(
             proj.validate(&Op::SetStepFactor {
-                tree: tr,
-                node: root_id,
+                target: StepTarget::Step(tr, root_id),
                 factor: et,
                 level: Some(le_1w),
                 provenance: Provenance::default(),
@@ -15905,8 +16741,7 @@ mod tests {
         let bad_factor = FeasibilityFactor::new(9);
         assert_eq!(
             proj.validate(&Op::SetStepFactor {
-                tree: tr,
-                node: s1_id,
+                target: StepTarget::Step(tr, s1_id),
                 factor: bad_factor,
                 level: None,
                 provenance: Provenance::default(),
@@ -15916,8 +16751,7 @@ mod tests {
         let bad_level = FactorLevel::new(9);
         assert_eq!(
             proj.validate(&Op::SetStepFactor {
-                tree: tr,
-                node: s1_id,
+                target: StepTarget::Step(tr, s1_id),
                 factor: et,
                 level: Some(bad_level),
                 provenance: Provenance::default(),
@@ -15932,8 +16766,7 @@ mod tests {
         // Partial factor rating: AttackTreeStepIncompleteFactors + AttackTreeStepUnrated.
         let undo_et = proj
             .apply(Op::SetStepFactor {
-                tree: tr,
-                node: s1_id,
+                target: StepTarget::Step(tr, s1_id),
                 factor: et,
                 level: Some(le_1w),
                 provenance: Provenance::default(),
@@ -15985,8 +16818,7 @@ mod tests {
             let fac = testkit::factor(&meth, fk);
             let lvl = testkit::factor_lvl(&meth, fac, lk);
             proj.apply(Op::SetStepFactor {
-                tree: tr,
-                node: s1_id,
+                target: StepTarget::Step(tr, s1_id),
                 factor: fac,
                 level: Some(lvl),
                 provenance: Provenance::default(),
@@ -16018,8 +16850,7 @@ mod tests {
         // and triggers RedundantStepFeasibility.
         let before_coarse = proj.clone();
         proj.apply(Op::SetStepFeasibility {
-            tree: tr,
-            node: s1_id,
+            target: StepTarget::Step(tr, s1_id),
             level: Some(low),
             provenance: Provenance::default(),
         })

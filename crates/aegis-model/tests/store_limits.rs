@@ -13,13 +13,13 @@ use aegis_model::{
     GateKind, ImpactCategoryDef, LevelDef, Limit, MAX_ATTACK_TREE_NODES, MAX_CATALOG_REFS,
     MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT, MAX_DAMAGE_LINKS, MAX_GOAL_CONTROLS,
     MAX_NAME_CHARS, MAX_OP_RECORD_BYTES, MAX_PARTIES, MAX_PROJECT_FILE_BYTES, MAX_RESPONSIBLE,
-    MAX_STEP_MITIGATIONS, MAX_TREE_OP_NODES, Methodology, MethodologyDef, Node, Op, OpLogReader,
-    PotentialBandDef, Project, PropertyDef, Provenance, RiskTreatment, SegmentDef, StoreError,
-    ThreatCategoryDef,
+    MAX_SHARED_STEPS, MAX_STEP_MITIGATIONS, MAX_TREE_OP_NODES, Methodology, MethodologyDef, Node,
+    Op, OpLogReader, PotentialBandDef, Project, PropertyDef, Provenance, RiskTreatment, SegmentDef,
+    StepTarget, StoreError, ThreatCategoryDef,
 };
 use common::{
     asset_id, builtin, claim_id, condition_id, control_id, damage_id, goal_id, node_id, party_id,
-    read_log, save, threat_id, tree_id, write_log,
+    read_log, save, shared_step_id, threat_id, tree_id, write_log,
 };
 use serde_json::{Value, json};
 
@@ -414,6 +414,45 @@ fn caps_conditions() {
     // One over: the decode cap fires before model validation.
     s["conditions"] = json!(conditions_json(MAX_CONDITIONS + 1));
     assert_limit(&snapshot_error(&s.to_string()), want);
+}
+
+fn shared_steps_json(n: usize) -> Vec<Value> {
+    (0..n)
+        .map(|i| json!({"id": shared_step_id(1_000_000 + i as u64).to_string(), "name": "s"}))
+        .collect()
+}
+
+#[test]
+fn caps_shared_steps_in_isolation() {
+    let want = Limit::SharedSteps {
+        max: MAX_SHARED_STEPS,
+    };
+    let mut s: Value =
+        serde_json::from_str(&snapshot("0.1.0", json!([]), json!([]), json!([]))).expect("json");
+    s["shared_steps"] = json!(shared_steps_json(MAX_SHARED_STEPS));
+    Project::load(s.to_string().as_bytes(), builtin()).expect("at the cap loads");
+    s["shared_steps"] = json!(shared_steps_json(MAX_SHARED_STEPS + 1));
+    assert_limit(&snapshot_error(&s.to_string()), want);
+}
+
+#[test]
+fn caps_shared_step_factors() {
+    let factors: serde_json::Map<String, Value> = (0..=aegis_model::MAX_FEASIBILITY_FACTORS)
+        .map(|i| (format!("f{i}"), json!("le-1d")))
+        .collect();
+    let mut s: Value =
+        serde_json::from_str(&snapshot("0.1.0", json!([]), json!([]), json!([]))).expect("json");
+    s["shared_steps"] = json!([{
+        "id": shared_step_id(2_000_000).to_string(),
+        "name": "s",
+        "factors": factors,
+    }]);
+    assert_limit(
+        &snapshot_error(&s.to_string()),
+        Limit::FeasibilityFactors {
+            max: aegis_model::MAX_FEASIBILITY_FACTORS,
+        },
+    );
 }
 
 #[test]
@@ -906,8 +945,7 @@ fn limits_admit_every_valid_project() {
         for f in m.feasibility_factors() {
             let fl = m.factor_levels(f).last().expect("factor level");
             ops.push(Op::SetStepFactor {
-                tree: tree_id(1),
-                node: sid,
+                target: StepTarget::Step(tree_id(1), sid),
                 factor: f,
                 level: Some(fl),
                 provenance: max_prov.clone(),

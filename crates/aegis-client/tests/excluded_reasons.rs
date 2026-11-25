@@ -13,7 +13,7 @@ use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
     AssetId, AttackFilter, AttackTree, ComponentId, ConditionId, DamageId, ElementRef, GateKind,
     InterfaceId, ItemRef, Methodology, Node, NodeId, Op, Provenance, Reason, ScalabilityFilter,
-    ThreatId, TreeId,
+    StepTarget, ThreatId, TreeId,
 };
 
 fn prov() -> Provenance {
@@ -127,14 +127,12 @@ fn exclusion_reasons_match_expected_phrases_and_agree_across_table_and_inspector
                 provenance: prov(),
             },
             Op::SetStepVia {
-                tree: tree1_id,
-                node: step_via,
+                target: StepTarget::Step(tree1_id, step_via),
                 via: Some(ItemRef::Interface(iface)),
                 provenance: prov(),
             },
             Op::SetStepVia {
-                tree: tree1_id,
-                node: step_two,
+                target: StepTarget::Step(tree1_id, step_two),
                 via: Some(ItemRef::Interface(iface)),
                 provenance: prov(),
             },
@@ -343,8 +341,7 @@ fn outside_profile_and_scalability_reasons_and_fluent_keys() {
                 provenance: prov(),
             },
             Op::SetStepFactor {
-                tree: tr_steps,
-                node: s2,
+                target: StepTarget::Step(tr_steps, s2),
                 factor,
                 level: Some(level),
                 provenance: prov(),

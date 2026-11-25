@@ -147,6 +147,9 @@ msgstr "キャンバス上の攻撃ツリー (SVG)"
 msgid "Attack trees"
 msgstr "攻撃ツリー"
 
+msgid "Shared building blocks"
+msgstr "共通構成要素"
+
 msgid "Baseline"
 msgstr "ベースライン"
 

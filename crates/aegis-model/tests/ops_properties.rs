@@ -539,8 +539,9 @@ fn ops_generator_covers_every_op_and_most_errors() {
         assert!((0.2..0.9).contains(&share), "valid share {share}");
         // The second pack declares no interface kinds or attack types, so it
         // has no interface to add or remove and no control rule to set.
-        // Job 133 adds the eight condition ops; job 137 adds SetAttackFilter.
-        let kinds = if m.interface_kind_count() > 0 { 74 } else { 71 };
+        // Job 133 adds the eight condition ops; job 137 adds SetAttackFilter;
+        // job 141a adds the three shared-step lifecycle ops; 141c adds link/unlink.
+        let kinds = if m.interface_kind_count() > 0 { 79 } else { 76 };
         assert_eq!(stats.ok_kinds.len(), kinds, "{:?}", stats.ok_kinds);
         for kind in [
             "SetStepVia",
@@ -550,6 +551,11 @@ fn ops_generator_covers_every_op_and_most_errors() {
             "UnlinkDamage",
             "ApplyControl",
             "UnapplyControl",
+            "AddSharedStep",
+            "RenameSharedStep",
+            "RemoveSharedStep",
+            "UseSharedStep",
+            "UnuseSharedStep",
         ] {
             assert!(stats.ok_kinds.contains(kind), "{kind} never succeeded");
         }

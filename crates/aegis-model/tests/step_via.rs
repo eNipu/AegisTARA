@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use aegis_model::{
     AttackTree, ComponentId, GateKind, InterfaceId, ItemRef, Methodology, ModelError, Node, NodeId,
-    Op, OpCodec, OpLogReader, OpLogWriter, Project, Provenance, TreeId,
+    Op, OpCodec, OpLogReader, OpLogWriter, Project, Provenance, StepTarget, TreeId,
 };
 
 struct Fx {
@@ -72,8 +72,7 @@ fn fixture() -> Fx {
 
 fn set_via(fx: &mut Fx, via: Option<ItemRef>) -> Result<Op, ModelError> {
     fx.project.apply(Op::SetStepVia {
-        tree: fx.tree,
-        node: fx.step,
+        target: StepTarget::Step(fx.tree, fx.step),
         via,
         provenance: Provenance::default(),
     })
@@ -82,8 +81,7 @@ fn set_via(fx: &mut Fx, via: Option<ItemRef>) -> Result<Op, ModelError> {
 fn set_type(fx: &mut Fx, key: Option<&str>) -> Result<Op, ModelError> {
     let attack_type = key.map(|k| fx.project.methodology().attack_type(k).expect("type"));
     fx.project.apply(Op::SetStepAttackType {
-        tree: fx.tree,
-        node: fx.step,
+        target: StepTarget::Step(fx.tree, fx.step),
         attack_type,
         provenance: Provenance::default(),
     })
@@ -125,8 +123,7 @@ fn via_and_attack_type_are_set_read_and_undone_exactly() {
 fn a_gate_is_not_a_step() {
     let mut fx = fixture();
     let via = Op::SetStepVia {
-        tree: fx.tree,
-        node: fx.gate,
+        target: StepTarget::Step(fx.tree, fx.gate),
         via: Some(ItemRef::Component(fx.ecu)),
         provenance: Provenance::default(),
     };
@@ -137,8 +134,7 @@ fn a_gate_is_not_a_step() {
     assert_eq!(fx.project.apply(via), Err(want.clone()));
     let attack_type = fx.project.methodology().attack_type("debug-access");
     let kind = Op::SetStepAttackType {
-        tree: fx.tree,
-        node: fx.gate,
+        target: StepTarget::Step(fx.tree, fx.gate),
         attack_type,
         provenance: Provenance::default(),
     };
@@ -176,8 +172,7 @@ fn an_attack_type_of_another_methodology_is_rejected() {
         })
         .expect("tree");
     let op = |attack_type| Op::SetStepAttackType {
-        tree,
-        node: root,
+        target: StepTarget::Step(tree, root),
         attack_type,
         provenance: Provenance::default(),
     };
@@ -271,14 +266,12 @@ fn snapshot_and_op_log_round_trip_and_stay_absent_when_empty() {
     let mut log = OpLogWriter::create(&mut bytes, methodology()).expect("header");
     for op in [
         Op::SetStepVia {
-            tree: fx.tree,
-            node: fx.step,
+            target: StepTarget::Step(fx.tree, fx.step),
             via: Some(ItemRef::Component(fx.ecu)),
             provenance: Provenance::default(),
         },
         Op::SetStepAttackType {
-            tree: fx.tree,
-            node: fx.step,
+            target: StepTarget::Step(fx.tree, fx.step),
             attack_type: fx.project.methodology().attack_type("side-channel"),
             provenance: Provenance::default(),
         },

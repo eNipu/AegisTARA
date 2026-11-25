@@ -14,11 +14,12 @@ use std::sync::Arc;
 use aegis_model::{
     AssetId, AttackPotentialDef, AttackTree, AttackType, CatalogRef, CatalogScheme,
     CatalogSchemeDef, CatalogSyntax, ClaimId, ComponentId, ConditionId, ControlId, DamageId,
-    ElementId, FactorDef, FactorLevel, FactorLevelDef, FeasibilityFactor, FeasibilityLevel,
-    GateKind, GoalId, ImpactCategory, ImpactCategoryDef, InterfaceId, ItemRef, Level, LevelDef,
-    Methodology, MethodologyDef, Node, NodeId, Op, PartyId, PartyKind, PotentialBandDef, Project,
-    Property, PropertyDef, PropertySet, Provenance, ProvenanceSource, RiskLevel, RiskTreatment,
-    SegmentDef, ThreatCategory, ThreatCategoryDef, ThreatId, TreeId,
+    ElementId, ElementRef, FactorDef, FactorLevel, FactorLevelDef, FeasibilityFactor,
+    FeasibilityLevel, GateKind, GoalId, ImpactCategory, ImpactCategoryDef, InterfaceId, ItemRef,
+    Level, LevelDef, Methodology, MethodologyDef, Node, NodeId, Op, PartyId, PartyKind,
+    PotentialBandDef, Project, Property, PropertyDef, PropertySet, Provenance, ProvenanceSource,
+    RiskLevel, RiskTreatment, SegmentDef, SharedStepId, StepTarget, ThreatCategory,
+    ThreatCategoryDef, ThreatId, TreeId,
 };
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
@@ -500,6 +501,98 @@ pub fn assumption_id(n: u64) -> aegis_model::AssumptionId {
     aegis_model::AssumptionId::from_uuid(v7(n)).expect("v7")
 }
 
+pub fn shared_step_id(n: u64) -> SharedStepId {
+    SharedStepId::from_uuid(v7(n)).expect("v7")
+}
+
+/// A fully rated shared step linked into a one-node tree, with a description
+/// and translation. Exercises every persisted shared-step field.
+pub fn linked_shared_project() -> (Project, SharedStepId, TreeId, NodeId) {
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    let shared = shared_step_id(9_001);
+    let component = component_id(9_002);
+    let interface = interface_id(9_003);
+    let tree = tree_id(9_004);
+    let node = node_id(9_005);
+    let provenance = Provenance::human("alice", 42);
+    let factor = m.feasibility_factors().next().expect("factor");
+    let level = m.factor_levels(factor).last().expect("factor level");
+    let attack_type = m.attack_types().next().expect("attack type");
+    let ops = [
+        Op::AddSharedStep {
+            id: shared,
+            name: "Inject frame".into(),
+            provenance: provenance.clone(),
+        },
+        Op::AddComponent {
+            id: component,
+            name: "Gateway".into(),
+            parent: None,
+            provenance: provenance.clone(),
+        },
+        Op::AddInterface {
+            id: interface,
+            name: "Debug port".into(),
+            component,
+            kind: m.interface_kind("debug").expect("interface kind"),
+            provenance: provenance.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Shared(shared),
+            level: Some(m.feasibility_level("high").expect("feasibility")),
+            provenance: provenance.clone(),
+        },
+        Op::SetStepFactor {
+            target: StepTarget::Shared(shared),
+            factor,
+            level: Some(level),
+            provenance: provenance.clone(),
+        },
+        Op::SetStepVia {
+            target: StepTarget::Shared(shared),
+            via: Some(ItemRef::Interface(interface)),
+            provenance: provenance.clone(),
+        },
+        Op::SetStepAttackType {
+            target: StepTarget::Shared(shared),
+            attack_type: Some(attack_type),
+            provenance: provenance.clone(),
+        },
+        Op::AddAttackTree {
+            id: tree,
+            tree: AttackTree::new(node, Node::step("Linked step")).expect("tree"),
+            step_feasibility: vec![],
+            provenance: provenance.clone(),
+        },
+        Op::UseSharedStep {
+            tree,
+            node,
+            step: shared,
+            provenance: provenance.clone(),
+        },
+        Op::SetDescription {
+            target: ElementRef::SharedStep(shared),
+            text: "Reusable diagnostic access".into(),
+            provenance: provenance.clone(),
+        },
+        Op::SetDescriptionTranslation {
+            target: ElementRef::SharedStep(shared),
+            lang: "ja".into(),
+            text: "共有の診断アクセス".into(),
+            provenance: provenance.clone(),
+        },
+        Op::SetProjectLanguages {
+            langs: vec![Arc::from("ja")].into(),
+            provenance,
+        },
+    ];
+    for op in ops {
+        p.apply(op).expect("linked shared project");
+    }
+    (p, shared, tree, node)
+}
+
 // ---------------------------------------------------------------------------
 // Vocabulary helpers.
 // ---------------------------------------------------------------------------
@@ -567,7 +660,7 @@ pub struct Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..84,
+        0u8..89,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -786,6 +879,55 @@ impl Gen {
         match nth(existing, sel / 8) {
             Some(id) if !sel.is_multiple_of(8) => id,
             _ => condition_id(self.fresh()),
+        }
+    }
+
+    fn shared_step(&mut self, p: &Project, sel: u16) -> SharedStepId {
+        let existing: Vec<_> = p.shared_steps().map(|(_, id, _)| id).collect();
+        match nth(existing, sel / 8) {
+            Some(id) if !sel.is_multiple_of(8) => id,
+            _ => shared_step_id(self.fresh()),
+        }
+    }
+
+    fn linkable_steps(p: &Project) -> Vec<(TreeId, NodeId)> {
+        p.attack_trees()
+            .flat_map(|(t, tree, nodes)| {
+                nodes
+                    .iter()
+                    .filter(|(_, _, n)| matches!(n, Node::Step { .. }))
+                    .map(move |(n, node, _)| (t, tree, n, node))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|(t, _, n, _)| {
+                p.step_shared(*t, *n).is_none()
+                    && p.step_feasibility(*t, *n).is_none()
+                    && p.step_factors(*t, *n).next().is_none()
+                    && p.step_via(*t, *n).is_none()
+                    && p.step_attack_type(*t, *n).is_none()
+            })
+            .map(|(_, tree, _, node)| (tree, node))
+            .collect()
+    }
+
+    fn shared_step_users(p: &Project) -> Vec<(TreeId, NodeId)> {
+        p.attack_trees()
+            .flat_map(|(t, tree, nodes)| {
+                nodes
+                    .iter()
+                    .map(move |(n, node, _)| (t, tree, n, node))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|(t, _, n, _)| p.step_shared(*t, *n).is_some())
+            .map(|(_, tree, _, node)| (tree, node))
+            .collect()
+    }
+
+    fn rating_target(&mut self, p: &Project, sel: u16, tree: TreeId, node: NodeId) -> StepTarget {
+        if sel.is_multiple_of(4) {
+            StepTarget::Shared(self.shared_step(p, sel))
+        } else {
+            StepTarget::Step(tree, node)
         }
     }
 
@@ -1389,8 +1531,7 @@ impl Gen {
                     None => node_id(self.fresh()),
                 };
                 Op::SetStepFeasibility {
-                    tree,
-                    node,
+                    target: self.rating_target(p, s.c, tree, node),
                     level: (!s.c.is_multiple_of(5)).then(|| self.feasibility_level(s.c)),
                     provenance,
                 }
@@ -1449,8 +1590,7 @@ impl Gen {
                 let level = (!s.bits.is_multiple_of(5))
                     .then(|| self.factor_level(factor, (s.bits >> 8) as u16));
                 Op::SetStepFactor {
-                    tree,
-                    node,
+                    target: self.rating_target(p, s.c, tree, node),
                     factor,
                     level,
                     provenance,
@@ -1657,8 +1797,7 @@ impl Gen {
             52 => {
                 let (tree, node) = self.step_node(p, s.a, s.b);
                 Op::SetStepVia {
-                    tree,
-                    node,
+                    target: self.rating_target(p, s.c, tree, node),
                     via: (!s.c.is_multiple_of(5)).then(|| self.item(p, s.c, s.bits as u16)),
                     provenance,
                 }
@@ -1671,8 +1810,7 @@ impl Gen {
                     s.c.is_multiple_of(4)
                 };
                 Op::SetStepAttackType {
-                    tree,
-                    node,
+                    target: self.rating_target(p, s.c, tree, node),
                     attack_type: some.then(|| self.attack_type(s.c)),
                     provenance,
                 }
@@ -2101,6 +2239,68 @@ impl Gen {
                     }
                 }
                 Op::SetAttackFilter { filter, provenance }
+            }
+            84 => Op::AddSharedStep {
+                id: if s.a.is_multiple_of(16) {
+                    self.shared_step(p, s.b)
+                } else {
+                    shared_step_id(self.fresh())
+                },
+                name: self.name(s.c),
+                provenance,
+            },
+            85 => Op::RenameSharedStep {
+                id: self.shared_step(p, s.a),
+                name: self.name(s.c),
+                provenance,
+            },
+            86 => Op::RemoveSharedStep {
+                id: self.shared_step(p, s.a),
+            },
+            87 => {
+                if p.shared_steps().next().is_none() {
+                    return Op::AddSharedStep {
+                        id: shared_step_id(self.fresh()),
+                        name: self.name(s.c),
+                        provenance,
+                    };
+                }
+                let (tree, node) = match nth(Self::linkable_steps(p), s.a) {
+                    Some(step) if !s.c.is_multiple_of(4) => step,
+                    _ => self.step_node(p, s.a, s.b),
+                };
+                Op::UseSharedStep {
+                    tree,
+                    node,
+                    step: self.shared_step(p, s.c),
+                    provenance,
+                }
+            }
+            88 => {
+                let linked = Self::shared_step_users(p);
+                if let Some((tree, node)) = nth(linked, s.a) {
+                    Op::UnuseSharedStep {
+                        tree,
+                        node,
+                        provenance,
+                    }
+                } else if let Some((tree, node)) = nth(Self::linkable_steps(p), s.b)
+                    && p.shared_steps().next().is_some()
+                {
+                    Op::UseSharedStep {
+                        tree,
+                        node,
+                        step: self.shared_step(p, s.c),
+                        provenance,
+                    }
+                } else {
+                    let (tree, node) = self.step_node(p, s.a, s.b);
+                    Op::UnuseSharedStep {
+                        tree,
+                        node,
+                        provenance,
+                    }
+                }
             }
             _ => Op::SetComponentSystem {
                 id: self.component(p, s.a),
@@ -2745,8 +2945,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::SetStepFeasibility {
-            tree,
-            node: s1,
+            target: StepTarget::Step(tree, s1),
             level: Some(feas(&m, "probable")),
             provenance: p_ai.clone(),
         },
@@ -2757,8 +2956,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::SetStepFeasibility {
-            tree,
-            node: s2,
+            target: StepTarget::Step(tree, s2),
             level: None,
             provenance: p_human.clone(),
         },
@@ -2766,8 +2964,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::SetStepFactor {
-            tree,
-            node: s2,
+            target: StepTarget::Step(tree, s2),
             factor: f_exp,
             level: Some(factor_lvl(&m, f_exp, "local")),
             provenance: p_human.clone(),
@@ -2776,8 +2973,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::SetStepFactor {
-            tree,
-            node: s2,
+            target: StepTarget::Step(tree, s2),
             factor: f_skill,
             level: Some(factor_lvl(&m, f_skill, "specialist")),
             provenance: p_ai.clone(),
@@ -2786,8 +2982,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::SetStepFactor {
-            tree,
-            node: s2,
+            target: StepTarget::Step(tree, s2),
             factor: f_res,
             level: Some(factor_lvl(&m, f_res, "standard")),
             provenance: p_human.clone(),
@@ -3255,8 +3450,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
         ok(
             &mut p,
             Op::SetStepFactor {
-                tree,
-                node: s2,
+                target: StepTarget::Step(tree, s2),
                 factor: f,
                 level: None,
                 provenance: Provenance::default(),
@@ -3303,8 +3497,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::SetStepVia {
-            tree,
-            node: s1,
+            target: StepTarget::Step(tree, s1),
             via: Some(ItemRef::Component(ecu)),
             provenance: p_human.clone(),
         },
@@ -3312,8 +3505,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::SetStepAttackType {
-            tree,
-            node: s1,
+            target: StepTarget::Step(tree, s1),
             attack_type: None,
             provenance: p_ai.clone(),
         },
@@ -3329,8 +3521,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::SetStepVia {
-            tree,
-            node: s1,
+            target: StepTarget::Step(tree, s1),
             via: None,
             provenance: Provenance::default(),
         },

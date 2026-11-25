@@ -7,7 +7,7 @@ use std::sync::Arc;
 use aegis_model::{
     AssetId, AttackTree, DamageId, GateKind, MAX_ATTACK_TREE_NODES, MAX_TREE_OP_NODES, Methodology,
     ModelError, Node, NodeId, Op, OpCodec, OpLogReader, OpLogWriter, Project, ProjectEvalCache,
-    Provenance, ThreatId, TreeId,
+    Provenance, StepTarget, ThreatId, TreeId,
 };
 
 struct Fx {
@@ -277,8 +277,7 @@ fn only_a_bare_leaf_can_be_removed() {
     let low = m.feasibility_level("low").expect("level");
     fx.project
         .apply(Op::SetStepFeasibility {
-            tree: fx.tree,
-            node: s,
+            target: StepTarget::Step(fx.tree, s),
             level: Some(low),
             provenance: who(6),
         })
@@ -289,8 +288,7 @@ fn only_a_bare_leaf_can_be_removed() {
     );
     fx.project
         .apply(Op::SetStepFeasibility {
-            tree: fx.tree,
-            node: s,
+            target: StepTarget::Step(fx.tree, s),
             level: None,
             provenance: who(7),
         })
@@ -458,8 +456,7 @@ fn the_evaluation_cache_agrees_with_a_fresh_one_after_every_structural_edit() {
             2 if !step_ids.is_empty() => {
                 let id = step_ids[next() % step_ids.len()];
                 Op::SetStepFeasibility {
-                    tree: fx.tree,
-                    node: id,
+                    target: StepTarget::Step(fx.tree, id),
                     level: Some(if next() % 2 == 0 { low } else { high }),
                     provenance: who(5),
                 }

@@ -8,15 +8,16 @@ use std::sync::Arc;
 
 use aegis_model::{
     AttackTree, ElementRef, GateKind, Methodology, ModelError, Node, Op, OpLogReader, OpLogWriter,
-    PartyKind, Project, Provenance, ProvenanceSource, RiskTreatment, StoreError, VocabKind,
+    PartyKind, Project, Provenance, ProvenanceSource, RiskTreatment, StepTarget, StoreError,
+    VocabKind,
 };
 use common::{
     SENTINEL, asset_id, builtin, cat, claim_id, component_id, condition_id, control_id, cref,
-    damage_id, describe, factor, factor_lvl, feas, goal_id, interface_id, lvl, node_id, party_id,
-    prop, props, read_log, reordered, save, scheme, second, second_def, threat_cat, threat_id,
-    tree_id, wide, write_log,
+    damage_id, describe, factor, factor_lvl, feas, goal_id, interface_id, linked_shared_project,
+    lvl, node_id, party_id, prop, props, read_log, reordered, save, scheme, second, second_def,
+    threat_cat, threat_id, tree_id, wide, write_log,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 const PROJECT_V1: &str = "tests/fixtures/project-v1.json";
 const OPLOG_V1: &str = "tests/fixtures/oplog-v1.jsonl";
@@ -395,15 +396,13 @@ fn save_is_deterministic() {
             },
             Op::RemoveAttackTree { id: tr2 },
             Op::SetStepFactor {
-                tree: tr1,
-                node: s1,
+                target: StepTarget::Step(tr1, s1),
                 factor: factor(&m, "knowledge"),
                 level: Some(factor_lvl(&m, factor(&m, "knowledge"), "public")),
                 provenance: p_tree.clone(),
             },
             Op::SetStepFactor {
-                tree: tr1,
-                node: s1,
+                target: StepTarget::Step(tr1, s1),
                 factor: factor(&m, "elapsed-time"),
                 level: Some(factor_lvl(&m, factor(&m, "elapsed-time"), "le-1w")),
                 provenance: p_tree.clone(),
@@ -428,28 +427,24 @@ fn save_is_deterministic() {
                 provenance: Provenance::default(),
             },
             Op::SetStepFeasibility {
-                tree: tr1,
-                node: s1,
+                target: StepTarget::Step(tr1, s1),
                 level: Some(feas(&m, "low")),
                 provenance: Provenance::default(),
             },
             Op::SetStepFactor {
-                tree: tr1,
-                node: s1,
+                target: StepTarget::Step(tr1, s1),
                 factor: factor(&m, "elapsed-time"),
                 level: Some(factor_lvl(&m, factor(&m, "elapsed-time"), "le-1w")),
                 provenance: Provenance::default(),
             },
             Op::SetStepFactor {
-                tree: tr1,
-                node: s1,
+                target: StepTarget::Step(tr1, s1),
                 factor: factor(&m, "knowledge"),
                 level: Some(factor_lvl(&m, factor(&m, "knowledge"), "public")),
                 provenance: Provenance::default(),
             },
             Op::SetStepFeasibility {
-                tree: tr1,
-                node: s2,
+                target: StepTarget::Step(tr1, s2),
                 level: Some(feas(&m, "high")),
                 provenance: p_tree,
             },
@@ -604,28 +599,24 @@ fn second_ops(m: &Methodology) -> Vec<Op> {
             provenance: Provenance::human("alice", 700),
         },
         Op::SetStepFeasibility {
-            tree: tree_id(7),
-            node: s1,
+            target: StepTarget::Step(tree_id(7), s1),
             level: Some(feas(m, "probable")),
             provenance: Provenance::ai("tara-assist", 800),
         },
         Op::SetStepFactor {
-            tree: tree_id(7),
-            node: s1,
+            target: StepTarget::Step(tree_id(7), s1),
             factor: factor(m, "exposure"),
             level: Some(factor_lvl(m, factor(m, "exposure"), "local")),
             provenance: Provenance::human("alice", 810),
         },
         Op::SetStepFactor {
-            tree: tree_id(7),
-            node: s1,
+            target: StepTarget::Step(tree_id(7), s1),
             factor: factor(m, "skill"),
             level: Some(factor_lvl(m, factor(m, "skill"), "expert")),
             provenance: Provenance::human("alice", 820),
         },
         Op::SetStepFactor {
-            tree: tree_id(7),
-            node: s1,
+            target: StepTarget::Step(tree_id(7), s1),
             factor: factor(m, "resources"),
             level: Some(factor_lvl(m, factor(m, "resources"), "standard")),
             provenance: Provenance::human("alice", 830),
@@ -1486,8 +1477,7 @@ fn attack_trees_and_provenance_round_trip_and_evaluate() {
             provenance: Provenance::ai("tara-assist", 1_700_000_000_300),
         },
         Op::SetStepFeasibility {
-            tree: tr1,
-            node: s3,
+            target: StepTarget::Step(tr1, s3),
             level: Some(feas(&m, "low")),
             provenance: Provenance::human("bob", 1_700_000_000_400),
         },
@@ -2031,4 +2021,112 @@ fn a_link_to_an_unknown_condition_is_refused() {
         load(&bytes, &m),
         Err(StoreError::Model(ModelError::UnknownCondition(_)))
     ));
+}
+
+#[test]
+fn shared_steps_and_linked_trees_round_trip_without_duplicate_ratings() {
+    let m = builtin();
+    let (p, shared, _tree, node) = linked_shared_project();
+    let bytes = save(&p);
+    let value: Value = serde_json::from_slice(&bytes).expect("json");
+    let step = &value["shared_steps"][0];
+    assert_eq!(step["id"], shared.to_string());
+    assert_eq!(step["name"], "Inject frame");
+    assert_eq!(step["feasibility"], "high");
+    assert!(step["factors"].as_object().is_some_and(|f| !f.is_empty()));
+    assert!(step["via"].is_object());
+    assert!(step["attack_type"].is_string());
+    assert_eq!(step["provenance"]["actor"], "alice");
+    let tree = &value["attack_trees"][0];
+    assert!(
+        tree["step_feasibility"]
+            .as_object()
+            .is_some_and(|f| f.is_empty())
+    );
+    for key in ["step_factors", "step_via", "step_attack_type"] {
+        assert!(
+            tree.get(key).is_none(),
+            "{key} must not duplicate shared ratings"
+        );
+    }
+    assert_eq!(
+        tree["step_shared"],
+        json!([{"node": node.to_string(), "shared_step": shared.to_string()}])
+    );
+    assert_eq!(value["descriptions"][0]["target"]["kind"], "shared_step");
+    assert_eq!(
+        value["descriptions"][0]["translations"][0]["text"],
+        "共有の診断アクセス"
+    );
+    let loaded = load(&bytes, &m).expect("loads");
+    assert_eq!(loaded, p);
+    assert_eq!(save(&loaded), bytes);
+}
+
+#[test]
+fn shared_step_wire_shapes_are_strict_and_conflicting_links_fail() {
+    let m = builtin();
+    let (p, _shared, _tree, node) = linked_shared_project();
+    let value: Value = serde_json::from_slice(&save(&p)).expect("json");
+
+    let mut unknown_step = value.clone();
+    unknown_step["shared_steps"][0]["extra"] = json!(1);
+    assert!(matches!(
+        load(&serde_json::to_vec(&unknown_step).expect("json"), &m),
+        Err(StoreError::Decode { .. })
+    ));
+
+    let mut unknown_link = value.clone();
+    unknown_link["attack_trees"][0]["step_shared"][0]["extra"] = json!(1);
+    assert!(matches!(
+        load(&serde_json::to_vec(&unknown_link).expect("json"), &m),
+        Err(StoreError::Decode { .. })
+    ));
+
+    let mut duplicate = value.clone();
+    let link = duplicate["attack_trees"][0]["step_shared"][0].clone();
+    duplicate["attack_trees"][0]["step_shared"]
+        .as_array_mut()
+        .expect("links")
+        .push(link);
+    assert!(matches!(
+        load(&serde_json::to_vec(&duplicate).expect("json"), &m),
+        Err(StoreError::DuplicateEntry)
+    ));
+
+    let mut rated = value;
+    rated["attack_trees"][0]["step_feasibility"] = json!({node.to_string(): "high"});
+    assert!(matches!(
+        load(&serde_json::to_vec(&rated).expect("json"), &m),
+        Err(StoreError::Model(ModelError::StepIsRated { tree, node: rated_node }))
+            if tree == tree_id(9_004) && rated_node == node
+    ));
+}
+
+#[test]
+fn tree_bearing_v1_snapshot_without_shared_keys_loads() {
+    let m = builtin();
+    let (p, _, _, _) = linked_shared_project();
+    let mut legacy: Value = serde_json::from_slice(&save(&p)).expect("json");
+    legacy
+        .as_object_mut()
+        .expect("snapshot")
+        .remove("shared_steps");
+    legacy
+        .as_object_mut()
+        .expect("snapshot")
+        .remove("descriptions");
+    legacy["attack_trees"][0]
+        .as_object_mut()
+        .expect("tree")
+        .remove("step_shared");
+    let bytes = serde_json::to_vec(&legacy).expect("json");
+    let loaded = load(&bytes, &m).expect("v1 tree snapshot loads");
+    assert_eq!(loaded.shared_step_count(), 0);
+    assert_eq!(loaded.attack_tree_count(), 1);
+    let saved = save(&loaded);
+    let text = String::from_utf8(saved.clone()).expect("utf8");
+    assert!(!text.contains("shared_steps"));
+    assert!(!text.contains("step_shared"));
+    assert_eq!(load(&saved, &m).expect("resaved v1 loads"), loaded);
 }

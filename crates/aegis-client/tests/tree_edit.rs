@@ -6,7 +6,7 @@ use std::sync::Arc;
 use aegis_client::commands::Edit;
 use aegis_client::outline::{parse_outline, to_outline};
 use aegis_client::workspace::{MAX_SUBMIT_OPS, Origin, Workspace, WorkspaceError};
-use aegis_model::{AttackTree, Methodology, NodeId, Op, Project, TreeId};
+use aegis_model::{AttackTree, Methodology, NodeId, Op, Project, StepTarget, TreeId};
 
 const START: &str = "OR Goal
   SEQ Chain
@@ -96,8 +96,7 @@ fn removed_steps_lose_their_ratings_and_kept_steps_keep_them() {
     for label in ["Step one", "Step three"] {
         ws.apply(
             vec![Op::SetStepFeasibility {
-                tree,
-                node: id_of(&t, label),
+                target: StepTarget::Step(tree, id_of(&t, label)),
                 level: Some(low),
                 provenance: aegis_model::Provenance::default(),
             }],
@@ -348,8 +347,7 @@ fn interactive_node_expansion_at_end_and_intermediate_points_preserves_ratings_a
     ws.apply(
         vec![
             Op::SetStepFeasibility {
-                tree,
-                node: step_three,
+                target: StepTarget::Step(tree, step_three),
                 level: Some(high),
                 provenance: aegis_model::Provenance::default(),
             },

@@ -9,7 +9,7 @@ use super::wire::{
     self, AttackFilterView, CatalogRefView, CatalogRefsInOrder, FORMAT_VERSION, GateKindWire,
     HeaderView, HeaderWire, Ids, ImpactsInOrder, ItemView, KeyOrder, MethodologyView, NodesView,
     OpWire, PropertyKeys, ProvenanceView, RecordWire, Required, RiskTreatmentWire,
-    StepFeasibilityInOrder, TargetView, Text,
+    StepFeasibilityInOrder, TargetView, Text, WireId,
 };
 use super::{
     Limit, MAX_ACTOR_BYTES, MAX_DESCRIPTION_BYTES, MAX_KEY_BYTES, MAX_NAME_BYTES,
@@ -20,11 +20,12 @@ use crate::control::MAX_GOAL_CONTROLS;
 use crate::error::StoreError;
 use crate::id::{
     AssetId, AssumptionId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
-    ElementId, GoalId, InterfaceId, NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
+    ElementId, GoalId, InterfaceId, NodeId, PartyId, SharedStepId, ThreatId, TreeId,
+    TrustBoundaryId,
 };
 use crate::item::MAX_TRUST_BOUNDARY_MEMBERS;
 use crate::methodology::Methodology;
-use crate::op::Op;
+use crate::op::{Op, StepTarget};
 use crate::threat::{MAX_CATALOG_REFS, MAX_DAMAGE_LINKS};
 use crate::tree::MAX_TREE_OP_NODES;
 
@@ -239,29 +240,45 @@ enum OpView<'a> {
         provenance: Option<ProvenanceView<'a>>,
     },
     SetStepFeasibility {
-        tree: Text<TreeId>,
-        node: Text<NodeId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tree: Option<Text<TreeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        node: Option<Text<NodeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        shared_step: Option<Text<SharedStepId>>,
         level: Option<Required<&'a str>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
     SetStepVia {
-        tree: Text<TreeId>,
-        node: Text<NodeId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tree: Option<Text<TreeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        node: Option<Text<NodeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        shared_step: Option<Text<SharedStepId>>,
         via: Option<ItemView>,
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
     SetStepAttackType {
-        tree: Text<TreeId>,
-        node: Text<NodeId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tree: Option<Text<TreeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        node: Option<Text<NodeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        shared_step: Option<Text<SharedStepId>>,
         attack_type: Option<Required<&'a str>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
     SetStepFactor {
-        tree: Text<TreeId>,
-        node: Text<NodeId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tree: Option<Text<TreeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        node: Option<Text<NodeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        shared_step: Option<Text<SharedStepId>>,
         factor: Required<&'a str>,
         level: Option<Required<&'a str>>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -494,6 +511,34 @@ enum OpView<'a> {
     },
     RemoveAssumption {
         id: Text<AssumptionId>,
+    },
+    AddSharedStep {
+        id: Text<SharedStepId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RenameSharedStep {
+        id: Text<SharedStepId>,
+        name: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    RemoveSharedStep {
+        id: Text<SharedStepId>,
+    },
+    UseSharedStep {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        shared_step: Text<SharedStepId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    UnuseSharedStep {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
     },
     NeedCondition {
         element: TargetView,
@@ -814,6 +859,8 @@ fn within_caps(op: &Op) -> bool {
         | Op::RenameCondition { name, .. }
         | Op::AddAssumption { name, .. }
         | Op::RenameAssumption { name, .. }
+        | Op::AddSharedStep { name, .. }
+        | Op::RenameSharedStep { name, .. }
         | Op::AddElement { name, .. }
         | Op::RenameElement { name, .. }
         | Op::AddComponent { name, .. }
@@ -853,6 +900,19 @@ fn within_caps(op: &Op) -> bool {
         }
         Op::SetAttackFilter { provenance, .. } => provenance.actor().len() <= MAX_ACTOR_BYTES,
         _ => true,
+    }
+}
+
+type StepTargetView = (
+    Option<Text<TreeId>>,
+    Option<Text<NodeId>>,
+    Option<Text<SharedStepId>>,
+);
+
+fn step_target_view(target: StepTarget) -> StepTargetView {
+    match target {
+        StepTarget::Step(tree, node) => (Some(Text(tree)), Some(Text(node)), None),
+        StepTarget::Shared(id) => (None, None, Some(Text(id))),
     }
 }
 
@@ -1132,51 +1192,63 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             provenance: ProvenanceView::of(provenance),
         },
         Op::SetStepFeasibility {
-            tree,
-            node,
+            target,
             level,
             provenance,
-        } => OpView::SetStepFeasibility {
-            tree: Text(*tree),
-            node: Text(*node),
-            level: level.map(|l| Required(m.feasibility_level_key(l))),
-            provenance: ProvenanceView::of(provenance),
-        },
+        } => {
+            let (tree, node, shared_step) = step_target_view(*target);
+            OpView::SetStepFeasibility {
+                tree,
+                node,
+                shared_step,
+                level: level.map(|l| Required(m.feasibility_level_key(l))),
+                provenance: ProvenanceView::of(provenance),
+            }
+        }
         Op::SetStepVia {
-            tree,
-            node,
+            target,
             via,
             provenance,
-        } => OpView::SetStepVia {
-            tree: Text(*tree),
-            node: Text(*node),
-            via: via.map(ItemView::of),
-            provenance: ProvenanceView::of(provenance),
-        },
+        } => {
+            let (tree, node, shared_step) = step_target_view(*target);
+            OpView::SetStepVia {
+                tree,
+                node,
+                shared_step,
+                via: via.map(ItemView::of),
+                provenance: ProvenanceView::of(provenance),
+            }
+        }
         Op::SetStepAttackType {
-            tree,
-            node,
+            target,
             attack_type,
             provenance,
-        } => OpView::SetStepAttackType {
-            tree: Text(*tree),
-            node: Text(*node),
-            attack_type: attack_type.map(|t| Required(m.attack_type_key(t))),
-            provenance: ProvenanceView::of(provenance),
-        },
+        } => {
+            let (tree, node, shared_step) = step_target_view(*target);
+            OpView::SetStepAttackType {
+                tree,
+                node,
+                shared_step,
+                attack_type: attack_type.map(|t| Required(m.attack_type_key(t))),
+                provenance: ProvenanceView::of(provenance),
+            }
+        }
         Op::SetStepFactor {
-            tree,
-            node,
+            target,
             factor,
             level,
             provenance,
-        } => OpView::SetStepFactor {
-            tree: Text(*tree),
-            node: Text(*node),
-            factor: Required(m.feasibility_factor_key(*factor)),
-            level: level.map(|l| Required(m.factor_level_key(*factor, l))),
-            provenance: ProvenanceView::of(provenance),
-        },
+        } => {
+            let (tree, node, shared_step) = step_target_view(*target);
+            OpView::SetStepFactor {
+                tree,
+                node,
+                shared_step,
+                factor: Required(m.feasibility_factor_key(*factor)),
+                level: level.map(|l| Required(m.factor_level_key(*factor, l))),
+                provenance: ProvenanceView::of(provenance),
+            }
+        }
         Op::SetThreatFeasibility {
             threat,
             level,
@@ -1505,6 +1577,45 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             provenance: ProvenanceView::of(provenance),
         },
         Op::RemoveAssumption { id } => OpView::RemoveAssumption { id: Text(*id) },
+        Op::AddSharedStep {
+            id,
+            name,
+            provenance,
+        } => OpView::AddSharedStep {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RenameSharedStep {
+            id,
+            name,
+            provenance,
+        } => OpView::RenameSharedStep {
+            id: Text(*id),
+            name,
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::RemoveSharedStep { id } => OpView::RemoveSharedStep { id: Text(*id) },
+        Op::UseSharedStep {
+            tree,
+            node,
+            step,
+            provenance,
+        } => OpView::UseSharedStep {
+            tree: Text(*tree),
+            node: Text(*node),
+            shared_step: Text(*step),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::UnuseSharedStep {
+            tree,
+            node,
+            provenance,
+        } => OpView::UnuseSharedStep {
+            tree: Text(*tree),
+            node: Text(*node),
+            provenance: ProvenanceView::of(provenance),
+        },
         Op::NeedCondition {
             element,
             condition,
@@ -1856,11 +1967,24 @@ fn encode_record(
 // Decoding.
 // ---------------------------------------------------------------------------
 
+fn step_target_from_wire(
+    tree: Option<WireId<TreeId>>,
+    node: Option<WireId<NodeId>>,
+    shared_step: Option<WireId<SharedStepId>>,
+    line: u64,
+) -> Result<StepTarget, StoreError> {
+    match (tree, node, shared_step) {
+        (Some(tree), Some(node), None) => Ok(StepTarget::Step(tree.0, node.0)),
+        (None, None, Some(shared_step)) => Ok(StepTarget::Shared(shared_step.0)),
+        _ => Err(StoreError::Decode { line, column: 0 }),
+    }
+}
+
 /// Turns a decoded op into an `Op` of `m`. Vocabulary was resolved while
 /// decoding; only a `SetImpact` level is resolved here, against its
 /// category. Lists keep their order. Time O(k).
 #[allow(clippy::too_many_lines)]
-fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
+fn op_from_wire(m: &Methodology, w: OpWire, line: u64) -> Result<Op, StoreError> {
     Ok(match w {
         OpWire::AddTreeNode {
             tree,
@@ -2130,45 +2254,45 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
         OpWire::SetStepFeasibility {
             tree,
             node,
+            shared_step,
             level,
             provenance,
         } => Op::SetStepFeasibility {
-            tree: tree.0,
-            node: node.0,
+            target: step_target_from_wire(tree, node, shared_step, line)?,
             level: level.map(|l| l.0),
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::SetStepVia {
             tree,
             node,
+            shared_step,
             via,
             provenance,
         } => Op::SetStepVia {
-            tree: tree.0,
-            node: node.0,
+            target: step_target_from_wire(tree, node, shared_step, line)?,
             via: via.map(wire::ItemWire::unwrap_item),
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::SetStepAttackType {
             tree,
             node,
+            shared_step,
             attack_type,
             provenance,
         } => Op::SetStepAttackType {
-            tree: tree.0,
-            node: node.0,
+            target: step_target_from_wire(tree, node, shared_step, line)?,
             attack_type: attack_type.map(|t| t.0),
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::SetStepFactor {
             tree,
             node,
+            shared_step,
             factor,
             level,
             provenance,
         } => Op::SetStepFactor {
-            tree: tree.0,
-            node: node.0,
+            target: step_target_from_wire(tree, node, shared_step, line)?,
             factor: factor.0,
             level: level
                 .as_ref()
@@ -2510,6 +2634,45 @@ fn op_from_wire(m: &Methodology, w: OpWire) -> Result<Op, StoreError> {
             }
         }
         OpWire::RemoveAssumption { id } => Op::RemoveAssumption { id: id.0 },
+        OpWire::AddSharedStep {
+            id,
+            name,
+            provenance,
+        } => Op::AddSharedStep {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RenameSharedStep {
+            id,
+            name,
+            provenance,
+        } => Op::RenameSharedStep {
+            id: id.0,
+            name: name.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::RemoveSharedStep { id } => Op::RemoveSharedStep { id: id.0 },
+        OpWire::UseSharedStep {
+            tree,
+            node,
+            shared_step,
+            provenance,
+        } => Op::UseSharedStep {
+            tree: tree.0,
+            node: node.0,
+            step: shared_step.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UnuseSharedStep {
+            tree,
+            node,
+            provenance,
+        } => Op::UnuseSharedStep {
+            tree: tree.0,
+            node: node.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
         OpWire::NeedCondition {
             element,
             condition,
@@ -3186,7 +3349,7 @@ impl OpCodec {
             return Err(StoreError::LimitExceeded(Limit::OP_RECORD));
         }
         let wire: OpWire = wire::from_slice(&self.m, bytes, Some(1))?;
-        op_from_wire(&self.m, wire)
+        op_from_wire(&self.m, wire, 1)
     }
 }
 
@@ -3364,7 +3527,7 @@ impl<R: BufRead> OpLogReader<R> {
                 found: record.seq,
             });
         }
-        let op = op_from_wire(&self.m, record.op)?;
+        let op = op_from_wire(&self.m, record.op, line)?;
         self.last_seq = record.seq;
         Ok(Some(LoggedOp {
             seq: record.seq,

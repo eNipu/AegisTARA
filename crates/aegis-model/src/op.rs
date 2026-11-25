@@ -9,7 +9,8 @@ use crate::description::ElementRef;
 use crate::element::{AttrValue, ElementKind, LinkTarget};
 use crate::id::{
     AssetId, AssumptionId, ClaimId, ComponentId, ConditionId, ControlId, DamageId, DataFlowId,
-    ElementId, GoalId, InterfaceId, NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
+    ElementId, GoalId, InterfaceId, NodeId, PartyId, SharedStepId, ThreatId, TreeId,
+    TrustBoundaryId,
 };
 use crate::item::ItemRef;
 use crate::methodology::{
@@ -19,6 +20,15 @@ use crate::methodology::{
 use crate::party::PartyKind;
 use crate::provenance::Provenance;
 use crate::tree::{AttackTree, GateKind, Node};
+
+/// The entity whose step rating an operation changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StepTarget {
+    /// A step node in an attack tree.
+    Step(TreeId, NodeId),
+    /// A reusable shared step.
+    Shared(SharedStepId),
+}
 
 /// One change to a [`Project`](crate::Project).
 ///
@@ -99,6 +109,11 @@ use crate::tree::{AttackTree, GateKind, Node};
 /// | `RenameCondition` | the same with the old name and provenance | O(log n) |
 /// | `SetConditionPresent` | the same with the old presence and provenance | O(log n) |
 /// | `RemoveCondition` | `AddCondition` with the old fields and provenance | O(log n) |
+/// | `AddSharedStep` | `RemoveSharedStep` | O(log n) |
+/// | `RenameSharedStep` | the same with the old name and provenance | O(log n) |
+/// | `RemoveSharedStep` | `AddSharedStep` with the old name and provenance | O(log n) |
+/// | `UseSharedStep` | `UnuseSharedStep` with the same provenance | O(log n + log V) |
+/// | `UnuseSharedStep` | `UseSharedStep` with the same provenance | O(log n + log V) |
 /// | `NeedCondition` | `UnneedCondition` with the same provenance | O(log n) |
 /// | `UnneedCondition` | `NeedCondition` with the same provenance | O(log n) |
 /// | `NeedStepCondition` | `UnneedStepCondition` with the same provenance | O(log n) |
@@ -445,31 +460,27 @@ pub enum Op {
         provenance: Provenance,
     },
     /// Sets or clears (`None` = unrated) the feasibility rating of one
-    /// step node in an attack tree.
+    /// tree step or shared step.
     SetStepFeasibility {
-        /// Existing attack tree.
-        tree: TreeId,
-        /// Existing step node in `tree`.
-        node: NodeId,
+        /// The tree step or shared step to rate.
+        target: StepTarget,
         /// The new feasibility rating, or `None` for unrated.
         level: Option<FeasibilityLevel>,
         /// Provenance of the step feasibility change.
         provenance: Provenance,
     },
     /// Sets or clears (`None` = unrated) the rating of one attack potential
-    /// factor on one step node in an attack tree.
+    /// factor on one tree step or shared step.
     ///
     /// When every factor in the methodology's attack potential vocabulary is
-    /// rated on `node`, [`Project::step_attack_potential`](crate::Project::step_attack_potential)
+    /// rated on the target, [`Project::step_attack_potential`](crate::Project::step_attack_potential)
     /// resolves the step's score, band, and feasibility, and
     /// [`Project::effective_step_feasibility`](crate::Project::effective_step_feasibility)
     /// prefers that resolved feasibility over any direct
     /// [`Op::SetStepFeasibility`] rating.
     SetStepFactor {
-        /// Existing attack tree.
-        tree: TreeId,
-        /// Existing step node in `tree`.
-        node: NodeId,
+        /// The tree step or shared step to rate.
+        target: StepTarget,
         /// The attack potential factor.
         factor: FeasibilityFactor,
         /// The new factor rating, or `None` for unrated.
@@ -477,26 +488,22 @@ pub enum Op {
         /// Provenance of the step factor change.
         provenance: Provenance,
     },
-    /// Sets or clears (`None`) the component or interface one attack step
-    /// goes through (CFG-01). Steps only; a gate is rejected with
+    /// Sets or clears (`None`) the component or interface one tree or shared
+    /// step goes through (CFG-01). Tree steps only; a gate is rejected with
     /// [`ModelError::NotAStep`](crate::ModelError::NotAStep).
     SetStepVia {
-        /// Existing attack tree.
-        tree: TreeId,
-        /// Existing step node in `tree`.
-        node: NodeId,
+        /// The tree step or shared step to change.
+        target: StepTarget,
         /// The live component or interface, or `None` for nothing.
         via: Option<ItemRef>,
         /// Provenance of the change.
         provenance: Provenance,
     },
-    /// Sets or clears (`None`) the pack-defined attack type of one attack
-    /// step (CFG-02). Steps only.
+    /// Sets or clears (`None`) the pack-defined attack type of one tree or
+    /// shared step (CFG-02). Tree steps only.
     SetStepAttackType {
-        /// Existing attack tree.
-        tree: TreeId,
-        /// Existing step node in `tree`.
-        node: NodeId,
+        /// The tree step or shared step to change.
+        target: StepTarget,
         /// The attack type in the project's methodology, or `None`.
         attack_type: Option<AttackType>,
         /// Provenance of the change.
@@ -877,6 +884,49 @@ pub enum Op {
     RemoveAssumption {
         /// Existing assumption.
         id: AssumptionId,
+    },
+    /// Adds an unrated shared attack step.
+    AddSharedStep {
+        /// Unused shared step ID.
+        id: SharedStepId,
+        /// Name, non-empty after trimming, at most 256 chars.
+        name: Arc<str>,
+        /// Provenance of the shared step creation.
+        provenance: Provenance,
+    },
+    /// Renames a shared attack step.
+    RenameSharedStep {
+        /// Existing shared step.
+        id: SharedStepId,
+        /// New name.
+        name: Arc<str>,
+        /// Provenance of the rename.
+        provenance: Provenance,
+    },
+    /// Removes an unrated, unused shared step with no description.
+    RemoveSharedStep {
+        /// Existing shared step.
+        id: SharedStepId,
+    },
+    /// Links an unrated tree step to a shared attack step.
+    UseSharedStep {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// An existing step node in `tree`.
+        node: NodeId,
+        /// Existing shared attack step.
+        step: SharedStepId,
+        /// Provenance of linking the shared step.
+        provenance: Provenance,
+    },
+    /// Unlinks a tree step from its shared attack step.
+    UnuseSharedStep {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// A step node in `tree` that uses a shared step.
+        node: NodeId,
+        /// Provenance of unlinking the shared step.
+        provenance: Provenance,
     },
     /// Records that an element needs a condition, capped at
     /// `MAX_CONDITIONS_PER_ELEMENT` and stored sorted by public ID.
@@ -1321,6 +1371,10 @@ impl Op {
             | Self::SetConditionPresent { provenance, .. }
             | Self::AddAssumption { provenance, .. }
             | Self::RenameAssumption { provenance, .. }
+            | Self::AddSharedStep { provenance, .. }
+            | Self::RenameSharedStep { provenance, .. }
+            | Self::UseSharedStep { provenance, .. }
+            | Self::UnuseSharedStep { provenance, .. }
             | Self::SetAssumptionHolds { provenance, .. }
             | Self::SetAssumptionExcludes { provenance, .. }
             | Self::NeedCondition { provenance, .. }
@@ -1365,6 +1419,7 @@ impl Op {
             | Self::RemoveParty { .. }
             | Self::RemoveCondition { .. }
             | Self::RemoveAssumption { .. }
+            | Self::RemoveSharedStep { .. }
             | Self::RemoveElement { .. }
             | Self::RemoveComponent { .. }
             | Self::RemoveInterface { .. }
@@ -1456,6 +1511,10 @@ impl Op {
             | Self::SetConditionPresent { provenance, .. }
             | Self::AddAssumption { provenance, .. }
             | Self::RenameAssumption { provenance, .. }
+            | Self::AddSharedStep { provenance, .. }
+            | Self::RenameSharedStep { provenance, .. }
+            | Self::UseSharedStep { provenance, .. }
+            | Self::UnuseSharedStep { provenance, .. }
             | Self::SetAssumptionHolds { provenance, .. }
             | Self::SetAssumptionExcludes { provenance, .. }
             | Self::NeedCondition { provenance, .. }
@@ -1502,6 +1561,7 @@ impl Op {
             | Self::RemoveParty { .. }
             | Self::RemoveCondition { .. }
             | Self::RemoveAssumption { .. }
+            | Self::RemoveSharedStep { .. }
             | Self::RemoveElement { .. }
             | Self::RemoveComponent { .. }
             | Self::RemoveInterface { .. }

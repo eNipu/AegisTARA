@@ -9,10 +9,10 @@ use super::MAX_PROJECT_FILE_BYTES;
 use super::op_log::{AttrView, LinkView};
 use super::wire::{
     self, AttackFilterView, CappedReader, CatalogRefsByKey, ControlRulesByKey,
-    ControlTargetsByItem, FORMAT_VERSION, ImpactsByKey, KeyOrder, MethodologyView, NodesView,
-    PropertyKeys, ProvenanceView, Required, RiskTreatmentWire, SnapshotWire, StepAttackTypeByNode,
-    StepFactorsByNode, StepFeasibilityByNode, StepMitigationsByNode, StepViaByNode, TargetView,
-    Text, VisualDisplay,
+    ControlTargetsByItem, FORMAT_VERSION, ImpactsByKey, ItemView, KeyOrder, MethodologyView,
+    NodesView, PropertyKeys, ProvenanceView, Required, RiskTreatmentWire, SnapshotWire,
+    StepAttackTypeByNode, StepFactorsByNode, StepFactorsForNode, StepFeasibilityByNode,
+    StepMitigationsByNode, StepSharedByNode, StepViaByNode, TargetView, Text, VisualDisplay,
 };
 use crate::applicability::{MAX_ASSUMPTION_EXCLUDES, StepRef};
 use crate::element::{AttrValue, ElementKind};
@@ -20,10 +20,10 @@ use crate::error::StoreError;
 use crate::id::{
     AssetId, AssumptionId, AssumptionIdx, ClaimId, ComponentId, ConditionId, ConditionIdx,
     ControlId, DamageId, DataFlowId, ElementId, GoalId, InterfaceId, NodeId, PartyId, PartyIdx,
-    ThreatId, TreeId, TrustBoundaryId, VisualPrefix,
+    SharedStepId, ThreatId, TreeId, TrustBoundaryId, VisualPrefix,
 };
 use crate::methodology::Methodology;
-use crate::op::Op;
+use crate::op::{Op, StepTarget};
 use crate::project::Project;
 use crate::store::Limit;
 
@@ -52,6 +52,8 @@ struct SnapshotView<'a> {
     data_flows: DataFlows<'a>,
     #[serde(skip_serializing_if = "TrustBoundaries::is_empty")]
     trust_boundaries: TrustBoundaries<'a>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    shared_steps: Vec<SharedStepView<'a>>,
     #[serde(skip_serializing_if = "Descriptions::is_empty")]
     descriptions: Descriptions<'a>,
     #[serde(skip_serializing_if = "ReviewMarks::is_empty")]
@@ -208,6 +210,24 @@ impl Serialize for Assumptions<'_> {
             }
         }))
     }
+}
+
+#[derive(Serialize)]
+struct SharedStepView<'a> {
+    id: Text<SharedStepId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visual_id: Option<Text<VisualDisplay>>,
+    name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    feasibility: Option<Required<&'a str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    factors: Option<StepFactorsForNode<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    via: Option<ItemView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attack_type: Option<Required<&'a str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<ProvenanceView<'a>>,
 }
 
 /// What every entity view needs.
@@ -492,6 +512,8 @@ struct TreeView<'a> {
     step_via: StepViaByNode<'a>,
     #[serde(skip_serializing_if = "StepAttackTypeByNode::is_empty")]
     step_attack_type: StepAttackTypeByNode<'a>,
+    #[serde(skip_serializing_if = "StepSharedByNode::is_empty")]
+    step_shared: StepSharedByNode<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
 }
@@ -791,6 +813,11 @@ impl Serialize for Trees<'_> {
                         tree,
                     },
                     step_attack_type: StepAttackTypeByNode {
+                        project: p,
+                        tree_idx,
+                        tree,
+                    },
+                    step_shared: StepSharedByNode {
                         project: p,
                         tree_idx,
                         tree,
@@ -1165,6 +1192,29 @@ impl Project {
             interfaces: Interfaces(ctx),
             data_flows: DataFlows(self),
             trust_boundaries: TrustBoundaries(self),
+            shared_steps: self
+                .shared_steps()
+                .enumerate()
+                .map(|(pos, (idx, id, step))| SharedStepView {
+                    id: Text(id),
+                    visual_id: VisualDisplay::non_default(
+                        VisualPrefix::SharedStep,
+                        self.shared_step_visual_num(idx),
+                        pos,
+                    ),
+                    name: step.name(),
+                    feasibility: step
+                        .feasibility()
+                        .map(|level| Required(m.feasibility_level_key(level))),
+                    factors: (!step.factor_slice().is_empty())
+                        .then(|| StepFactorsForNode::new(m, &order, step.factor_slice())),
+                    via: self.shared_step_via(idx).map(ItemView::of),
+                    attack_type: step
+                        .attack_type()
+                        .map(|kind| Required(m.attack_type_key(kind))),
+                    provenance: ProvenanceView::of(step.provenance()),
+                })
+                .collect(),
             descriptions: Descriptions(self),
             review_marks: ReviewMarks(self),
             languages: self.languages().iter().map(|l| &**l).collect(),
@@ -1355,6 +1405,49 @@ impl Project {
             project.set_trust_boundary_loaded_visual(&id, vis, next_vis);
         }
         let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
+        for (pos, step) in snapshot.shared_steps.0.into_iter().enumerate() {
+            let vis = claim_visual(step.visual_id, pos, &mut used, &mut next_vis)?;
+            let id = step.id.0;
+            let provenance = wire::unwrap_provenance(step.provenance);
+            project.apply(Op::AddSharedStep {
+                id,
+                name: step.name.0,
+                provenance: provenance.clone(),
+            })?;
+            project.set_shared_step_loaded_visual(&id, vis, next_vis);
+            if let Some(level) = step.feasibility {
+                project.apply(Op::SetStepFeasibility {
+                    target: StepTarget::Shared(id),
+                    level: Some(level.0),
+                    provenance: provenance.clone(),
+                })?;
+            }
+            if let Some(factors) = step.factors {
+                for (factor, level) in factors.0 {
+                    project.apply(Op::SetStepFactor {
+                        target: StepTarget::Shared(id),
+                        factor,
+                        level: Some(level),
+                        provenance: provenance.clone(),
+                    })?;
+                }
+            }
+            if let Some(via) = step.via {
+                project.apply(Op::SetStepVia {
+                    target: StepTarget::Shared(id),
+                    via: Some(via.unwrap_item()),
+                    provenance: provenance.clone(),
+                })?;
+            }
+            if let Some(attack_type) = step.attack_type {
+                project.apply(Op::SetStepAttackType {
+                    target: StepTarget::Shared(id),
+                    attack_type: Some(attack_type.0),
+                    provenance,
+                })?;
+            }
+        }
+        let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
         for (pos, a) in snapshot.assets.into_iter().enumerate() {
             let vis = claim_visual(a.visual_id, pos, &mut used, &mut next_vis)?;
             let provenance = wire::unwrap_provenance(a.provenance);
@@ -1511,8 +1604,7 @@ impl Project {
             for (node, factors) in tr.step_factors.0 {
                 for (factor, level) in factors {
                     project.apply(Op::SetStepFactor {
-                        tree: id,
-                        node,
+                        target: StepTarget::Step(id, node),
                         factor,
                         level: Some(level),
                         provenance: provenance.clone(),
@@ -1532,18 +1624,30 @@ impl Project {
             }
             for (node, via) in tr.step_via.into_iter().flat_map(|v| v.0) {
                 project.apply(Op::SetStepVia {
-                    tree: id,
-                    node,
+                    target: StepTarget::Step(id, node),
                     via: Some(via.unwrap_item()),
                     provenance: provenance.clone(),
                 })?;
             }
             for (node, attack_type) in tr.step_attack_type.into_iter().flat_map(|v| v.0) {
                 project.apply(Op::SetStepAttackType {
-                    tree: id,
-                    node,
+                    target: StepTarget::Step(id, node),
                     attack_type: Some(attack_type.0),
                     provenance: provenance.clone(),
+                })?;
+            }
+            let mut shared_nodes = std::collections::BTreeSet::new();
+            for entry in &tr.step_shared.0 {
+                if !shared_nodes.insert(entry.node.0) {
+                    return Err(StoreError::DuplicateEntry);
+                }
+            }
+            for entry in tr.step_shared.0 {
+                project.apply(Op::UseSharedStep {
+                    tree: id,
+                    node: entry.node.0,
+                    step: entry.shared_step.0,
+                    provenance: crate::provenance::Provenance::default(),
                 })?;
             }
             let own: Vec<_> = marks.iter().filter(|(t, _)| *t == id).copied().collect();

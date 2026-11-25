@@ -32,6 +32,7 @@ fn folder_for_table(table: TableId) -> Folder {
         TableId::Goals => Folder::Goals,
         TableId::Claims => Folder::Claims,
         TableId::Problems => Folder::Problems,
+        TableId::SharedSteps => Folder::SharedSteps,
     }
 }
 

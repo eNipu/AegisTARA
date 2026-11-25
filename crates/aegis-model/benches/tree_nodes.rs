@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use aegis_model::{
     AssetId, AttackTree, DamageId, GateKind, MAX_ATTACK_TREE_NODES, Methodology, Node, NodeId, Op,
-    Project, ProjectEvalCache, Provenance, ThreatId, TreeId,
+    Project, ProjectEvalCache, Provenance, StepTarget, ThreatId, TreeId,
 };
 use divan::{Bencher, black_box};
 
@@ -109,8 +109,7 @@ fn fixture(nodes: usize) -> Fixture {
             .expect("adds");
         project
             .apply(Op::SetStepFeasibility {
-                tree,
-                node: id,
+                target: StepTarget::Step(tree, id),
                 level: Some(low),
                 provenance: p.clone(),
             })
@@ -165,8 +164,7 @@ fn remove_a_leaf_at_the_front_then_undo(bencher: Bencher) {
     f.project
         .apply_cached(
             Op::SetStepFeasibility {
-                tree: f.tree,
-                node: f.first_step,
+                target: StepTarget::Step(f.tree, f.first_step),
                 level: None,
                 provenance: Provenance::default(),
             },
@@ -218,8 +216,7 @@ fn rate_a_step_then_undo(bencher: Bencher) {
     let mut f = fixture(MAX_ATTACK_TREE_NODES);
     bencher.bench_local(|| {
         let op = Op::SetStepFeasibility {
-            tree: f.tree,
-            node: f.first_step,
+            target: StepTarget::Step(f.tree, f.first_step),
             level: Some(high),
             provenance: Provenance::default(),
         };
