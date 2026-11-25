@@ -1295,12 +1295,20 @@ fn unshare_step_ops(project: &Project, tree: TreeId, node: NodeId, p: &Provenanc
 /// Ops that clear the "through" of every step that goes through `item`
 /// itself (a component's interfaces are not included).
 pub(crate) fn clear_via_ops(project: &Project, item: ItemRef, p: &Provenance) -> Vec<Op> {
-    let mut shared = BTreeSet::new();
-    let mut ops = Vec::new();
+    let mut ops: Vec<_> = project
+        .shared_steps()
+        .filter(|(idx, _, _)| project.shared_step_via(*idx) == Some(item))
+        .map(|(_, id, _)| Op::SetStepVia {
+            target: StepTarget::Shared(id),
+            via: None,
+            provenance: p.clone(),
+        })
+        .collect();
     for (t_idx, n_idx) in project.steps_via(item) {
-        if let Some(id) = project.step_shared_id(t_idx, n_idx) {
-            shared.insert(id);
-        } else if let (Some(tree), Some(node)) = (
+        if project.step_shared(t_idx, n_idx).is_some() {
+            continue;
+        }
+        if let (Some(tree), Some(node)) = (
             project.attack_tree_id(t_idx),
             project.attack_tree(t_idx).and_then(|t| t.id_of(n_idx)),
         ) {
@@ -1311,11 +1319,6 @@ pub(crate) fn clear_via_ops(project: &Project, item: ItemRef, p: &Provenance) ->
             });
         }
     }
-    ops.extend(shared.into_iter().map(|id| Op::SetStepVia {
-        target: StepTarget::Shared(id),
-        via: None,
-        provenance: p.clone(),
-    }));
     ops
 }
 
@@ -3784,16 +3787,14 @@ impl Edit {
             Edit::RenameSharedStep { shared_step, name } => {
                 shared(shared_step).is_some_and(|s| s.name() == name.trim())
             }
-            Edit::RemoveSharedStep { shared_step } => {
-                project.shared_step_idx(shared_step).is_none()
-            }
+            Edit::RemoveSharedStep { .. } => false,
             Edit::UseSharedStep {
                 tree,
                 node,
                 shared_step,
             } => linked_shared_step(project, *tree, *node) == Some(*shared_step),
             Edit::UnuseSharedStep { tree, node } => {
-                linked_shared_step(project, *tree, *node).is_none()
+                linked_shared_step(project, *tree, *node).is_some()
             }
             Edit::SetSharedStepFeasibility { shared_step, level } => {
                 shared(shared_step).is_some_and(|s| s.feasibility() == *level)

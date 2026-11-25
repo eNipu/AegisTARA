@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use aegis_client::commands::Edit;
+use aegis_client::commands::{Edit, EditError};
 use aegis_client::i18n::{Catalog, Language};
 use aegis_client::inspector::inspector_view;
 use aegis_client::relations::RelationKey;
@@ -10,8 +10,8 @@ use aegis_client::view::Selection;
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
     AttackTree, AttackType, ComponentId, ElementRef, FactorLevel, FeasibilityFactor,
-    FeasibilityLevel, GateKind, ItemRef, Methodology, Node, NodeId, Op, Project, Provenance,
-    SharedStepId, StepTarget, TreeId,
+    FeasibilityLevel, GateKind, InterfaceId, ItemRef, Methodology, Node, NodeId, Op, Project,
+    Provenance, SharedStepId, StepTarget, TreeId,
 };
 
 fn prov() -> Provenance {
@@ -343,6 +343,10 @@ fn remove_shared_step_restores_description_translation_and_every_user() {
             text: "共通の説明".into(),
         },
     );
+    assert!(
+        ws.project().shared_step_idx(&shared).is_some(),
+        "shared step disappeared before removal"
+    );
     exact_undo(
         &mut ws,
         Edit::RemoveSharedStep {
@@ -554,6 +558,21 @@ fn component_removal_clears_shared_via_once_and_unshared_via() {
             via: Some(ItemRef::Component(component)),
         },
     );
+    let unused = SharedStepId::new_v7();
+    apply(
+        &mut ws,
+        Edit::AddSharedStep {
+            id: unused,
+            name: "Unused".into(),
+        },
+    );
+    apply(
+        &mut ws,
+        Edit::SetSharedStepVia {
+            shared_step: unused,
+            via: Some(ItemRef::Component(component)),
+        },
+    );
     let tree = gate_tree(&["Shared A", "Shared B", "Local"]);
     let tree_id = add_tree(&mut ws, tree.clone());
     let nodes: Vec<_> = tree
@@ -593,7 +612,7 @@ fn component_removal_clears_shared_via_once_and_unshared_via() {
                 }
             ))
             .count(),
-        1
+        2
     );
     assert_eq!(
         ops.iter()
@@ -615,6 +634,87 @@ fn component_removal_clears_shared_via_once_and_unshared_via() {
             .shared_step_via(ws.project().shared_step_idx(&shared).expect("shared"),),
         None
     );
+    assert_eq!(
+        ws.project()
+            .shared_step_via(ws.project().shared_step_idx(&unused).expect("unused"),),
+        None
+    );
+}
+
+#[test]
+fn interface_removal_clears_an_unused_shared_via() {
+    let mut ws = empty();
+    let component = add_component(&mut ws, "Gateway");
+    let interface = InterfaceId::new_v7();
+    let kind = ws
+        .project()
+        .methodology()
+        .interface_kinds()
+        .next()
+        .expect("interface kind");
+    ws.apply(
+        vec![Op::AddInterface {
+            id: interface,
+            name: "Debug".into(),
+            component,
+            kind,
+            provenance: prov(),
+        }],
+        Origin::Edit,
+    )
+    .expect("interface");
+    let shared = SharedStepId::new_v7();
+    apply(
+        &mut ws,
+        Edit::AddSharedStep {
+            id: shared,
+            name: "Unused".into(),
+        },
+    );
+    apply(
+        &mut ws,
+        Edit::SetSharedStepVia {
+            shared_step: shared,
+            via: Some(ItemRef::Interface(interface)),
+        },
+    );
+    exact_undo(&mut ws, Edit::RemoveInterface { interface });
+    apply(&mut ws, Edit::RemoveInterface { interface });
+    assert_eq!(
+        ws.project()
+            .shared_step_via(ws.project().shared_step_idx(&shared).expect("shared")),
+        None
+    );
+}
+
+#[test]
+fn missing_shared_targets_are_errors_not_noops() {
+    let mut ws = empty();
+    let missing = SharedStepId::new_v7();
+    assert!(matches!(
+        Edit::RemoveSharedStep {
+            shared_step: missing,
+        }
+        .to_ops(ws.project(), "shared-test", 1),
+        Err(EditError::Missing)
+    ));
+    let tree = TreeId::new_v7();
+    let node = NodeId::new_v7();
+    assert!(matches!(
+        Edit::UnuseSharedStep { tree, node }.to_ops(ws.project(), "shared-test", 1),
+        Err(EditError::Missing)
+    ));
+    let tree = add_tree(&mut ws, gate_tree(&["Local"]));
+    let node = first_child(
+        ws.project()
+            .attack_tree_idx(&tree)
+            .and_then(|i| ws.project().attack_tree(i))
+            .expect("tree"),
+    );
+    assert!(matches!(
+        Edit::UnuseSharedStep { tree, node }.to_ops(ws.project(), "shared-test", 1),
+        Err(EditError::Missing)
+    ));
 }
 
 #[test]
