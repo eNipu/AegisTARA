@@ -835,6 +835,8 @@ fn walk_shared_steps(seen: &mut BTreeSet<String>) {
     let mut ws = Workspace::empty(Arc::clone(&m));
     let id = SharedStepId::new_v7();
     let component = ComponentId::new_v7();
+    let tree = TreeId::new_v7();
+    let node = NodeId::new_v7();
     let target = StepTarget::Shared(id);
     let factor = m.feasibility_factors().next().expect("factor");
     let level = m.factor_levels(factor).next().expect("factor level");
@@ -844,6 +846,12 @@ fn walk_shared_steps(seen: &mut BTreeSet<String>) {
             id: component,
             name: "Gateway".into(),
             parent: None,
+            provenance: who(),
+        },
+        Op::AddAttackTree {
+            id: tree,
+            tree: AttackTree::new(node, Node::step("Inject frame")).expect("tree"),
+            step_feasibility: Vec::new(),
             provenance: who(),
         },
         Op::AddSharedStep {
@@ -898,7 +906,19 @@ fn walk_shared_steps(seen: &mut BTreeSet<String>) {
             attack_type: None,
             provenance: who(),
         },
+        Op::UseSharedStep {
+            tree,
+            node,
+            step: id,
+            provenance: who(),
+        },
+        Op::UnuseSharedStep {
+            tree,
+            node,
+            provenance: who(),
+        },
         Op::RemoveSharedStep { id },
+        Op::RemoveAttackTree { id: tree },
         Op::RemoveComponent { id: component },
     ] {
         apply_undo_redo(&mut ws, seen, op);

@@ -15,9 +15,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use aegis_model::{
-    AssetId, AssumptionId, AttackTree, ClaimId, ComponentId, ControlId, DamageId, DataFlowId,
-    ElementId, ElementKind, GateKind, GoalId, InterfaceId, ItemRef, NodeId, Op, Project,
-    PropertySet, Provenance, RiskTreatment, StepRef, StepTarget, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, AssumptionId, AttackTree, AttackType, ClaimId, ComponentId, ControlId, DamageId,
+    DataFlowId, ElementId, ElementKind, FeasibilityFactor, FeasibilityLevel, GateKind, GoalId,
+    InterfaceId, ItemRef, NodeId, Op, Project, PropertySet, Provenance, RiskTreatment,
+    SharedStepId, StepRef, StepTarget, ThreatId, TreeId, TrustBoundaryId,
 };
 
 use crate::outline::{OutlineError, ResolvedNote, parse_outline_annotated, resolve_notes};
@@ -118,6 +119,89 @@ pub enum Edit {
         control: ControlId,
         /// Position in the feasibility levels, or `None` to detach.
         level: Option<usize>,
+    },
+
+    // ---- shared attack-tree steps ----
+    /// Adds an unrated reusable step.
+    AddSharedStep {
+        /// New ID.
+        id: SharedStepId,
+        /// Name.
+        name: String,
+    },
+    /// Renames a reusable step.
+    RenameSharedStep {
+        /// The shared step.
+        shared_step: SharedStepId,
+        /// New name.
+        name: String,
+    },
+    /// Removes a shared step after copying its ratings to every user.
+    RemoveSharedStep {
+        /// The shared step.
+        shared_step: SharedStepId,
+    },
+    /// Links an unrated tree step to a shared step.
+    UseSharedStep {
+        /// Tree.
+        tree: TreeId,
+        /// Step node.
+        node: NodeId,
+        /// The shared step.
+        shared_step: SharedStepId,
+    },
+    /// Copies a shared step's ratings onto a tree step and unlinks it.
+    UnuseSharedStep {
+        /// Tree.
+        tree: TreeId,
+        /// Step node.
+        node: NodeId,
+    },
+    /// Sets or clears a shared step's feasibility.
+    SetSharedStepFeasibility {
+        /// The shared step.
+        shared_step: SharedStepId,
+        /// Feasibility level, or `None` for unrated.
+        level: Option<FeasibilityLevel>,
+    },
+    /// Sets or clears one factor of a shared step.
+    SetSharedStepFactor {
+        /// The shared step.
+        shared_step: SharedStepId,
+        /// Factor.
+        factor: FeasibilityFactor,
+        /// Factor level, or `None` for unrated.
+        level: Option<aegis_model::FactorLevel>,
+    },
+    /// Sets or clears what a shared step goes through.
+    SetSharedStepVia {
+        /// The shared step.
+        shared_step: SharedStepId,
+        /// A component or interface, or `None`.
+        via: Option<ItemRef>,
+    },
+    /// Sets or clears a shared step's attack type.
+    SetSharedStepAttackType {
+        /// The shared step.
+        shared_step: SharedStepId,
+        /// Attack type, or `None`.
+        attack_type: Option<AttackType>,
+    },
+    /// Moves a tree step's ratings into a new shared step and links it.
+    MakeShared {
+        /// Tree.
+        tree: TreeId,
+        /// Step node.
+        node: NodeId,
+        /// New shared step ID.
+        id: SharedStepId,
+    },
+    /// Copies a linked shared step's ratings onto its tree step and unlinks it.
+    Unshare {
+        /// Tree.
+        tree: TreeId,
+        /// Step node.
+        node: NodeId,
     },
 
     // ---- assets ----
@@ -1088,22 +1172,151 @@ fn preset_fit_error(
     EditError::PresetDoesNotFit(text)
 }
 
+/// The shared step linked to a tree node, if any.
+fn linked_shared_step(project: &Project, tree: TreeId, node: NodeId) -> Option<SharedStepId> {
+    project.attack_tree_idx(&tree).and_then(|t| {
+        let n = project.attack_tree(t)?.idx_of(&node)?;
+        project.step_shared_id(t, n)
+    })
+}
+
+/// The rating target of a tree step: its linked shared step, or the node itself.
+pub(crate) fn step_op_target(project: &Project, tree: TreeId, node: NodeId) -> StepTarget {
+    linked_shared_step(project, tree, node).map_or(StepTarget::Step(tree, node), StepTarget::Shared)
+}
+
+/// Copies rated fields between a step and a shared step, optionally clearing
+/// the source. All values are read from the same pre-batch project.
+pub(crate) fn transfer_step_fields_ops(
+    project: &Project,
+    from: StepTarget,
+    to: StepTarget,
+    clear_from: bool,
+    p: &Provenance,
+) -> Vec<Op> {
+    let m = project.methodology();
+    let (feasibility, factors, via, attack_type) = match from {
+        StepTarget::Step(tree, node) => {
+            let Some(t) = project.attack_tree_idx(&tree) else {
+                return Vec::new();
+            };
+            let Some(n) = project.attack_tree(t).and_then(|tree| tree.idx_of(&node)) else {
+                return Vec::new();
+            };
+            (
+                project.step_feasibility(t, n),
+                project.step_factors(t, n).collect::<Vec<_>>(),
+                project.step_via(t, n),
+                project.step_attack_type(t, n),
+            )
+        }
+        StepTarget::Shared(id) => {
+            let Some(idx) = project.shared_step_idx(&id) else {
+                return Vec::new();
+            };
+            let Some(shared) = project.shared_step(idx) else {
+                return Vec::new();
+            };
+            (
+                shared.feasibility(),
+                m.feasibility_factors()
+                    .filter_map(|factor| shared.factor(factor).map(|level| (factor, level)))
+                    .collect(),
+                project.shared_step_via(idx),
+                shared.attack_type(),
+            )
+        }
+    };
+    let mut ops = Vec::new();
+    let mut copy = |target, value: &dyn Fn(StepTarget, bool) -> Op| {
+        if from != to {
+            ops.push(value(target, true));
+        }
+        if clear_from {
+            ops.push(value(from, false));
+        }
+    };
+    if let Some(level) = feasibility {
+        copy(to, &|target: StepTarget, present: bool| {
+            Op::SetStepFeasibility {
+                target,
+                level: present.then_some(level),
+                provenance: p.clone(),
+            }
+        });
+    }
+    for (factor, level) in factors {
+        copy(to, &|target: StepTarget, present: bool| Op::SetStepFactor {
+            target,
+            factor,
+            level: present.then_some(level),
+            provenance: p.clone(),
+        });
+    }
+    if let Some(via) = via {
+        copy(to, &|target: StepTarget, present: bool| Op::SetStepVia {
+            target,
+            via: present.then_some(via),
+            provenance: p.clone(),
+        });
+    }
+    if let Some(attack_type) = attack_type {
+        copy(to, &|target: StepTarget, present: bool| {
+            Op::SetStepAttackType {
+                target,
+                attack_type: present.then_some(attack_type),
+                provenance: p.clone(),
+            }
+        });
+    }
+    ops
+}
+
+/// Unlinks one shared step, first copying all of its rated fields onto the node.
+fn unshare_step_ops(project: &Project, tree: TreeId, node: NodeId, p: &Provenance) -> Vec<Op> {
+    let StepTarget::Shared(shared) = step_op_target(project, tree, node) else {
+        return Vec::new();
+    };
+    let mut ops = vec![Op::UnuseSharedStep {
+        tree,
+        node,
+        provenance: p.clone(),
+    }];
+    ops.extend(transfer_step_fields_ops(
+        project,
+        StepTarget::Shared(shared),
+        StepTarget::Step(tree, node),
+        false,
+        p,
+    ));
+    ops
+}
+
 /// Ops that clear the "through" of every step that goes through `item`
 /// itself (a component's interfaces are not included).
 pub(crate) fn clear_via_ops(project: &Project, item: ItemRef, p: &Provenance) -> Vec<Op> {
-    project
-        .steps_via(item)
-        .filter_map(|(t_idx, n_idx)| {
-            Some(Op::SetStepVia {
-                target: StepTarget::Step(
-                    project.attack_tree_id(t_idx)?,
-                    project.attack_tree(t_idx)?.id_of(n_idx)?,
-                ),
+    let mut shared = BTreeSet::new();
+    let mut ops = Vec::new();
+    for (t_idx, n_idx) in project.steps_via(item) {
+        if let Some(id) = project.step_shared_id(t_idx, n_idx) {
+            shared.insert(id);
+        } else if let (Some(tree), Some(node)) = (
+            project.attack_tree_id(t_idx),
+            project.attack_tree(t_idx).and_then(|t| t.id_of(n_idx)),
+        ) {
+            ops.push(Op::SetStepVia {
+                target: StepTarget::Step(tree, node),
                 via: None,
                 provenance: p.clone(),
-            })
-        })
-        .collect()
+            });
+        }
+    }
+    ops.extend(shared.into_iter().map(|id| Op::SetStepVia {
+        target: StepTarget::Shared(id),
+        via: None,
+        provenance: p.clone(),
+    }));
+    ops
 }
 
 /// Ops that clear the rationale on `threat`'s link to `damage` (or on all its
@@ -1253,6 +1466,7 @@ fn clear_descriptions_before_removal(
             Op::RemoveCybersecurityGoal { id } => Some(E::Goal(*id)),
             Op::RemoveCybersecurityClaim { id } => Some(E::Claim(*id)),
             Op::RemoveAssumption { id } => Some(E::Assumption(*id)),
+            Op::RemoveSharedStep { id } => Some(E::SharedStep(*id)),
             _ => None,
         };
         // Condition links block removal (the inverse cannot restore them), so
@@ -1462,16 +1676,17 @@ fn note_ops(
         let (cur_via, cur_type) = was.map_or((None, None), |(i, t)| {
             (project.step_via(t, i), project.step_attack_type(t, i))
         });
+        let target = step_op_target(project, tree, *node);
         if cur_via != *via {
             ops.push(Op::SetStepVia {
-                target: StepTarget::Step(tree, *node),
+                target,
                 via: *via,
                 provenance: p.clone(),
             });
         }
         if cur_type != *attack_type {
             ops.push(Op::SetStepAttackType {
-                target: StepTarget::Step(tree, *node),
+                target,
                 attack_type: *attack_type,
                 provenance: p.clone(),
             });
@@ -1589,12 +1804,12 @@ impl Edit {
                 provenance: p,
             }],
             Edit::SetStepFeasibility { tree, node, level } => vec![Op::SetStepFeasibility {
-                target: StepTarget::Step(*tree, *node),
+                target: step_op_target(project, *tree, *node),
                 level: feasibility(project, *level)?,
                 provenance: p,
             }],
             Edit::SetStepVia { tree, node, via } => vec![Op::SetStepVia {
-                target: StepTarget::Step(*tree, *node),
+                target: step_op_target(project, *tree, *node),
                 via: *via,
                 provenance: p,
             }],
@@ -1603,7 +1818,7 @@ impl Edit {
                 node,
                 attack_type,
             } => vec![Op::SetStepAttackType {
-                target: StepTarget::Step(*tree, *node),
+                target: step_op_target(project, *tree, *node),
                 attack_type: attack_type
                     .map(|i| m.attack_types().nth(i).ok_or(EditError::UnknownChoice))
                     .transpose()?,
@@ -1628,7 +1843,7 @@ impl Edit {
                     None => None,
                 };
                 vec![Op::SetStepFactor {
-                    target: StepTarget::Step(*tree, *node),
+                    target: step_op_target(project, *tree, *node),
                     factor: f,
                     level,
                     provenance: p,
@@ -1646,6 +1861,121 @@ impl Edit {
                 feasibility: feasibility(project, *level)?,
                 provenance: p,
             }],
+
+            Edit::AddSharedStep { id, name: n } => vec![Op::AddSharedStep {
+                id: *id,
+                name: name(n)?,
+                provenance: p,
+            }],
+            Edit::RenameSharedStep {
+                shared_step,
+                name: n,
+            } => vec![Op::RenameSharedStep {
+                id: *shared_step,
+                name: name(n)?,
+                provenance: p,
+            }],
+            Edit::RemoveSharedStep { shared_step } => {
+                let shared_idx = project
+                    .shared_step_idx(shared_step)
+                    .ok_or(EditError::Missing)?;
+                let mut users = Vec::new();
+                for (t_idx, tree_id, tree) in project.attack_trees() {
+                    for (n_idx, node_id, _) in tree.iter() {
+                        if project.step_shared(t_idx, n_idx) == Some(shared_idx) {
+                            users.push((tree_id, node_id));
+                        }
+                    }
+                }
+                users.sort_by_key(|(tree, node)| (*tree, *node));
+                let mut ops = Vec::new();
+                for (tree, node) in users {
+                    ops.extend(unshare_step_ops(project, tree, node, &p));
+                }
+                ops.extend(transfer_step_fields_ops(
+                    project,
+                    StepTarget::Shared(*shared_step),
+                    StepTarget::Shared(*shared_step),
+                    true,
+                    &p,
+                ));
+                ops.push(Op::RemoveSharedStep { id: *shared_step });
+                ops
+            }
+            Edit::UseSharedStep {
+                tree,
+                node,
+                shared_step,
+            } => vec![Op::UseSharedStep {
+                tree: *tree,
+                node: *node,
+                step: *shared_step,
+                provenance: p,
+            }],
+            Edit::UnuseSharedStep { tree, node } => {
+                if !matches!(step_op_target(project, *tree, *node), StepTarget::Shared(_)) {
+                    return Err(EditError::Missing);
+                }
+                unshare_step_ops(project, *tree, *node, &p)
+            }
+            Edit::SetSharedStepFeasibility { shared_step, level } => vec![Op::SetStepFeasibility {
+                target: StepTarget::Shared(*shared_step),
+                level: *level,
+                provenance: p,
+            }],
+            Edit::SetSharedStepFactor {
+                shared_step,
+                factor,
+                level,
+            } => vec![Op::SetStepFactor {
+                target: StepTarget::Shared(*shared_step),
+                factor: *factor,
+                level: *level,
+                provenance: p,
+            }],
+            Edit::SetSharedStepVia { shared_step, via } => vec![Op::SetStepVia {
+                target: StepTarget::Shared(*shared_step),
+                via: *via,
+                provenance: p,
+            }],
+            Edit::SetSharedStepAttackType {
+                shared_step,
+                attack_type,
+            } => vec![Op::SetStepAttackType {
+                target: StepTarget::Shared(*shared_step),
+                attack_type: *attack_type,
+                provenance: p,
+            }],
+            Edit::MakeShared { tree, node, id } => {
+                let t_idx = project.attack_tree_idx(tree).ok_or(EditError::Missing)?;
+                let attack_tree = project.attack_tree(t_idx).ok_or(EditError::Missing)?;
+                let n_idx = attack_tree.idx_of(node).ok_or(EditError::Missing)?;
+                let step = attack_tree.get(n_idx).ok_or(EditError::Missing)?;
+                if step.gate_kind().is_some() || project.step_shared(t_idx, n_idx).is_some() {
+                    return Err(EditError::Missing);
+                }
+                let local = StepTarget::Step(*tree, *node);
+                let shared = StepTarget::Shared(*id);
+                let mut ops = vec![Op::AddSharedStep {
+                    id: *id,
+                    name: name(step.label())?,
+                    provenance: p.clone(),
+                }];
+                ops.extend(transfer_step_fields_ops(project, local, shared, true, &p));
+                ops.push(Op::UseSharedStep {
+                    tree: *tree,
+                    node: *node,
+                    step: *id,
+                    provenance: p,
+                });
+                ops
+            }
+            Edit::Unshare { tree, node } => {
+                if !matches!(step_op_target(project, *tree, *node), StepTarget::Shared(_)) {
+                    return Err(EditError::Missing);
+                }
+                unshare_step_ops(project, *tree, *node, &p)
+            }
 
             Edit::AddAsset {
                 id,
@@ -3321,6 +3651,11 @@ impl Edit {
                 .threat_scenario_idx(id)
                 .and_then(|i| project.threat_scenario(i))
         };
+        let shared = |id: &SharedStepId| {
+            project
+                .shared_step_idx(id)
+                .and_then(|i| project.shared_step(i))
+        };
         match self {
             Edit::SetAssetProperty {
                 asset,
@@ -3446,6 +3781,35 @@ impl Edit {
                 .zip(project.assumption_idx(assumption))
                 .is_some_and(|(c, a_idx)| c.assumptions().contains(&a_idx) == *linked),
             Edit::RemoveAssumption { assumption } => project.assumption_idx(assumption).is_none(),
+            Edit::RenameSharedStep { shared_step, name } => {
+                shared(shared_step).is_some_and(|s| s.name() == name.trim())
+            }
+            Edit::RemoveSharedStep { shared_step } => {
+                project.shared_step_idx(shared_step).is_none()
+            }
+            Edit::UseSharedStep {
+                tree,
+                node,
+                shared_step,
+            } => linked_shared_step(project, *tree, *node) == Some(*shared_step),
+            Edit::UnuseSharedStep { tree, node } => {
+                linked_shared_step(project, *tree, *node).is_none()
+            }
+            Edit::SetSharedStepFeasibility { shared_step, level } => {
+                shared(shared_step).is_some_and(|s| s.feasibility() == *level)
+            }
+            Edit::SetSharedStepFactor {
+                shared_step,
+                factor,
+                level,
+            } => shared(shared_step).is_some_and(|s| s.factor(*factor) == *level),
+            Edit::SetSharedStepVia { shared_step, via } => project
+                .shared_step_idx(shared_step)
+                .is_some_and(|i| project.shared_step_via(i) == *via),
+            Edit::SetSharedStepAttackType {
+                shared_step,
+                attack_type,
+            } => shared(shared_step).is_some_and(|s| s.attack_type() == *attack_type),
             Edit::SetAttackFilter { filter } => project.attack_filter() == filter,
             _ => false,
         }
@@ -3517,6 +3881,7 @@ impl Edit {
                 Some(Selection::Threat(*id))
             }
             Edit::NewTree { id, .. } => Some(Selection::Tree(*id)),
+            Edit::AddSharedStep { id, .. } => Some(Selection::SharedStep(*id)),
             Edit::AddTreeChild { tree, id, .. }
             | Edit::BranchStepToGate { tree, id, .. }
             | Edit::InsertParentGate { tree, id, .. }

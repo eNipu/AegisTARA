@@ -15,8 +15,8 @@ use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
     AssetId, AssumptionId, AttackTree, ClaimId, ComponentId, ConditionId, ControlId, DamageId,
     DataFlowId, ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId, ItemRef,
-    Methodology, Node, NodeId, Op, PartyId, PartyKind, Provenance, RiskTreatment, StepRef,
-    StepTarget, ThreatId, TreeId, TrustBoundaryId,
+    Methodology, Node, NodeId, Op, PartyId, PartyKind, Provenance, RiskTreatment, SharedStepId,
+    StepRef, StepTarget, ThreatId, TreeId, TrustBoundaryId,
 };
 
 const NEW_KEYS: &[&str] = &[
@@ -26,6 +26,9 @@ const NEW_KEYS: &[&str] = &[
     "inspector-explain-why",
     "inspector-used-by",
     "inspector-used-in",
+    "inspector-shared-step-line-one",
+    "inspector-shared-step-line",
+    "inspector-rev-shared-step-used-in",
     "inspector-deciding-step",
     "inspector-deciding-damage",
     "inspector-deciding-child",
@@ -78,6 +81,14 @@ fn all_inspector_fluent_keys_and_reverse_labels_resolve() {
         }
         let cond_label = reverse_relation_label(RelationKey::STEP_CONDITIONS, &catalog);
         assert_eq!(cond_label, catalog.tr("inspector-rev-conditions"));
+        assert_eq!(
+            reverse_relation_label(RelationKey::SHARED_STEP_USED_IN, &catalog),
+            catalog.tr("inspector-rev-shared-step-used-in")
+        );
+        assert_eq!(
+            reverse_relation_label(RelationKey::SHARED_STEP_VIA, &catalog),
+            catalog.tr("inspector-rev-step-via")
+        );
     }
 }
 
@@ -1000,4 +1011,96 @@ fn assumption_inspector_relations_and_excluded_tree_step_causes() {
             .iter()
             .any(|f| f.label == "Holds" && f.value == "no")
     );
+}
+
+#[test]
+fn shared_step_selection_has_visual_id_ratings_and_forward_relations() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let mut ws = Workspace::empty(Arc::clone(&m));
+    let shared = SharedStepId::new_v7();
+    let component = ComponentId::new_v7();
+    let tree_id = TreeId::new_v7();
+    let root = NodeId::new_v7();
+    let step = NodeId::new_v7();
+    let mut tree = AttackTree::new(root, Node::gate(GateKind::Or, "Root")).expect("root");
+    tree.add_child(tree.root(), step, Node::step("Linked"))
+        .expect("step");
+    let factor = m.feasibility_factors().next().expect("factor");
+    let level = m.feasibility_level("high").expect("high");
+    let factor_level = m.factor_levels(factor).next().expect("factor level");
+    let attack_type = m.attack_types().next().expect("attack type");
+    ws.apply(
+        vec![
+            Op::AddComponent {
+                id: component,
+                name: "Gateway".into(),
+                parent: None,
+                provenance: prov(),
+            },
+            Op::AddSharedStep {
+                id: shared,
+                name: "Reusable".into(),
+                provenance: prov(),
+            },
+            Op::SetStepFeasibility {
+                target: StepTarget::Shared(shared),
+                level: Some(level),
+                provenance: prov(),
+            },
+            Op::SetStepFactor {
+                target: StepTarget::Shared(shared),
+                factor,
+                level: Some(factor_level),
+                provenance: prov(),
+            },
+            Op::SetStepVia {
+                target: StepTarget::Shared(shared),
+                via: Some(ItemRef::Component(component)),
+                provenance: prov(),
+            },
+            Op::SetStepAttackType {
+                target: StepTarget::Shared(shared),
+                attack_type: Some(attack_type),
+                provenance: prov(),
+            },
+            Op::AddAttackTree {
+                id: tree_id,
+                tree,
+                step_feasibility: Vec::new(),
+                provenance: prov(),
+            },
+            Op::UseSharedStep {
+                tree: tree_id,
+                node: step,
+                step: shared,
+                provenance: prov(),
+            },
+            Op::SetDescription {
+                target: ElementRef::SharedStep(shared),
+                text: "Shared description".into(),
+                provenance: prov(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("shared fixture");
+    let catalog = Catalog::load(Language::En);
+    let view = inspector_view(&ws, Selection::SharedStep(shared), &catalog).expect("shared view");
+    assert_eq!(view.visual_id, "L00");
+    assert_eq!(view.name, "Reusable");
+    assert_eq!(view.kind, "Shared step");
+    assert_eq!(view.description, "Shared description");
+    assert!(view.changed.contains("tester"));
+    assert!(view.fields.len() >= 4);
+    assert!(view.relations.iter().any(|row| {
+        row.key == RelationKey::SHARED_STEP_VIA
+            && row.chips[0].target == Selection::Component(component)
+    }));
+    let used = view
+        .relations
+        .iter()
+        .find(|row| row.key == RelationKey::SHARED_STEP_USED_IN)
+        .expect("used-in row");
+    assert_eq!(used.chips[0].target, Selection::TreeNode(tree_id, step));
+    assert!(inspector_view(&ws, Selection::SharedStep(SharedStepId::new_v7()), &catalog).is_none());
 }

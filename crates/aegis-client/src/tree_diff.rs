@@ -170,6 +170,7 @@ pub(crate) fn clear_step_ops(
     let Some(idx) = t.idx_of(&node) else {
         return Vec::new();
     };
+    let shared = project.step_shared_id(t_idx, idx);
     let mut ops = Vec::new();
     if project.review_marked(tree, node) {
         ops.push(Op::SetReviewMark {
@@ -179,14 +180,21 @@ pub(crate) fn clear_step_ops(
             provenance: p.clone(),
         });
     }
-    if project.step_feasibility(t_idx, idx).is_some() {
+    if shared.is_some() {
+        ops.push(Op::UnuseSharedStep {
+            tree,
+            node,
+            provenance: p.clone(),
+        });
+    }
+    if shared.is_none() && project.step_feasibility(t_idx, idx).is_some() {
         ops.push(Op::SetStepFeasibility {
             target: StepTarget::Step(tree, node),
             level: None,
             provenance: p.clone(),
         });
     }
-    for factor in m.feasibility_factors() {
+    for factor in m.feasibility_factors().filter(|_| shared.is_none()) {
         if project.step_factor(t_idx, idx, factor).is_some() {
             ops.push(Op::SetStepFactor {
                 target: StepTarget::Step(tree, node),
@@ -207,14 +215,14 @@ pub(crate) fn clear_step_ops(
             });
         }
     }
-    if project.step_via(t_idx, idx).is_some() {
+    if shared.is_none() && project.step_via(t_idx, idx).is_some() {
         ops.push(Op::SetStepVia {
             target: StepTarget::Step(tree, node),
             via: None,
             provenance: p.clone(),
         });
     }
-    if project.step_attack_type(t_idx, idx).is_some() {
+    if shared.is_none() && project.step_attack_type(t_idx, idx).is_some() {
         ops.push(Op::SetStepAttackType {
             target: StepTarget::Step(tree, node),
             attack_type: None,
@@ -248,15 +256,26 @@ pub(crate) fn transfer_step_ops(
     let Some(idx) = t.idx_of(&from_node) else {
         return Vec::new();
     };
+    let shared = project.step_shared_id(t_idx, idx);
     let mut ops = Vec::new();
-    if let Some(level) = project.step_feasibility(t_idx, idx) {
+    if let Some(shared) = shared {
+        ops.push(Op::UseSharedStep {
+            tree,
+            node: to_node,
+            step: shared,
+            provenance: p.clone(),
+        });
+    }
+    if shared.is_none()
+        && let Some(level) = project.step_feasibility(t_idx, idx)
+    {
         ops.push(Op::SetStepFeasibility {
             target: StepTarget::Step(tree, to_node),
             level: Some(level),
             provenance: p.clone(),
         });
     }
-    for factor in m.feasibility_factors() {
+    for factor in m.feasibility_factors().filter(|_| shared.is_none()) {
         if let Some(level) = project.step_factor(t_idx, idx, factor) {
             ops.push(Op::SetStepFactor {
                 target: StepTarget::Step(tree, to_node),
@@ -277,14 +296,18 @@ pub(crate) fn transfer_step_ops(
             });
         }
     }
-    if let Some(via) = project.step_via(t_idx, idx) {
+    if shared.is_none()
+        && let Some(via) = project.step_via(t_idx, idx)
+    {
         ops.push(Op::SetStepVia {
             target: StepTarget::Step(tree, to_node),
             via: Some(via),
             provenance: p.clone(),
         });
     }
-    if let Some(attack_type) = project.step_attack_type(t_idx, idx) {
+    if shared.is_none()
+        && let Some(attack_type) = project.step_attack_type(t_idx, idx)
+    {
         ops.push(Op::SetStepAttackType {
             target: StepTarget::Step(tree, to_node),
             attack_type: Some(attack_type),

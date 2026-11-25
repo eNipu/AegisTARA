@@ -2410,6 +2410,9 @@ pub fn selection_visual_id(project: &Project, s: Selection) -> String {
         Selection::Assumption(id) => project
             .assumption_idx(&id)
             .and_then(|i| project.assumption_visual_id(i)),
+        Selection::SharedStep(id) => project
+            .shared_step_idx(&id)
+            .and_then(|i| project.shared_step_visual_id(i)),
     }
     .unwrap_or_default()
 }
@@ -2478,6 +2481,10 @@ fn named(project: &Project, s: Selection) -> &str {
             .assumption_idx(&id)
             .and_then(|i| project.assumption(i))
             .map(aegis_model::Assumption::name),
+        Selection::SharedStep(id) => project
+            .shared_step_idx(&id)
+            .and_then(|i| project.shared_step(i))
+            .map(aegis_model::SharedStep::name),
     }
     .unwrap_or("?")
 }
@@ -3331,7 +3338,7 @@ pub fn page_of(s: Selection) -> crate::view::Page {
         Selection::Asset(_) => Page::Assets,
         Selection::Damage(_) => Page::Damage,
         Selection::Threat(_) => Page::Threats,
-        Selection::Tree(_) | Selection::TreeNode(_, _) => Page::Trees,
+        Selection::Tree(_) | Selection::TreeNode(_, _) | Selection::SharedStep(_) => Page::Trees,
         Selection::Control(_) => Page::Controls,
         Selection::Goal(_) | Selection::Claim(_) | Selection::Party(_) => Page::Goals,
         Selection::Condition(_) => Page::Configuration,
@@ -3370,6 +3377,8 @@ pub fn select(ui: &mut UiState, s: Selection) {
             ui.selected_assumption = Some(id);
             ui.page = Page::Assumptions;
         }
+        // Shared steps have no page selection state until 141f.
+        Selection::SharedStep(_) => {}
         Selection::Condition(id) => ui.selected_condition = Some(id),
     }
 }

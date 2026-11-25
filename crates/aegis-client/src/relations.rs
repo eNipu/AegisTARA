@@ -42,6 +42,8 @@ impl RelationKey {
     pub const ASSUMPTION_EXCLUDES: Self = Self("assumption-excludes");
     pub const CONTROL_TARGETS: Self = Self("control-targets");
     pub const STEP_VIA: Self = Self("step-via");
+    pub const SHARED_STEP_VIA: Self = Self("shared-step-via");
+    pub const SHARED_STEP_USED_IN: Self = Self("shared-step-used-in");
     pub const STEP_MITIGATIONS: Self = Self("step-mitigations");
     pub const DATAFLOW_FROM: Self = Self("dataflow-from");
     pub const DATAFLOW_TO: Self = Self("dataflow-to");
@@ -64,6 +66,7 @@ pub enum ElementKind {
     Threat,
     Tree,
     Step,
+    SharedStep,
     Control,
     Goal,
     Claim,
@@ -84,6 +87,7 @@ impl ElementKind {
         Self::Threat,
         Self::Tree,
         Self::Step,
+        Self::SharedStep,
         Self::Control,
         Self::Goal,
         Self::Claim,
@@ -105,6 +109,7 @@ impl ElementKind {
             Selection::Threat(_) => Self::Threat,
             Selection::Tree(_) => Self::Tree,
             Selection::TreeNode(_, _) => Self::Step,
+            Selection::SharedStep(_) => Self::SharedStep,
             Selection::Control(_) => Self::Control,
             Selection::Goal(_) => Self::Goal,
             Selection::Claim(_) => Self::Claim,
@@ -162,6 +167,8 @@ pub static RELATIONS: &[Relation] = &[
     rel(RelationKey::CLAIM_RESPONSIBLE, ElementKind::Claim, &[ElementKind::Party], "relation-claim-responsible", true, read_claim_responsible, Some(link_claim_responsible), Some(unlink_claim_responsible)),
     rel(RelationKey::CONTROL_TARGETS, ElementKind::Control, ITEM, "relation-control-targets", true, read_control_targets, Some(link_control_targets), Some(unlink_control_targets)),
     rel(RelationKey::STEP_VIA, ElementKind::Step, ITEM, "relation-step-via", false, read_step_via, Some(link_step_via), Some(unlink_step_via)),
+    rel(RelationKey::SHARED_STEP_VIA, ElementKind::SharedStep, ITEM, "relation-step-via", false, read_shared_step_via, Some(link_shared_step_via), Some(unlink_shared_step_via)),
+    rel(RelationKey::SHARED_STEP_USED_IN, ElementKind::SharedStep, &[ElementKind::Step], "inspector-used-in", true, read_shared_step_used_in, None, None),
     rel(RelationKey::STEP_MITIGATIONS, ElementKind::Step, &[ElementKind::Control], "relation-step-mitigations", true, read_step_mitigations, None, None),
     rel(RelationKey::DATAFLOW_FROM, ElementKind::DataFlow, &[ElementKind::Component], "relation-dataflow-from", false, read_dataflow_from, None, None),
     rel(RelationKey::DATAFLOW_TO, ElementKind::DataFlow, &[ElementKind::Component], "relation-dataflow-to", false, read_dataflow_to, None, None),
@@ -209,6 +216,7 @@ pub fn elements_of_kind(project: &Project, kind: ElementKind) -> Vec<Selection> 
         ElementKind::Threat => project.threat_scenarios().map(|(_, id, _)| Selection::Threat(id)).collect(),
         ElementKind::Tree => project.attack_trees().map(|(_, id, _)| Selection::Tree(id)).collect(),
         ElementKind::Step => project.attack_trees().flat_map(|(_, id, t)| t.iter().filter(|(_, _, n)| n.gate_kind().is_none()).map(move |(_, n, _)| Selection::TreeNode(id, n))).collect(),
+        ElementKind::SharedStep => project.shared_steps().map(|(_, id, _)| Selection::SharedStep(id)).collect(),
         ElementKind::Control => project.security_controls().map(|(_, id, _)| Selection::Control(id)).collect(),
         ElementKind::Goal => project.cybersecurity_goals().map(|(_, id, _)| Selection::Goal(id)).collect(),
         ElementKind::Claim => project.cybersecurity_claims().map(|(_, id, _)| Selection::Claim(id)).collect(),
@@ -372,7 +380,46 @@ fn read_control_targets(project: &Project, from: Selection) -> Vec<Selection> {
 }
 #[rustfmt::skip]
 fn read_step_via(project: &Project, from: Selection) -> Vec<Selection> {
-    step(project, from).and_then(|(tree, node)| project.step_via(tree, node)).and_then(item_selection).into_iter().collect()
+    step(project, from)
+        .filter(|(tree, node)| project.step_shared(*tree, *node).is_none())
+        .and_then(|(tree, node)| project.step_via(tree, node))
+        .and_then(item_selection)
+        .into_iter()
+        .collect()
+}
+
+fn read_shared_step_via(project: &Project, from: Selection) -> Vec<Selection> {
+    let Selection::SharedStep(id) = from else {
+        return Vec::new();
+    };
+    project
+        .shared_step_idx(&id)
+        .and_then(|idx| project.shared_step_via(idx))
+        .and_then(item_selection)
+        .into_iter()
+        .collect()
+}
+
+fn read_shared_step_used_in(project: &Project, from: Selection) -> Vec<Selection> {
+    let Selection::SharedStep(id) = from else {
+        return Vec::new();
+    };
+    let Some(shared) = project.shared_step_idx(&id) else {
+        return Vec::new();
+    };
+    let mut users = Vec::new();
+    for (tree_idx, tree_id, tree) in project.attack_trees() {
+        for (node_idx, node_id, _) in tree.iter() {
+            if project.step_shared(tree_idx, node_idx) == Some(shared) {
+                users.push((tree_id, node_id));
+            }
+        }
+    }
+    users.sort_by_key(|(tree, node)| (*tree, *node));
+    users
+        .into_iter()
+        .map(|(tree, node)| Selection::TreeNode(tree, node))
+        .collect()
 }
 #[rustfmt::skip]
 fn read_step_mitigations(project: &Project, from: Selection) -> Vec<Selection> {
@@ -549,6 +596,24 @@ fn link_step_via(from: Selection, to: Selection) -> Option<Edit> {
 fn unlink_step_via(from: Selection, to: Selection) -> Option<Edit> {
     match (from, selection_item(to)) { (Selection::TreeNode(tree, node), Some(_)) => Some(Edit::SetStepVia { tree, node, via: None }), _ => None }
 }
+fn link_shared_step_via(from: Selection, to: Selection) -> Option<Edit> {
+    match (from, selection_item(to)) {
+        (Selection::SharedStep(id), Some(via)) => Some(Edit::SetSharedStepVia {
+            shared_step: id,
+            via: Some(via),
+        }),
+        _ => None,
+    }
+}
+fn unlink_shared_step_via(from: Selection, to: Selection) -> Option<Edit> {
+    match (from, selection_item(to)) {
+        (Selection::SharedStep(id), Some(_)) => Some(Edit::SetSharedStepVia {
+            shared_step: id,
+            via: None,
+        }),
+        _ => None,
+    }
+}
 
 #[rustfmt::skip]
 fn link_dataflow_interface(from: Selection, to: Selection) -> Option<Edit> {
@@ -590,7 +655,7 @@ mod tests {
 
     use aegis_model::{
         AssetId, ClaimId, ComponentId, ControlId, DamageId, DataFlowId, GoalId, InterfaceId,
-        Methodology, NodeId, PartyId, ThreatId, TreeId, TrustBoundaryId,
+        Methodology, NodeId, PartyId, SharedStepId, ThreatId, TreeId, TrustBoundaryId,
     };
 
     use crate::workspace::{Origin, Workspace};
@@ -615,6 +680,7 @@ mod tests {
             Selection::Threat(ThreatId::new_v7()),
             Selection::Tree(TreeId::new_v7()),
             Selection::TreeNode(TreeId::new_v7(), NodeId::new_v7()),
+            Selection::SharedStep(SharedStepId::new_v7()),
             Selection::Control(ControlId::new_v7()),
             Selection::Goal(GoalId::new_v7()),
             Selection::Claim(ClaimId::new_v7()),

@@ -1,0 +1,642 @@
+//! Shared-step client edits, cleanup, inspector routing, and exact undo (141e).
+
+use std::sync::Arc;
+
+use aegis_client::commands::Edit;
+use aegis_client::i18n::{Catalog, Language};
+use aegis_client::inspector::inspector_view;
+use aegis_client::relations::RelationKey;
+use aegis_client::view::Selection;
+use aegis_client::workspace::{Origin, Workspace};
+use aegis_model::{
+    AttackTree, AttackType, ComponentId, ElementRef, FactorLevel, FeasibilityFactor,
+    FeasibilityLevel, GateKind, ItemRef, Methodology, Node, NodeId, Op, Project, Provenance,
+    SharedStepId, StepTarget, TreeId,
+};
+
+fn prov() -> Provenance {
+    Provenance::human("shared-test", 1_792_956_600_000)
+}
+
+fn apply(ws: &mut Workspace, edit: Edit) {
+    let ops = edit.to_ops(ws.project(), "shared-test", 1).expect("ops");
+    assert!(!ops.is_empty(), "edit unexpectedly unchanged: {edit:?}");
+    ws.apply(ops.clone(), Origin::Edit)
+        .unwrap_or_else(|e| panic!("edit applies: {e}\n{ops:?}"));
+}
+
+fn exact_undo(ws: &mut Workspace, edit: Edit) {
+    let before = ws.project().clone();
+    apply(ws, edit);
+    assert!(*ws.project() != before, "edit did not change the project");
+    ws.undo().expect("single undo");
+    assert!(
+        *ws.project() == before,
+        "single undo did not restore the project"
+    );
+}
+
+fn empty() -> Workspace {
+    Workspace::empty(Arc::new(Methodology::iso21434_r155().expect("builtin")))
+}
+
+fn add_component(ws: &mut Workspace, name: &str) -> ComponentId {
+    let id = ComponentId::new_v7();
+    ws.apply(
+        vec![Op::AddComponent {
+            id,
+            name: name.into(),
+            parent: None,
+            provenance: prov(),
+        }],
+        Origin::Edit,
+    )
+    .expect("component");
+    id
+}
+
+fn add_tree(ws: &mut Workspace, tree: AttackTree) -> TreeId {
+    let id = TreeId::new_v7();
+    ws.apply(
+        vec![Op::AddAttackTree {
+            id,
+            tree,
+            step_feasibility: Vec::new(),
+            provenance: prov(),
+        }],
+        Origin::Edit,
+    )
+    .expect("tree");
+    id
+}
+
+fn gate_tree(labels: &[&str]) -> AttackTree {
+    let mut tree =
+        AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "Root")).expect("root");
+    for label in labels {
+        tree.add_child(tree.root(), NodeId::new_v7(), Node::step(*label))
+            .expect("child");
+    }
+    tree
+}
+
+fn first_child(tree: &AttackTree) -> NodeId {
+    tree.id_of(tree.children(tree.root())[0]).expect("child id")
+}
+
+fn rate_local(ws: &mut Workspace, tree: TreeId, node: NodeId, via: ComponentId) {
+    let m = ws.project().methodology();
+    let factor = m.feasibility_factors().next().expect("factor");
+    let level = m.feasibility_level("high").expect("high");
+    let factor_level = m.factor_levels(factor).next().expect("factor level");
+    let attack_type = m.attack_type("debug-access").expect("attack type");
+    let level_index = m
+        .feasibility_levels()
+        .position(|(l, _, _)| l == level)
+        .expect("index");
+    let factor_index = m
+        .feasibility_factors()
+        .position(|f| f == factor)
+        .expect("factor index");
+    let factor_level_index = m
+        .factor_levels(factor)
+        .position(|l| l == factor_level)
+        .expect("level index");
+    let attack_index = m
+        .attack_types()
+        .position(|a| a == attack_type)
+        .expect("attack index");
+    for edit in [
+        Edit::SetStepFeasibility {
+            tree,
+            node,
+            level: Some(level_index),
+        },
+        Edit::SetStepFactor {
+            tree,
+            node,
+            factor: factor_index,
+            level: Some(factor_level_index),
+        },
+        Edit::SetStepVia {
+            tree,
+            node,
+            via: Some(ItemRef::Component(via)),
+        },
+        Edit::SetStepAttackType {
+            tree,
+            node,
+            attack_type: Some(attack_index),
+        },
+    ] {
+        apply(ws, edit);
+    }
+    let t = ws.project().attack_tree_idx(&tree).expect("tree");
+    let n = ws
+        .project()
+        .attack_tree(t)
+        .expect("tree")
+        .idx_of(&node)
+        .expect("node");
+    assert_eq!(ws.project().step_feasibility(t, n), Some(level));
+    assert_eq!(ws.project().step_factor(t, n, factor), Some(factor_level));
+    assert_eq!(ws.project().step_via(t, n), Some(ItemRef::Component(via)));
+    assert_eq!(ws.project().step_attack_type(t, n), Some(attack_type));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn assert_ratings(
+    project: &Project,
+    tree: TreeId,
+    node: NodeId,
+    feasibility: Option<FeasibilityLevel>,
+    factor: FeasibilityFactor,
+    factor_level: Option<FactorLevel>,
+    via: Option<ItemRef>,
+    attack_type: Option<AttackType>,
+) {
+    let t = project.attack_tree_idx(&tree).expect("tree");
+    let n = project
+        .attack_tree(t)
+        .expect("tree")
+        .idx_of(&node)
+        .expect("node");
+    assert_eq!(project.step_feasibility(t, n), feasibility);
+    assert_eq!(project.step_factor(t, n, factor), factor_level);
+    assert_eq!(project.step_via(t, n), via);
+    assert_eq!(project.step_attack_type(t, n), attack_type);
+}
+
+fn linked_workspace(extra_trees: usize) -> (Workspace, TreeId, NodeId, SharedStepId, ComponentId) {
+    let mut ws = empty();
+    let component = add_component(&mut ws, "Gateway");
+    let tree = gate_tree(&["Linked"]);
+    let tree_id = add_tree(&mut ws, tree.clone());
+    let node = first_child(&tree);
+    rate_local(&mut ws, tree_id, node, component);
+    let shared = SharedStepId::new_v7();
+    apply(
+        &mut ws,
+        Edit::MakeShared {
+            tree: tree_id,
+            node,
+            id: shared,
+        },
+    );
+    for _ in 0..extra_trees {
+        let tree = gate_tree(&["Other"]);
+        let id = add_tree(&mut ws, tree.clone());
+        apply(
+            &mut ws,
+            Edit::UseSharedStep {
+                tree: id,
+                node: first_child(&tree),
+                shared_step: shared,
+            },
+        );
+    }
+    (ws, tree_id, node, shared, component)
+}
+
+#[test]
+fn shared_note_counts_distinct_trees_and_localizes_singular_plural() {
+    for (tree_count, first_children, expected) in [
+        (1, 2, "Shared step L00, used in 1 tree"),
+        (2, 1, "Shared step L00, used in 2 trees"),
+        (5, 1, "Shared step L00, used in 5 trees"),
+    ] {
+        let mut ws = empty();
+        let shared = SharedStepId::new_v7();
+        apply(
+            &mut ws,
+            Edit::AddSharedStep {
+                id: shared,
+                name: "Reusable".into(),
+            },
+        );
+        let mut first_node = None;
+        for tree_index in 0..tree_count {
+            let count = if tree_index == 0 { first_children } else { 1 };
+            let tree = gate_tree(&vec!["Step"; count]);
+            let tree_id = add_tree(&mut ws, tree.clone());
+            for child in tree.children(tree.root()) {
+                let node = tree.id_of(*child).expect("node");
+                apply(
+                    &mut ws,
+                    Edit::UseSharedStep {
+                        tree: tree_id,
+                        node,
+                        shared_step: shared,
+                    },
+                );
+                if tree_index == 0 {
+                    first_node = Some(node);
+                }
+            }
+        }
+        let view = inspector_view(
+            &ws,
+            Selection::TreeNode(
+                ws.project().attack_trees().next().expect("tree").1,
+                first_node.expect("first node"),
+            ),
+            &Catalog::load(Language::En),
+        )
+        .expect("linked view");
+        assert_eq!(view.shared_note.as_deref(), Some(expected));
+        let ja =
+            inspector_view(&ws, view.selection, &Catalog::load(Language::Ja)).expect("linked view");
+        assert_eq!(
+            ja.shared_note.as_deref(),
+            Some(match tree_count {
+                1 => "共通ステップ L00、1 件のツリーで使用",
+                2 => "共通ステップ L00、2 件のツリーで使用",
+                _ => "共通ステップ L00、5 件のツリーで使用",
+            })
+        );
+    }
+}
+
+#[test]
+fn make_shared_and_unshare_preserve_all_rating_fields_with_exact_undo() {
+    let (mut ws, tree, node, shared, component) = linked_workspace(0);
+    let m = ws.project().methodology();
+    let factor = m.feasibility_factors().next().expect("factor");
+    let high = m.feasibility_level("high").expect("high");
+    let factor_level = m.factor_levels(factor).next().expect("factor level");
+    let attack_type = m.attack_type("debug-access").expect("attack type");
+    let via = ItemRef::Component(component);
+
+    let before = ws.project().clone();
+    exact_undo(&mut ws, Edit::Unshare { tree, node });
+    assert_eq!(ws.project(), &before);
+    apply(&mut ws, Edit::Unshare { tree, node });
+    assert_ratings(
+        ws.project(),
+        tree,
+        node,
+        Some(high),
+        factor,
+        Some(factor_level),
+        Some(via),
+        Some(attack_type),
+    );
+    let shared_idx = ws.project().shared_step_idx(&shared).expect("shared");
+    let s = ws.project().shared_step(shared_idx).expect("shared");
+    assert_eq!(s.feasibility(), Some(high));
+    assert_eq!(s.factor(factor), Some(factor_level));
+    assert_eq!(ws.project().shared_step_via(shared_idx), Some(via));
+    assert_eq!(s.attack_type(), Some(attack_type));
+}
+
+#[test]
+fn make_shared_is_one_exactly_undoable_edit() {
+    let mut ws = empty();
+    let component = add_component(&mut ws, "Gateway");
+    let tree = gate_tree(&["Local"]);
+    let tree_id = add_tree(&mut ws, tree.clone());
+    let node = first_child(&tree);
+    rate_local(&mut ws, tree_id, node, component);
+    let shared = SharedStepId::new_v7();
+    exact_undo(
+        &mut ws,
+        Edit::MakeShared {
+            tree: tree_id,
+            node,
+            id: shared,
+        },
+    );
+    assert!(ws.project().shared_step_idx(&shared).is_none());
+    apply(
+        &mut ws,
+        Edit::MakeShared {
+            tree: tree_id,
+            node,
+            id: shared,
+        },
+    );
+    let t = ws.project().attack_tree_idx(&tree_id).expect("tree");
+    let n = ws
+        .project()
+        .attack_tree(t)
+        .expect("tree")
+        .idx_of(&node)
+        .expect("node");
+    assert_eq!(ws.project().step_shared_id(t, n), Some(shared));
+}
+
+#[test]
+fn remove_shared_step_restores_description_translation_and_every_user() {
+    let (mut ws, _, _, shared, _) = linked_workspace(2);
+    apply(
+        &mut ws,
+        Edit::SetDescription {
+            target: ElementRef::SharedStep(shared),
+            text: "Reusable description".into(),
+        },
+    );
+    apply(
+        &mut ws,
+        Edit::SetDescriptionTranslation {
+            target: ElementRef::SharedStep(shared),
+            lang: "ja".into(),
+            text: "共通の説明".into(),
+        },
+    );
+    exact_undo(
+        &mut ws,
+        Edit::RemoveSharedStep {
+            shared_step: shared,
+        },
+    );
+    apply(
+        &mut ws,
+        Edit::RemoveSharedStep {
+            shared_step: shared,
+        },
+    );
+    assert!(ws.project().shared_step_idx(&shared).is_none());
+    for (t, _, tree) in ws.project().attack_trees() {
+        for (n, _, _) in tree.iter() {
+            assert!(ws.project().step_shared(t, n).is_none());
+        }
+    }
+}
+
+#[test]
+fn removing_direct_step_gate_subtree_and_tree_undo_exactly() {
+    let (mut ws, tree, node, shared, _) = linked_workspace(0);
+    exact_undo(&mut ws, Edit::RemoveTreeNode { tree, node });
+    apply(&mut ws, Edit::RemoveTreeNode { tree, node });
+    let shared_idx = ws.project().shared_step_idx(&shared).expect("shared");
+    assert_eq!(ws.project().shared_step_users_count(shared_idx), 0);
+    ws.undo().expect("restore direct step");
+
+    let mut nested =
+        AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "Root")).expect("root");
+    let gate = NodeId::new_v7();
+    let child = NodeId::new_v7();
+    let gate_idx = nested
+        .add_child(nested.root(), gate, Node::gate(GateKind::And, "Gate"))
+        .expect("gate");
+    nested
+        .add_child(gate_idx, child, Node::step("Nested"))
+        .expect("child");
+    let nested_tree = add_tree(&mut ws, nested.clone());
+    apply(
+        &mut ws,
+        Edit::UseSharedStep {
+            tree: nested_tree,
+            node: child,
+            shared_step: shared,
+        },
+    );
+    exact_undo(
+        &mut ws,
+        Edit::RemoveTreeNode {
+            tree: nested_tree,
+            node: gate,
+        },
+    );
+    apply(
+        &mut ws,
+        Edit::RemoveTreeNode {
+            tree: nested_tree,
+            node: gate,
+        },
+    );
+    assert_eq!(ws.project().shared_step_users_count(shared_idx), 1);
+    ws.undo().expect("restore gate subtree");
+
+    apply(&mut ws, Edit::RemoveTree { tree: nested_tree });
+    exact_undo(&mut ws, Edit::RemoveTree { tree });
+    apply(&mut ws, Edit::RemoveTree { tree });
+    assert!(ws.project().attack_tree_idx(&tree).is_none());
+    assert_eq!(ws.project().shared_step_users_count(shared_idx), 0);
+}
+
+#[test]
+fn replace_tree_transfers_and_drops_linked_steps_with_exact_undo() {
+    let (mut ws, tree, node, shared, _) = linked_workspace(0);
+    let moved = "OR Root\n  AND Empty\n  OR Destination\n    - Linked\n";
+    exact_undo(
+        &mut ws,
+        Edit::ReplaceTree {
+            tree,
+            outline: moved.into(),
+        },
+    );
+    apply(
+        &mut ws,
+        Edit::ReplaceTree {
+            tree,
+            outline: moved.into(),
+        },
+    );
+    let t = ws.project().attack_tree_idx(&tree).expect("tree");
+    let n = ws
+        .project()
+        .attack_tree(t)
+        .expect("tree")
+        .idx_of(&node)
+        .expect("node");
+    assert_eq!(ws.project().step_shared_id(t, n), Some(shared));
+    ws.undo().expect("restore before drop");
+    exact_undo(
+        &mut ws,
+        Edit::ReplaceTree {
+            tree,
+            outline: "OR Root\n  AND Empty\n".into(),
+        },
+    );
+    apply(
+        &mut ws,
+        Edit::ReplaceTree {
+            tree,
+            outline: "OR Root\n  AND Empty\n".into(),
+        },
+    );
+    assert_eq!(
+        ws.project()
+            .shared_step_users_count(ws.project().shared_step_idx(&shared).expect("shared"),),
+        0
+    );
+}
+
+#[test]
+fn step_edits_and_outline_notes_route_through_the_shared_step() {
+    let (mut ws, tree, node, shared, _) = linked_workspace(0);
+    let second_component = add_component(&mut ws, "Brake ECU");
+    let m = Arc::clone(ws.project().methodology());
+    let factor = m.feasibility_factors().next().expect("factor");
+    let low = m.feasibility_level("low").expect("low");
+    let factor_level = m.factor_levels(factor).nth(1).expect("factor level");
+    let attack_type = m.attack_types().nth(1).expect("attack type");
+    let low_index = m
+        .feasibility_levels()
+        .position(|(l, _, _)| l == low)
+        .expect("low index");
+    let factor_index = m
+        .feasibility_factors()
+        .position(|f| f == factor)
+        .expect("factor index");
+    let factor_level_index = m
+        .factor_levels(factor)
+        .position(|l| l == factor_level)
+        .expect("level index");
+    let attack_index = m
+        .attack_types()
+        .position(|a| a == attack_type)
+        .expect("attack index");
+    for edit in [
+        Edit::SetStepFeasibility {
+            tree,
+            node,
+            level: Some(low_index),
+        },
+        Edit::SetStepFactor {
+            tree,
+            node,
+            factor: factor_index,
+            level: Some(factor_level_index),
+        },
+        Edit::SetStepVia {
+            tree,
+            node,
+            via: Some(ItemRef::Component(second_component)),
+        },
+        Edit::SetStepAttackType {
+            tree,
+            node,
+            attack_type: Some(attack_index),
+        },
+    ] {
+        apply(&mut ws, edit);
+    }
+    let idx = ws.project().shared_step_idx(&shared).expect("shared");
+    let s = ws.project().shared_step(idx).expect("shared");
+    assert_eq!(s.feasibility(), Some(low));
+    assert_eq!(s.factor(factor), Some(factor_level));
+    assert_eq!(
+        ws.project().shared_step_via(idx),
+        Some(ItemRef::Component(second_component))
+    );
+    assert_eq!(s.attack_type(), Some(attack_type));
+
+    apply(
+        &mut ws,
+        Edit::ReplaceTree {
+            tree,
+            outline: "OR Root\n  - Linked | through: - | type: -\n".into(),
+        },
+    );
+    let s = ws.project().shared_step(idx).expect("shared");
+    assert_eq!(ws.project().shared_step_via(idx), None);
+    assert_eq!(s.attack_type(), None);
+}
+
+#[test]
+fn component_removal_clears_shared_via_once_and_unshared_via() {
+    let mut ws = empty();
+    let component = add_component(&mut ws, "Gateway");
+    let shared = SharedStepId::new_v7();
+    apply(
+        &mut ws,
+        Edit::AddSharedStep {
+            id: shared,
+            name: "Reusable".into(),
+        },
+    );
+    apply(
+        &mut ws,
+        Edit::SetSharedStepVia {
+            shared_step: shared,
+            via: Some(ItemRef::Component(component)),
+        },
+    );
+    let tree = gate_tree(&["Shared A", "Shared B", "Local"]);
+    let tree_id = add_tree(&mut ws, tree.clone());
+    let nodes: Vec<_> = tree
+        .children(tree.root())
+        .iter()
+        .map(|n| tree.id_of(*n).expect("node"))
+        .collect();
+    for node in &nodes[..2] {
+        apply(
+            &mut ws,
+            Edit::UseSharedStep {
+                tree: tree_id,
+                node: *node,
+                shared_step: shared,
+            },
+        );
+    }
+    apply(
+        &mut ws,
+        Edit::SetStepVia {
+            tree: tree_id,
+            node: nodes[2],
+            via: Some(ItemRef::Component(component)),
+        },
+    );
+    let ops = Edit::RemoveComponent { component }
+        .to_ops(ws.project(), "shared-test", 1)
+        .expect("ops");
+    assert_eq!(
+        ops.iter()
+            .filter(|op| matches!(
+                op,
+                Op::SetStepVia {
+                    target: StepTarget::Shared(_),
+                    via: None,
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        ops.iter()
+            .filter(|op| matches!(
+                op,
+                Op::SetStepVia {
+                    target: StepTarget::Step(_, _),
+                    via: None,
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+    exact_undo(&mut ws, Edit::RemoveComponent { component });
+    apply(&mut ws, Edit::RemoveComponent { component });
+    assert_eq!(
+        ws.project()
+            .shared_step_via(ws.project().shared_step_idx(&shared).expect("shared"),),
+        None
+    );
+}
+
+#[test]
+fn shared_step_selection_exposes_both_forward_relations() {
+    let (ws, _, _, shared, _component) = linked_workspace(1);
+    let view = inspector_view(
+        &ws,
+        Selection::SharedStep(shared),
+        &Catalog::load(Language::En),
+    )
+    .expect("shared view");
+    assert_eq!(view.visual_id, "L00");
+    assert_eq!(view.kind, "Shared step");
+    assert!(
+        view.relations
+            .iter()
+            .any(|r| r.key == RelationKey::SHARED_STEP_VIA)
+    );
+    let used = view
+        .relations
+        .iter()
+        .find(|r| r.key == RelationKey::SHARED_STEP_USED_IN)
+        .expect("used in");
+    assert_eq!(used.chips.len(), 2);
+}

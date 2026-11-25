@@ -97,6 +97,7 @@ pub(crate) fn target_exists(project: &Project, target: Selection) -> bool {
             .assumption_idx(&id)
             .and_then(|i| p.assumption(i))
             .is_some(),
+        Selection::SharedStep(id) => p.shared_step_idx(&id).is_some(),
     }
 }
 

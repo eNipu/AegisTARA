@@ -381,6 +381,12 @@ impl MultiLinkPicker {
                 |i| project.assumption(i),
                 |e| e.name().to_owned()
             ),
+            Selection::SharedStep(id) => named!(
+                project.shared_step_idx(&id),
+                |i| project.shared_step_visual_id(i),
+                |i| project.shared_step(i),
+                |e| e.name().to_owned()
+            ),
             Selection::Component(id) => named!(
                 project.component_idx(&id),
                 |i| project.component_visual_id(i),

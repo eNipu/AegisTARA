@@ -67,6 +67,7 @@ impl Label {
             Selection::Tree(id) | Selection::TreeNode(id, _) => {
                 project.attack_tree_idx(&id).is_some()
             }
+            Selection::SharedStep(id) => project.shared_step_idx(&id).is_some(),
             Selection::Control(id) => project.security_control_idx(&id).is_some(),
             Selection::Goal(id) => project.cybersecurity_goal_idx(&id).is_some(),
             Selection::Claim(id) => project.cybersecurity_claim_idx(&id).is_some(),
@@ -266,6 +267,7 @@ fn target_of(op: &Op) -> Option<Selection> {
         | Op::SetTreeNodeGate { tree, id: node, .. }
         | Op::SetStepMitigation { tree, node, .. }
         | Op::SetReviewMark { tree, node, .. }
+        | Op::UnuseSharedStep { tree, node, .. }
         | Op::LinkTreeNode {
             tree, child: node, ..
         }
@@ -278,12 +280,13 @@ fn target_of(op: &Op) -> Option<Selection> {
         | Op::SetStepAttackType { target, .. } => {
             return match target {
                 StepTarget::Step(tree, node) => Some(Selection::TreeNode(*tree, *node)),
-                StepTarget::Shared(_) => None,
+                StepTarget::Shared(id) => Some(Selection::SharedStep(*id)),
             };
         }
-        Op::AddSharedStep { .. } | Op::RenameSharedStep { .. } | Op::RemoveSharedStep { .. } => {
-            return None;
-        }
+        Op::AddSharedStep { id, .. }
+        | Op::RenameSharedStep { id, .. }
+        | Op::RemoveSharedStep { id } => Selection::SharedStep(*id),
+        Op::UseSharedStep { step, .. } => Selection::SharedStep(*step),
         Op::AddSecurityControl { id, .. }
         | Op::RenameSecurityControl { id, .. }
         | Op::RemoveSecurityControl { id } => Selection::Control(*id),
@@ -353,7 +356,7 @@ fn target_of(op: &Op) -> Option<Selection> {
                 ElementRef::DataFlow(id) => Selection::DataFlow(*id),
                 ElementRef::TrustBoundary(id) => Selection::TrustBoundary(*id),
                 ElementRef::Assumption(id) => Selection::Assumption(*id),
-                ElementRef::SharedStep(_) => return None,
+                ElementRef::SharedStep(id) => Selection::SharedStep(*id),
                 _ => return None,
             }
         }
@@ -487,6 +490,8 @@ fn parts(op: &Op, p: &Project) -> Parts {
         Op::AddSharedStep { name, .. } => ("add", "shared step", some(name)),
         Op::RenameSharedStep { id, .. } => ("rename", "shared step", shared(id)),
         Op::RemoveSharedStep { id } => ("remove", "shared step", shared(id)),
+        Op::UseSharedStep { step, .. } => ("use", "shared step", shared(step)),
+        Op::UnuseSharedStep { .. } => ("unuse", "shared step", None),
 
         Op::AddSecurityControl { name, .. } => ("add", "security control", some(name)),
         Op::RenameSecurityControl { id, .. } => ("rename", "security control", control(id)),
