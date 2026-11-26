@@ -1,4 +1,5 @@
-//! Private setup only: no production API can install a fragment reference.
+//! Guard setup: slots are written directly so tests can build states (such as
+//! residual cycles) that the ops refuse to create.
 #![allow(clippy::pedantic)]
 
 use super::*;

@@ -542,6 +542,19 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    UseFragment {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        fragment: Text<TreeId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    UnuseFragment {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     NeedCondition {
         element: TargetView,
         condition: Text<ConditionId>,
@@ -1620,6 +1633,26 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             node: Text(*node),
             provenance: ProvenanceView::of(provenance),
         },
+        Op::UseFragment {
+            tree,
+            node,
+            fragment,
+            provenance,
+        } => OpView::UseFragment {
+            tree: Text(*tree),
+            node: Text(*node),
+            fragment: Text(*fragment),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::UnuseFragment {
+            tree,
+            node,
+            provenance,
+        } => OpView::UnuseFragment {
+            tree: Text(*tree),
+            node: Text(*node),
+            provenance: ProvenanceView::of(provenance),
+        },
         Op::NeedCondition {
             element,
             condition,
@@ -2675,6 +2708,26 @@ fn op_from_wire(m: &Methodology, w: OpWire, line: u64) -> Result<Op, StoreError>
             node,
             provenance,
         } => Op::UnuseSharedStep {
+            tree: tree.0,
+            node: node.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UseFragment {
+            tree,
+            node,
+            fragment,
+            provenance,
+        } => Op::UseFragment {
+            tree: tree.0,
+            node: node.0,
+            fragment: fragment.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UnuseFragment {
+            tree,
+            node,
+            provenance,
+        } => Op::UnuseFragment {
             tree: tree.0,
             node: node.0,
             provenance: wire::unwrap_provenance(provenance),

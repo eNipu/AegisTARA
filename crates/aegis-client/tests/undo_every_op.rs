@@ -22,7 +22,7 @@ use aegis_model::{
     AssetId, AssumptionId, AttackTree, AttrValue, ClaimId, ComponentId, ConditionId, ControlId,
     DamageId, DataFlowId, ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId,
     LinkTarget, Methodology, Node, NodeId, Op, PartyId, PartyKind, Project, Provenance,
-    SharedStepId, StepRef, StepTarget, ThreatId, TreeId, TrustBoundaryId,
+    SharedStepId, StepRef, StepTarget, ThreatId, TreeId, TreeRole, TrustBoundaryId,
 };
 
 /// The variant names declared in `op.rs`: lines like `    AddAsset {`.
@@ -840,6 +840,8 @@ fn walk_shared_steps(seen: &mut BTreeSet<String>) {
     let component = ComponentId::new_v7();
     let tree = TreeId::new_v7();
     let node = NodeId::new_v7();
+    let fragment = TreeId::new_v7();
+    let fragment_root = NodeId::new_v7();
     let target = StepTarget::Shared(id);
     let factor = m.feasibility_factors().next().expect("factor");
     let level = m.factor_levels(factor).next().expect("factor level");
@@ -921,6 +923,25 @@ fn walk_shared_steps(seen: &mut BTreeSet<String>) {
             node,
             provenance: who(),
         },
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: fragment,
+            tree: AttackTree::new(fragment_root, Node::step("Fragment")).expect("tree"),
+            step_feasibility: Vec::new(),
+            provenance: who(),
+        },
+        Op::UseFragment {
+            tree,
+            node,
+            fragment,
+            provenance: who(),
+        },
+        Op::UnuseFragment {
+            tree,
+            node,
+            provenance: who(),
+        },
+        Op::RemoveAttackTree { id: fragment },
         Op::RemoveSharedStep { id },
         Op::RemoveAttackTree { id: tree },
         Op::RemoveComponent { id: component },

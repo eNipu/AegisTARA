@@ -223,7 +223,7 @@ async fn mismatched_calculation_semantics_rejects_server_writes_and_keeps_sessio
 
 #[tokio::test]
 async fn unsupported_protocol_version_rejects_server_writes_and_keeps_session_read_only() {
-    // Server requires protocol v2..=v2; current client speaks v1.
+    // Server requires one protocol newer than this build speaks.
     let srv = start_with_contract(EngineContract {
         engine_version: ENGINE_VERSION.to_owned(),
         engine_semantics: ENGINE_SEMANTICS_VERSION,
@@ -267,7 +267,7 @@ async fn unsupported_protocol_version_rejects_server_writes_and_keeps_session_re
     );
     let _ = session.send(Command::Shutdown);
 
-    // Also test a newer client (protocol v2) talking to a v1 server.
+    // Also test a newer client talking to a server on this build's protocol.
     let v1_srv = start_with_contract(EngineContract::current()).await;
     let newer_conn = Connection::connect(&v1_srv.url, Arc::new(DevLogin::new("alice", true)))
         .await
@@ -293,8 +293,14 @@ async fn legacy_client_without_headers_is_accepted_on_v1_and_rejected_after_upgr
         protocol_version: 0,
     };
 
-    // On a v1 server, a legacy pre-224 client omitting headers is allowed.
-    let v1_srv = start_with_contract(EngineContract::current()).await;
+    // On a historical v1 server, a legacy pre-224 client omitting headers is allowed.
+    let v1_srv = start_with_contract(EngineContract {
+        engine_version: "0.1.0".to_owned(),
+        engine_semantics: 1,
+        protocol_version: 1,
+        min_protocol_version: 1,
+    })
+    .await;
     let legacy_v1 = Connection::connect(&v1_srv.url, Arc::new(DevLogin::new("alice", true)))
         .await
         .expect("connect")
@@ -305,22 +311,58 @@ async fn legacy_client_without_headers_is_accepted_on_v1_and_rejected_after_upgr
         .expect("legacy v1 client allowed on v1 server");
     assert_eq!(created.name, "Legacy OK");
 
-    // Once the server upgrades semantics to v2, the same legacy client is rejected.
-    let v2_srv = start_with_contract(EngineContract {
+    // Once the server upgrades semantics past this build, the same legacy client is rejected.
+    let future_semantics_srv = start_with_contract(EngineContract {
         engine_version: "0.2.0".to_owned(),
-        engine_semantics: 2,
+        engine_semantics: ENGINE_SEMANTICS_VERSION + 1,
         protocol_version: 1,
         min_protocol_version: 1,
     })
     .await;
-    let legacy_v2 = Connection::connect(&v2_srv.url, Arc::new(DevLogin::new("alice", true)))
-        .await
-        .expect("connect")
-        .with_client_contract(legacy_contract);
-    let err = legacy_v2
+    let legacy_future = Connection::connect(
+        &future_semantics_srv.url,
+        Arc::new(DevLogin::new("alice", true)),
+    )
+    .await
+    .expect("connect")
+    .with_client_contract(legacy_contract.clone());
+    let err = legacy_future
         .create_project("Legacy Blocked", "iso21434-r155")
         .await
         .expect_err("legacy client must be rejected after semantics bump");
+    assert_eq!(err.code(), Some(&ServerCode::IncompatibleClient));
+
+    // Isolate the historical protocol upgrade from any semantics upgrade.
+    let protocol2_srv = start_with_contract(EngineContract {
+        engine_version: "0.1.0".to_owned(),
+        engine_semantics: 1,
+        protocol_version: 2,
+        min_protocol_version: 2,
+    })
+    .await;
+    let legacy_protocol2 =
+        Connection::connect(&protocol2_srv.url, Arc::new(DevLogin::new("alice", true)))
+            .await
+            .expect("connect")
+            .with_client_contract(legacy_contract.clone());
+    let err = legacy_protocol2
+        .create_project("Legacy Protocol Blocked", "iso21434-r155")
+        .await
+        .expect_err("legacy client must be rejected after protocol-only bump");
+    assert_eq!(err.code(), Some(&ServerCode::IncompatibleClient));
+
+    // This build requires protocol 2 for writes, so the headerless legacy
+    // client (mapped to the historical (1, 1)) is refused outright.
+    let current_srv = start_with_contract(EngineContract::current()).await;
+    let legacy_current =
+        Connection::connect(&current_srv.url, Arc::new(DevLogin::new("alice", true)))
+            .await
+            .expect("connect")
+            .with_client_contract(legacy_contract);
+    let err = legacy_current
+        .create_project("Legacy Current", "iso21434-r155")
+        .await
+        .expect_err("headerless legacy client must be rejected on protocol 2");
     assert_eq!(err.code(), Some(&ServerCode::IncompatibleClient));
 }
 

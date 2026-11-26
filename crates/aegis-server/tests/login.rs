@@ -28,6 +28,12 @@ use tonic::Code;
 use tonic::transport::Endpoint;
 
 type Sess = Session<HyperClient, MemorySecretStore>;
+type SignedClient = AegisClient<
+    tonic::service::interceptor::InterceptedService<
+        aegis_auth::layer::Signed<Sess, tonic::transport::Channel>,
+        common::CurrentContract,
+    >,
+>;
 
 struct Env {
     idp: MockIdp,
@@ -116,12 +122,12 @@ impl Env {
             .expect("connect")
     }
 
-    async fn client(
-        &self,
-        session: Arc<Sess>,
-    ) -> AegisClient<aegis_auth::layer::Signed<Sess, tonic::transport::Channel>> {
+    async fn client(&self, session: Arc<Sess>) -> SignedClient {
         use tower::Layer;
-        AegisClient::new(SignRequests::new(session, &self.base_url).layer(self.channel().await))
+        AegisClient::with_interceptor(
+            SignRequests::new(session, &self.base_url).layer(self.channel().await),
+            common::CurrentContract,
+        )
     }
 
     async fn stop(self) {

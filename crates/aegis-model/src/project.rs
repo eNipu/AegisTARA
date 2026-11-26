@@ -314,8 +314,6 @@ impl TreeEntry {
         self.set_link(at, value, |l| &mut l.shared)
     }
 
-    // Prepared for the atomic persisted writes in the following slice.
-    #[allow(dead_code)]
     fn set_fragment(&mut self, at: usize, value: Option<TreeIdx>) -> Option<TreeIdx> {
         self.set_link(at, value, |l| &mut l.fragment)
     }
@@ -4182,6 +4180,11 @@ impl Project {
         entry: &TreeEntry,
         idx: NodeIdx,
     ) -> Option<FeasibilityLevel> {
+        // Fragment references persist but do not evaluate until 142d: fail
+        // closed (unrated) rather than falling back to any stored number.
+        if entry.fragment_at(idx.index()).is_some() {
+            return None;
+        }
         match entry.shared_at(idx.index()) {
             Some(shared) => {
                 let step = self.shared_steps.get(shared)?;
@@ -7719,6 +7722,17 @@ impl Project {
                 node,
                 provenance,
             } => return self.check_unuse_shared_step(*tree, *node, provenance),
+            Op::UseFragment {
+                tree,
+                node,
+                fragment,
+                provenance,
+            } => return self.check_use_fragment(*tree, *node, *fragment, provenance),
+            Op::UnuseFragment {
+                tree,
+                node,
+                provenance,
+            } => return self.check_unuse_fragment(*tree, *node, provenance),
             Op::NeedCondition {
                 element,
                 condition,
@@ -8381,6 +8395,17 @@ impl Project {
                 node,
                 provenance,
             } => self.commit_unuse_shared_step(tree, node, provenance),
+            Op::UseFragment {
+                tree,
+                node,
+                fragment,
+                provenance,
+            } => self.commit_use_fragment(tree, node, fragment, provenance),
+            Op::UnuseFragment {
+                tree,
+                node,
+                provenance,
+            } => self.commit_unuse_fragment(tree, node, provenance),
             Op::NeedCondition {
                 element,
                 condition,
@@ -10053,7 +10078,6 @@ impl Project {
         Ok(())
     }
 
-    #[allow(dead_code)]
     fn check_use_fragment(
         &self,
         tree: TreeId,
@@ -10090,7 +10114,6 @@ impl Project {
             .map(|_| ())
     }
 
-    #[allow(dead_code)]
     fn check_unuse_fragment(
         &self,
         tree: TreeId,
@@ -12942,6 +12965,47 @@ impl Project {
         })
     }
 
+    fn commit_use_fragment(
+        &mut self,
+        tree: TreeId,
+        node: NodeId,
+        fragment: TreeId,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let target = self.live_tree(fragment)?.0;
+        let (_, node_idx) = self.tree_node(tree, node)?;
+        let entry = self.tree_mut(tree)?;
+        entry.set_fragment(node_idx.index(), Some(target));
+        Ok(Op::UnuseFragment {
+            tree,
+            node,
+            provenance,
+        })
+    }
+
+    fn commit_unuse_fragment(
+        &mut self,
+        tree: TreeId,
+        node: NodeId,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let (entry, node_idx) = self.tree_node(tree, node)?;
+        let fragment_idx = entry
+            .fragment_at(node_idx.index())
+            .ok_or(ModelError::NodeNotFragment { tree, node })?;
+        let fragment = self
+            .attack_tree_id(fragment_idx)
+            .ok_or(ModelError::UnknownAttackTree(tree))?;
+        let entry = self.tree_mut(tree)?;
+        entry.set_fragment(node_idx.index(), None);
+        Ok(Op::UseFragment {
+            tree,
+            node,
+            fragment,
+            provenance,
+        })
+    }
+
     fn commit_condition_link(
         &mut self,
         element: ElementRef,
@@ -14808,6 +14872,8 @@ const fn may_change_applicability(op: &Op, filter: &AttackFilter) -> bool {
         | Op::SetStepVia { .. }
         | Op::UseSharedStep { .. }
         | Op::UnuseSharedStep { .. }
+        | Op::UseFragment { .. }
+        | Op::UnuseFragment { .. }
         | Op::AddAttackTree { .. }
         | Op::RemoveAttackTree { .. }
         | Op::AddTreeNode { .. }
@@ -15338,6 +15404,10 @@ impl ProjectEvalCache {
             | Op::SetTreeNodeGate { tree, .. } => self.update_tree_structure(project, *tree),
             Op::UseSharedStep { tree, node, .. } | Op::UnuseSharedStep { tree, node, .. } => {
                 self.update_shared_link(project, *tree, *node);
+            }
+            Op::UseFragment { .. } | Op::UnuseFragment { .. } => {
+                // Until fragment evaluation exists, invalidate all cached users.
+                self.rebuild(project);
             }
             Op::SetStepFeasibility { target, .. } | Op::SetStepFactor { target, .. } => {
                 if let StepTarget::Step(tree, node) = target {

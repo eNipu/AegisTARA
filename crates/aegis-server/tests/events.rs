@@ -32,6 +32,7 @@ impl tonic::service::Interceptor for Bearer {
             "authorization",
             format!("Bearer {}", self.0).parse().expect("ascii"),
         );
+        common::add_contract_headers(&mut r);
         Ok(r)
     }
 }

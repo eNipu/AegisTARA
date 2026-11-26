@@ -661,7 +661,7 @@ pub struct Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..89,
+        0u8..91,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -891,6 +891,23 @@ impl Gen {
         }
     }
 
+    fn fragment_tree(&mut self, p: &Project, sel: u16) -> TreeId {
+        let existing: Vec<_> = p
+            .attack_trees()
+            .filter(|(idx, _, _)| p.attack_tree_role(*idx) == Some(aegis_model::TreeRole::Fragment))
+            .map(|(_, id, _)| id)
+            .collect();
+        match nth(existing, sel / 8) {
+            Some(id) if !sel.is_multiple_of(8) => id,
+            _ => tree_id(self.fresh()),
+        }
+    }
+
+    fn has_fragment_tree(p: &Project) -> bool {
+        p.attack_trees()
+            .any(|(idx, _, _)| p.attack_tree_role(idx) == Some(aegis_model::TreeRole::Fragment))
+    }
+
     fn linkable_steps(p: &Project) -> Vec<(TreeId, NodeId)> {
         p.attack_trees()
             .flat_map(|(t, tree, nodes)| {
@@ -920,6 +937,40 @@ impl Gen {
                     .collect::<Vec<_>>()
             })
             .filter(|(t, _, n, _)| p.step_shared(*t, *n).is_some())
+            .map(|(_, tree, _, node)| (tree, node))
+            .collect()
+    }
+
+    fn fragment_linkable_steps(p: &Project) -> Vec<(TreeId, NodeId)> {
+        p.attack_trees()
+            .flat_map(|(t, tree, nodes)| {
+                nodes
+                    .iter()
+                    .filter(|(_, _, n)| matches!(n, Node::Step { .. }))
+                    .map(move |(n, node, _)| (t, tree, n, node))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|(t, _, n, _)| {
+                p.step_shared(*t, *n).is_none()
+                    && p.step_fragment(*t, *n).is_none()
+                    && p.step_feasibility(*t, *n).is_none()
+                    && p.step_factors(*t, *n).next().is_none()
+                    && p.step_via(*t, *n).is_none()
+                    && p.step_attack_type(*t, *n).is_none()
+            })
+            .map(|(_, tree, _, node)| (tree, node))
+            .collect()
+    }
+
+    fn fragment_user_steps(p: &Project) -> Vec<(TreeId, NodeId)> {
+        p.attack_trees()
+            .flat_map(|(t, tree, nodes)| {
+                nodes
+                    .iter()
+                    .map(move |(n, node, _)| (t, tree, n, node))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|(t, _, n, _)| p.step_fragment(*t, *n).is_some())
             .map(|(_, tree, _, node)| (tree, node))
             .collect()
     }
@@ -2302,6 +2353,53 @@ impl Gen {
                 } else {
                     let (tree, node) = self.step_node(p, s.a, s.b);
                     Op::UnuseSharedStep {
+                        tree,
+                        node,
+                        provenance,
+                    }
+                }
+            }
+            89 => {
+                if !Self::has_fragment_tree(p) {
+                    return Op::AddAttackTree {
+                        role: aegis_model::TreeRole::Fragment,
+                        id: tree_id(self.fresh()),
+                        tree: AttackTree::new(node_id(self.fresh()), Node::step("Fragment"))
+                            .expect("tree"),
+                        step_feasibility: Vec::new(),
+                        provenance,
+                    };
+                }
+                let (tree, node) = match nth(Self::fragment_linkable_steps(p), s.a) {
+                    Some(step) if !s.c.is_multiple_of(4) => step,
+                    _ => self.step_node(p, s.a, s.b),
+                };
+                Op::UseFragment {
+                    tree,
+                    node,
+                    fragment: self.fragment_tree(p, s.c),
+                    provenance,
+                }
+            }
+            90 => {
+                if let Some((tree, node)) = nth(Self::fragment_user_steps(p), s.a) {
+                    Op::UnuseFragment {
+                        tree,
+                        node,
+                        provenance,
+                    }
+                } else if let Some((tree, node)) = nth(Self::fragment_linkable_steps(p), s.b)
+                    && Self::has_fragment_tree(p)
+                {
+                    Op::UseFragment {
+                        tree,
+                        node,
+                        fragment: self.fragment_tree(p, s.c),
+                        provenance,
+                    }
+                } else {
+                    let (tree, node) = self.step_node(p, s.a, s.b);
+                    Op::UnuseFragment {
                         tree,
                         node,
                         provenance,

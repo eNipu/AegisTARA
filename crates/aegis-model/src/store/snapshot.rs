@@ -12,7 +12,8 @@ use super::wire::{
     ControlTargetsByItem, FORMAT_VERSION, ImpactsByKey, ItemView, KeyOrder, MethodologyView,
     NodesView, PropertyKeys, ProvenanceView, Required, RiskTreatmentWire, SnapshotWire,
     StepAttackTypeByNode, StepFactorsByNode, StepFactorsForNode, StepFeasibilityByNode,
-    StepMitigationsByNode, StepSharedByNode, StepViaByNode, TargetView, Text, VisualDisplay,
+    StepFragmentsByNode, StepMitigationsByNode, StepSharedByNode, StepViaByNode, TargetView, Text,
+    VisualDisplay,
 };
 use crate::applicability::{MAX_ASSUMPTION_EXCLUDES, StepRef};
 use crate::element::{AttrValue, ElementKind};
@@ -516,6 +517,8 @@ struct TreeView<'a> {
     step_attack_type: StepAttackTypeByNode<'a>,
     #[serde(skip_serializing_if = "StepSharedByNode::is_empty")]
     step_shared: StepSharedByNode<'a>,
+    #[serde(skip_serializing_if = "StepFragmentsByNode::is_empty")]
+    step_fragments: StepFragmentsByNode<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
 }
@@ -824,6 +827,11 @@ impl Serialize for Trees<'_> {
                         tree,
                     },
                     step_shared: StepSharedByNode {
+                        project: p,
+                        tree_idx,
+                        tree,
+                    },
+                    step_fragments: StepFragmentsByNode {
                         project: p,
                         tree_idx,
                         tree,
@@ -1599,6 +1607,8 @@ impl Project {
                 .iter()
                 .map(|m| (m.tree.0, m.node.0))
                 .collect();
+        let mut pending_fragments: Vec<(crate::id::TreeId, crate::id::NodeId, crate::id::TreeId)> =
+            Vec::new();
         let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
         for (pos, tr) in snapshot.attack_trees.into_iter().enumerate() {
             if tr.visual_id.as_ref().is_some_and(|v| v.1 != tr.role) {
@@ -1665,6 +1675,15 @@ impl Project {
                     provenance: crate::provenance::Provenance::default(),
                 })?;
             }
+            let mut fragment_nodes = std::collections::BTreeSet::new();
+            for entry in &tr.step_fragments.0 {
+                if !fragment_nodes.insert(entry.node.0) {
+                    return Err(StoreError::DuplicateEntry);
+                }
+            }
+            for entry in tr.step_fragments.0 {
+                pending_fragments.push((id, entry.node.0, entry.fragment.0));
+            }
             let own: Vec<_> = marks.iter().filter(|(t, _)| *t == id).copied().collect();
             for (tree, node) in own {
                 marks.remove(&(tree, node));
@@ -1675,6 +1694,19 @@ impl Project {
                     provenance: provenance.clone(),
                 })?;
             }
+        }
+        // Fragment references replay only after every tree and all source
+        // metadata exist, so forward IDs and file order cannot matter and
+        // the live role, rating, cycle, depth and cap guards all apply.
+        // Default provenance is safe because reference commits never change
+        // the provenance of any tree.
+        for (tree, node, fragment) in pending_fragments {
+            project.apply(Op::UseFragment {
+                tree,
+                node,
+                fragment,
+                provenance: crate::provenance::Provenance::default(),
+            })?;
         }
         let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
         for (pos, mut t) in snapshot.threat_scenarios.into_iter().enumerate() {

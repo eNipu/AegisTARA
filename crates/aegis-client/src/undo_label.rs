@@ -268,6 +268,8 @@ fn target_of(op: &Op) -> Option<Selection> {
         | Op::SetStepMitigation { tree, node, .. }
         | Op::SetReviewMark { tree, node, .. }
         | Op::UnuseSharedStep { tree, node, .. }
+        | Op::UseFragment { tree, node, .. }
+        | Op::UnuseFragment { tree, node, .. }
         | Op::LinkTreeNode {
             tree, child: node, ..
         }
@@ -492,6 +494,8 @@ fn parts(op: &Op, p: &Project) -> Parts {
         Op::RemoveSharedStep { id } => ("remove", "shared step", shared(id)),
         Op::UseSharedStep { step, .. } => ("use", "shared step", shared(step)),
         Op::UnuseSharedStep { .. } => ("unuse", "shared step", None),
+        Op::UseFragment { .. } => ("use", "fragment", None),
+        Op::UnuseFragment { .. } => ("unuse", "fragment", None),
 
         Op::AddSecurityControl { name, .. } => ("add", "security control", some(name)),
         Op::RenameSecurityControl { id, .. } => ("rename", "security control", control(id)),

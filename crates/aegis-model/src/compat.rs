@@ -27,10 +27,10 @@ use std::fmt;
 pub const ENGINE_SEMANTICS_VERSION: u32 = 1;
 
 /// Current wire and operation protocol version spoken by this build.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Oldest wire and operation protocol version this server accepts for writes.
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 1;
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 2;
 
 /// On-disk snapshot and operation-log file format version.
 pub const FORMAT_VERSION: u32 = 1;
@@ -388,19 +388,22 @@ mod tests {
 
     #[test]
     fn legacy_write_requests_succeed_on_v1_and_fail_after_bump() {
-        let v1 = EngineContract::current();
+        let v1 = EngineContract {
+            engine_version: "0.1.0".to_owned(),
+            engine_semantics: 1,
+            protocol_version: 1,
+            min_protocol_version: 1,
+        };
         assert_eq!(check_server_write_compatibility(None, None, &v1), Ok(()));
 
-        let v2_semantics = EngineContract {
-            engine_semantics: 2,
+        let future_semantics = EngineContract {
+            engine_semantics: ENGINE_SEMANTICS_VERSION + 1,
             ..v1.clone()
         };
         assert!(matches!(
-            check_server_write_compatibility(None, None, &v2_semantics),
-            Err(CompatibilityError::EngineSemanticsMismatch {
-                client: 1,
-                server: 2
-            })
+            check_server_write_compatibility(None, None, &future_semantics),
+            Err(CompatibilityError::EngineSemanticsMismatch { client: 1, server })
+            if server == ENGINE_SEMANTICS_VERSION + 1
         ));
 
         let v2_protocol = EngineContract {
@@ -414,6 +417,17 @@ mod tests {
                 client: 1,
                 server_min: 2,
                 server_current: 2
+            })
+        ));
+
+        // This build requires protocol 2 for writes, so headerless legacy
+        // writes (mapped to the historical (1, 1)) are refused.
+        assert!(matches!(
+            check_server_write_compatibility(None, None, &EngineContract::current()),
+            Err(CompatibilityError::ProtocolTooOld {
+                client: 1,
+                server_min: MIN_SUPPORTED_PROTOCOL_VERSION,
+                server_current: PROTOCOL_VERSION,
             })
         ));
     }
