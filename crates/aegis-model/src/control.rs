@@ -4,7 +4,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::id::{AssumptionIdx, ControlId, ControlIdx, NodeId, NodeIdx, PartyIdx, TreeIdx};
+use crate::id::{AssumptionIdx, ControlId, ControlIdx, NodeId, NodeIdx, PartyIdx, TreeId, TreeIdx};
 use crate::item::{ItemIdx, ItemRef};
 use crate::methodology::{AttackType, ControlKind, FeasibilityLevel};
 use crate::provenance::Provenance;
@@ -326,6 +326,7 @@ pub struct StepCeiling {
     pub(crate) feasibility: FeasibilityLevel,
     pub(crate) source: CeilingSource,
     pub(crate) status: ControlStatus,
+    pub(crate) bypass: Option<TreeId>,
 }
 
 impl StepCeiling {
@@ -360,6 +361,13 @@ impl StepCeiling {
     #[must_use]
     pub const fn status(&self) -> ControlStatus {
         self.status
+    }
+
+    /// Returns the bypass tree that computed this ceiling, if the imposing
+    /// control uses one. Time O(1).
+    #[must_use]
+    pub const fn bypass(&self) -> Option<TreeId> {
+        self.bypass
     }
 }
 
