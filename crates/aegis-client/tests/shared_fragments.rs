@@ -2325,3 +2325,215 @@ fn seq_diamond_disjoint_ids_exact_depth_eight_and_ref_cap_rollback() {
     assert_eq!(saved(ws.project()), before_bytes);
     assert!(!ws.can_undo());
 }
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn cross_gate_linked_sibling_ahead_of_owner_preserves_order_and_folds() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let mut ws = Workspace::empty(Arc::clone(&m));
+    let p = Provenance::human("dag-order", 6006);
+    let low = m.feasibility_level("low").expect("low");
+    let med = m.feasibility_level("medium").expect("medium");
+    let high = m.feasibility_level("high").expect("high");
+
+    let frag_k_id = TreeId::new_v7();
+    let fk_root = NodeId::new_v7();
+
+    // 7-node DAG: root -> [Q, O, R], Q -> [K, Y], O owns Z then links K ([Z, K]), R links Z.
+    // reachable_topo visits [root, Q, Y, O, K, R, Z], putting K ahead of O in the arena.
+    let dag_id = TreeId::new_v7();
+    let (n_root, n_q, n_o, n_r, n_k, n_y, n_z) = (
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+    );
+    let mut dag = AttackTree::new(n_root, Node::gate(GateKind::Or, "root")).unwrap();
+    let r_idx = dag.root();
+    let q_idx = dag
+        .add_child(r_idx, n_q, Node::gate(GateKind::And, "Q"))
+        .unwrap();
+    let o_idx = dag
+        .add_child(r_idx, n_o, Node::gate(GateKind::SeqAnd, "O"))
+        .unwrap();
+    let r_gate_idx = dag
+        .add_child(r_idx, n_r, Node::gate(GateKind::And, "R"))
+        .unwrap();
+    let k_idx = dag.add_child(q_idx, n_k, Node::step("K")).unwrap();
+    dag.add_child(q_idx, n_y, Node::step("Y")).unwrap();
+    let z_idx = dag.add_child(o_idx, n_z, Node::step("Z")).unwrap();
+    dag.link(o_idx, k_idx).unwrap();
+    dag.link(r_gate_idx, z_idx).unwrap();
+
+    let host_ins_id = TreeId::new_v7();
+    let hi_root = NodeId::new_v7();
+    let hi_slot = NodeId::new_v7();
+    let mut host_ins = AttackTree::new(hi_root, Node::gate(GateKind::Or, "Host")).unwrap();
+    host_ins
+        .add_child(host_ins.root(), hi_slot, Node::step("Slot"))
+        .unwrap();
+
+    ws.apply(
+        vec![
+            Op::AddAttackTree {
+                role: TreeRole::Fragment,
+                id: frag_k_id,
+                tree: AttackTree::new(fk_root, Node::step("FragK")).unwrap(),
+                step_feasibility: vec![(fk_root, high)],
+                provenance: p.clone(),
+            },
+            Op::AddAttackTree {
+                role: TreeRole::Threat,
+                id: dag_id,
+                tree: dag,
+                step_feasibility: vec![(n_y, low), (n_z, med)],
+                provenance: p.clone(),
+            },
+            Op::AddAttackTree {
+                role: TreeRole::Threat,
+                id: host_ins_id,
+                tree: host_ins,
+                step_feasibility: vec![],
+                provenance: p.clone(),
+            },
+            Op::UseFragment {
+                tree: dag_id,
+                node: n_k,
+                fragment: frag_k_id,
+                provenance: p.clone(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("setup 7-node dag");
+
+    let assert_orders = |project: &Project, tree_id: TreeId, k_label: &str, expect_frag: bool| {
+        let t_idx = project.attack_tree_idx(&tree_id).unwrap();
+        let t = project.attack_tree(t_idx).unwrap();
+        let child_labels = |idx| -> Vec<&str> {
+            t.children(idx)
+                .iter()
+                .map(|&c| t.get(c).unwrap().label())
+                .collect()
+        };
+        let parent_labels = |idx| -> Vec<&str> {
+            t.parents(idx)
+                .map(|p_idx| t.get(p_idx).unwrap().label())
+                .collect()
+        };
+        for (idx, _, node) in t.iter() {
+            match node.label() {
+                "root" | "Slot" => assert_eq!(child_labels(idx), vec!["Q", "O", "R"]),
+                "Q" => assert_eq!(child_labels(idx), vec![k_label, "Y"]),
+                "O" => assert_eq!(child_labels(idx), vec!["Z", k_label]),
+                "R" => assert_eq!(child_labels(idx), vec!["Z"]),
+                "Z" => assert_eq!(parent_labels(idx), vec!["O", "R"]),
+                lbl if lbl == k_label => {
+                    assert_eq!(parent_labels(idx), vec!["Q", "O"]);
+                    assert_eq!(
+                        project.step_fragment_id(t_idx, idx),
+                        expect_frag.then_some(frag_k_id)
+                    );
+                }
+                _ => {}
+            }
+        }
+    };
+
+    for (mode, k_label, expect_frag) in [
+        (CopyMode::PreserveReferences, "K", true),
+        (CopyMode::Materialize, "FragK", false),
+    ] {
+        let plan = copy_subtree(ws.project(), dag_id, n_root, mode).expect("copy_subtree");
+        let dst = TreeId::new_v7();
+        apply_checked_undo_redo(
+            &mut ws,
+            plan.new_tree_ops(dst, TreeRole::Threat, &p).expect("ops"),
+        );
+        assert_fold_matches(ws.project(), dag_id, dst);
+        assert_orders(ws.project(), dst, k_label, expect_frag);
+
+        let start_idx = ws
+            .project()
+            .attack_tree(ws.project().attack_tree_idx(&host_ins_id).unwrap())
+            .unwrap()
+            .len();
+        let mut ins_ops = vec![Op::SetTreeNodeKind {
+            tree: host_ins_id,
+            id: hi_slot,
+            gate: plan.root_kind(),
+            provenance: p.clone(),
+        }];
+        ins_ops.extend(
+            plan.insert_ops(host_ins_id, hi_slot, start_idx, &p)
+                .expect("insert_ops"),
+        );
+        apply_checked_undo_redo(&mut ws, ins_ops);
+        assert_fold_matches(ws.project(), dag_id, host_ins_id);
+        assert_orders(ws.project(), host_ins_id, k_label, expect_frag);
+        ws.undo().expect("reset host_ins_id slot");
+    }
+
+    // Also verify out-of-order owned siblings where an earlier-ranked owned child is linked by a
+    // descendant of a later-ranked owned sibling (`O -> [C1, C2]`, `C2 -> X`, `X -> C1`).
+    let sib_dag_id = TreeId::new_v7();
+    let (s_o, s_c1, s_c2, s_x) = (
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+    );
+    let mut sib_dag = AttackTree::new(s_o, Node::gate(GateKind::SeqAnd, "O_seq")).unwrap();
+    let sc1 = sib_dag
+        .add_child(sib_dag.root(), s_c1, Node::step("C1"))
+        .unwrap();
+    let sc2 = sib_dag
+        .add_child(sib_dag.root(), s_c2, Node::gate(GateKind::And, "C2"))
+        .unwrap();
+    let sx = sib_dag
+        .add_child(sc2, s_x, Node::gate(GateKind::Or, "X"))
+        .unwrap();
+    sib_dag.link(sx, sc1).unwrap();
+    ws.apply(
+        vec![Op::AddAttackTree {
+            role: TreeRole::Threat,
+            id: sib_dag_id,
+            tree: sib_dag,
+            step_feasibility: vec![(s_c1, low)],
+            provenance: p.clone(),
+        }],
+        Origin::Edit,
+    )
+    .expect("setup sib_dag");
+    for mode in [CopyMode::PreserveReferences, CopyMode::Materialize] {
+        let plan = copy_subtree(ws.project(), sib_dag_id, s_o, mode).expect("sib copy");
+        let dst = TreeId::new_v7();
+        apply_checked_undo_redo(
+            &mut ws,
+            plan.new_tree_ops(dst, TreeRole::Threat, &p)
+                .expect("sib ops"),
+        );
+        assert_fold_matches(ws.project(), sib_dag_id, dst);
+        let t_idx = ws.project().attack_tree_idx(&dst).unwrap();
+        let t = ws.project().attack_tree(t_idx).unwrap();
+        for (idx, _, node) in t.iter() {
+            if node.label() == "O_seq" {
+                let kids: Vec<_> = t
+                    .children(idx)
+                    .iter()
+                    .map(|&c| t.get(c).unwrap().label())
+                    .collect();
+                assert_eq!(kids, vec!["C1", "C2"]);
+            } else if node.label() == "C1" {
+                let ps: Vec<_> = t
+                    .parents(idx)
+                    .map(|p_idx| t.get(p_idx).unwrap().label())
+                    .collect();
+                assert_eq!(ps, vec!["O_seq", "X"]);
+            }
+        }
+    }
+}

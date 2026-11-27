@@ -353,6 +353,7 @@ fn build_plan_direct(
         let src_tree = project.attack_tree(item_t).ok_or(EditError::Missing)?;
         let (nodes, pos_in_sub, _) = reachable_topo(src_tree, item_start);
         let (mut sub_ids, mut cur) = (vec![entry_id; nodes.len()], vec![Vec::new(); nodes.len()]);
+        let mut links = Vec::new();
 
         for (i, &v) in nodes.iter().enumerate().skip(1) {
             let parents: Vec<_> = src_tree
@@ -386,7 +387,14 @@ fn build_plan_direct(
                 meta.push(n_meta);
             }
             sub_ids[i] = id;
-
+            if parents.len() > 1 {
+                links.push((id, v, parents));
+            }
+            if is_frag && nn_node.gate_kind().is_some() && !nn_node.children().is_empty() {
+                work.push((nt, nn, ov, id));
+            }
+        }
+        for (id, v, parents) in links {
             let child_idx = tree.idx_of(&id).ok_or(EditError::Missing)?;
             for (slot, &lp_pos) in parents[1..].iter().enumerate() {
                 let lp_idx = tree.idx_of(&sub_ids[lp_pos]).ok_or(EditError::Missing)?;
@@ -394,9 +402,6 @@ fn build_plan_direct(
                     insert_ranked(&mut cur[lp_pos], src_tree.children(nodes[lp_pos]), v, id)?;
                 tree.link_at(lp_idx, child_idx, l_pos, slot)
                     .map_err(|_| limit("edges", MAX_DAG_EDGES))?;
-            }
-            if is_frag && nn_node.gate_kind().is_some() && !nn_node.children().is_empty() {
-                work.push((nt, nn, ov, id));
             }
         }
     }
