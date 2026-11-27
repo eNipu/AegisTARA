@@ -78,6 +78,7 @@ fn fixture() -> Fixture {
         apply(
             &mut project,
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree,
                 tree: AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree"),
                 step_feasibility: vec![],

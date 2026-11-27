@@ -200,12 +200,14 @@ fn scalability_reset_eu_cra_excluded_counts_and_toast() {
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tr1,
                 tree: tree1,
                 step_feasibility: vec![(s1, high)],
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tr2,
                 tree: tree2,
                 step_feasibility: vec![(s2, high), (s3, high)],
@@ -374,6 +376,7 @@ fn active_profile_workspace() -> (
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree_id,
                 tree,
                 step_feasibility: vec![(s_bespoke, high), (s_std, high)],

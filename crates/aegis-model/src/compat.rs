@@ -24,13 +24,13 @@ use std::fmt;
 /// Increment whenever a change to evaluation, mitigation, applicability, or
 /// lint semantics could change any computed output for the same pinned
 /// methodology pack and project state.
-pub const ENGINE_SEMANTICS_VERSION: u32 = 1;
+pub const ENGINE_SEMANTICS_VERSION: u32 = 2;
 
 /// Current wire and operation protocol version spoken by this build.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Oldest wire and operation protocol version this server accepts for writes.
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 1;
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 3;
 
 /// On-disk snapshot and operation-log file format version.
 pub const FORMAT_VERSION: u32 = 1;
@@ -388,19 +388,22 @@ mod tests {
 
     #[test]
     fn legacy_write_requests_succeed_on_v1_and_fail_after_bump() {
-        let v1 = EngineContract::current();
+        let v1 = EngineContract {
+            engine_version: "0.1.0".to_owned(),
+            engine_semantics: 1,
+            protocol_version: 1,
+            min_protocol_version: 1,
+        };
         assert_eq!(check_server_write_compatibility(None, None, &v1), Ok(()));
 
-        let v2_semantics = EngineContract {
-            engine_semantics: 2,
+        let future_semantics = EngineContract {
+            engine_semantics: ENGINE_SEMANTICS_VERSION + 1,
             ..v1.clone()
         };
         assert!(matches!(
-            check_server_write_compatibility(None, None, &v2_semantics),
-            Err(CompatibilityError::EngineSemanticsMismatch {
-                client: 1,
-                server: 2
-            })
+            check_server_write_compatibility(None, None, &future_semantics),
+            Err(CompatibilityError::EngineSemanticsMismatch { client: 1, server })
+            if server == ENGINE_SEMANTICS_VERSION + 1
         ));
 
         let v2_protocol = EngineContract {
@@ -414,6 +417,49 @@ mod tests {
                 client: 1,
                 server_min: 2,
                 server_current: 2
+            })
+        ));
+
+        // Headerless legacy writes map to the historical (1, 1). This build
+        // runs semantics 2 (and requires protocol 3); the semantics check
+        // runs first, so the refusal names the semantics mismatch.
+        assert!(matches!(
+            check_server_write_compatibility(None, None, &EngineContract::current()),
+            Err(CompatibilityError::EngineSemanticsMismatch { client: 1, server })
+            if server == ENGINE_SEMANTICS_VERSION
+        ));
+
+        // Explicit headers: matching protocol 3 succeeds; old protocol 2 and
+        // new protocol 4 are rejected against current protocol 3.
+        assert_eq!(
+            check_server_write_compatibility(
+                Some(ENGINE_SEMANTICS_VERSION),
+                Some(PROTOCOL_VERSION),
+                &EngineContract::current(),
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            check_server_write_compatibility(
+                Some(ENGINE_SEMANTICS_VERSION),
+                Some(2),
+                &EngineContract::current(),
+            ),
+            Err(CompatibilityError::ProtocolTooOld {
+                client: 2,
+                server_min: 3,
+                server_current: 3
+            })
+        ));
+        assert!(matches!(
+            check_server_write_compatibility(
+                Some(ENGINE_SEMANTICS_VERSION),
+                Some(PROTOCOL_VERSION + 1),
+                &EngineContract::current(),
+            ),
+            Err(CompatibilityError::ProtocolTooNew {
+                client: 4,
+                server_current: 3
             })
         ));
     }

@@ -676,6 +676,7 @@ fn each_factor_excludes_only_rated_steps() {
                 provenance: prov.clone(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tr1,
                 tree: tree1,
                 step_feasibility: vec![(s_rated, high), (s_sibling, med), (s_unrated, low)],
@@ -707,6 +708,7 @@ fn each_factor_excludes_only_rated_steps() {
                 provenance: prov.clone(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tr2,
                 tree: tree2,
                 step_feasibility: vec![(s_only, high)],
@@ -870,6 +872,7 @@ fn scalability_uses_threat_scaling() {
         let tid = tree_id(n);
         let step = node_id(n * 10);
         p.apply(Op::AddAttackTree {
+            role: Default::default(),
             id: tid,
             tree: AttackTree::new(step, Node::step("s")).expect("tree"),
             step_feasibility: vec![(step, high)],
@@ -1069,6 +1072,7 @@ fn default_filter_skips_applicability_and_bounds_cache_recomputes() {
             provenance: prov.clone(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tr,
             tree,
             step_feasibility: vec![(s1, low)],

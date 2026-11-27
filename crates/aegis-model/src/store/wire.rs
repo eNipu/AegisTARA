@@ -341,6 +341,9 @@ caps! {
     ElementsCap = crate::element::MAX_ELEMENTS_PER_KIND, Limit::ELEMENTS;
     ElementAttributesCap = crate::element::MAX_ELEMENT_ATTRIBUTES, Limit::ELEMENT_ATTRIBUTES;
     ElementLinksCap = crate::element::MAX_ELEMENT_LINKS, Limit::ELEMENT_LINKS;
+    // No dedicated `Limit` variant exists and `store/mod.rs` is out of scope,
+    // so the fragment-reference cap reuses the nodes variant with the right max.
+    FragmentReferencesCap = crate::blocks::MAX_FRAGMENT_REFERENCES, Limit::AttackTreeNodes { max: crate::blocks::MAX_FRAGMENT_REFERENCES };
 }
 
 /// A string of at most `C::MAX` bytes, kept. The check runs in the visitor,
@@ -1609,7 +1612,6 @@ visual_kinds! {
     AssetVisual = VisualPrefix::Asset;
     DamageVisual = VisualPrefix::Damage;
     ThreatVisual = VisualPrefix::Threat;
-    TreeVisual = VisualPrefix::Tree;
     ControlVisual = VisualPrefix::Control;
     GoalVisual = VisualPrefix::Goal;
     ClaimVisual = VisualPrefix::Claim;
@@ -1626,6 +1628,21 @@ visual_kinds! {
 /// A visual ID decoded from its canonical text (`A00`, `T01`, `DF12`, ...).
 /// Anything else is [`StoreError::InvalidId`]. Time O(1).
 pub(super) struct WireVisual<K>(pub(super) u32, PhantomData<K>);
+
+/// A tree ID retains its prefix so loading can check it against the role.
+pub(super) struct TreeVisualId(pub(super) u32, pub(super) crate::TreeRole);
+
+impl<'de> Deserialize<'de> for TreeVisualId {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        WithStr::new(|s: &str| {
+            [crate::TreeRole::Threat, crate::TreeRole::Fragment]
+                .into_iter()
+                .find_map(|role| role.visual_prefix().parse_num(s).map(|n| Self(n, role)))
+                .ok_or(Fault::InvalidId)
+        })
+        .deserialize(d)
+    }
+}
 
 impl<'de, K: VisualKind> Deserialize<'de> for WireVisual<K> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -2108,13 +2125,23 @@ pub(super) struct StepSharedEntry {
     pub(super) shared_step: WireId<SharedStepId>,
 }
 
+/// One attack-tree node's fragment reference.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct StepFragmentEntry {
+    pub(super) node: WireId<NodeId>,
+    pub(super) fragment: WireId<TreeId>,
+}
+
 /// A snapshot attack tree.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TreeWire {
     pub(super) id: WireId<TreeId>,
+    #[serde(default)]
+    pub(super) role: crate::TreeRole,
     #[serde(default, deserialize_with = "some")]
-    pub(super) visual_id: Option<WireVisual<TreeVisual>>,
+    pub(super) visual_id: Option<TreeVisualId>,
     pub(super) nodes: NodesWire,
     pub(super) step_feasibility: StepFeasibility,
     #[serde(default)]
@@ -2128,6 +2155,8 @@ pub(super) struct TreeWire {
     pub(super) step_attack_type: Option<Box<StepValues<AttackTypeKey>>>,
     #[serde(default)]
     pub(super) step_shared: BoundedVec<StepSharedEntry, AttackTreeNodesCap>,
+    #[serde(default)]
+    pub(super) step_fragments: BoundedVec<StepFragmentEntry, FragmentReferencesCap>,
     #[serde(default, deserialize_with = "some")]
     pub(super) provenance: Option<ProvenanceWire>,
 }
@@ -2462,6 +2491,14 @@ pub(super) enum OpWire {
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },
+    SetTreeNodeKind {
+        tree: WireId<TreeId>,
+        id: WireId<NodeId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        gate: Option<GateKindWire>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
     SetDescription {
         target: TargetWire,
         text: DescriptionText,
@@ -2583,6 +2620,8 @@ pub(super) enum OpWire {
         id: WireId<ThreatId>,
     },
     AddAttackTree {
+        #[serde(default)]
+        role: crate::TreeRole,
         id: WireId<TreeId>,
         nodes: NodesWire,
         step_feasibility: StepFeasibility,
@@ -2897,6 +2936,21 @@ pub(super) enum OpWire {
     },
     #[serde(rename = "unuse_shared_step")]
     UnuseSharedStep {
+        tree: WireId<TreeId>,
+        node: WireId<NodeId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    #[serde(rename = "use_fragment")]
+    UseFragment {
+        tree: WireId<TreeId>,
+        node: WireId<NodeId>,
+        fragment: WireId<TreeId>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    #[serde(rename = "unuse_fragment")]
+    UnuseFragment {
         tree: WireId<TreeId>,
         node: WireId<NodeId>,
         #[serde(default, deserialize_with = "some")]
@@ -3893,6 +3947,50 @@ impl Serialize for StepSharedByNode<'_> {
                 .map(|(node, shared_step)| StepSharedLinkView {
                     node: Text(node),
                     shared_step: Text(shared_step),
+                }),
+        )
+    }
+}
+
+#[derive(serde::Serialize)]
+struct StepFragmentLinkView {
+    node: Text<NodeId>,
+    fragment: Text<TreeId>,
+}
+
+/// A stored attack tree's fragment references in `NodeId` order. O(V log V).
+pub(super) struct StepFragmentsByNode<'a> {
+    pub(super) project: &'a crate::project::Project,
+    pub(super) tree_idx: TreeIdx,
+    pub(super) tree: &'a AttackTree,
+}
+
+impl StepFragmentsByNode<'_> {
+    pub(super) fn is_empty(&self) -> bool {
+        self.tree
+            .iter()
+            .all(|(node, _, _)| self.project.step_fragment(self.tree_idx, node).is_none())
+    }
+}
+
+impl Serialize for StepFragmentsByNode<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut links: Vec<_> = self
+            .tree
+            .iter()
+            .filter_map(|(node_idx, node_id, _)| {
+                self.project
+                    .step_fragment_id(self.tree_idx, node_idx)
+                    .map(|fragment| (node_id, fragment))
+            })
+            .collect();
+        links.sort_unstable_by_key(|&(node, _)| node);
+        s.collect_seq(
+            links
+                .into_iter()
+                .map(|(node, fragment)| StepFragmentLinkView {
+                    node: Text(node),
+                    fragment: Text(fragment),
                 }),
         )
     }

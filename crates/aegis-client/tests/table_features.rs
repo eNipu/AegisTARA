@@ -183,6 +183,13 @@ fn fixture() -> Fx {
             threat: Some(t1),
         },
     );
+    run(
+        &mut ws,
+        &Edit::NewFragment {
+            id: TreeId::new_v7(),
+            root: "Extract shared key".into(),
+        },
+    );
 
     let control = ControlId::new_v7();
     run(
@@ -531,10 +538,14 @@ fn owner_filtering_matches_system_use_across_all_nine_tables() {
                 .filter(|r| match owner {
                     Owner::Project => true,
                     Owner::System(sys) => {
-                        let set = usage.set_of([sys]);
-                        r.target
-                            .and_then(|s| independent_system_set(project, &usage, s))
-                            .is_some_and(|m| m.intersects(set))
+                        if table == TableId::Fragments {
+                            false
+                        } else {
+                            let set = usage.set_of([sys]);
+                            r.target
+                                .and_then(|s| independent_system_set(project, &usage, s))
+                                .is_some_and(|m| m.intersects(set))
+                        }
                     }
                     Owner::Unassigned => {
                         if matches!(
@@ -544,6 +555,7 @@ fn owner_filtering_matches_system_use_across_all_nine_tables() {
                                 | TableId::Goals
                                 | TableId::Claims
                                 | TableId::SharedSteps
+                                | TableId::Fragments
                         ) {
                             false
                         } else {
@@ -661,6 +673,7 @@ fn owner_filtering_matches_system_use_across_all_nine_tables() {
         (Folder::Claims, TableId::Claims, "claims"),
         (Folder::Problems, TableId::Problems, "problems"),
         (Folder::SharedSteps, TableId::SharedSteps, "shared-steps"),
+        (Folder::Fragments, TableId::Fragments, "fragments"),
     ];
     for (folder, table, key) in pairs {
         assert_eq!(table_for_folder(folder), Some(table));

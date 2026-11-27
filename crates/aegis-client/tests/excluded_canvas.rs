@@ -125,6 +125,7 @@ fn excluded_steps_and_fully_excluded_trees_hatch_and_speak_reasons() {
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree1_id,
                 tree: tree1,
                 step_feasibility: vec![(step_a, high), (step_b, high)],
@@ -151,6 +152,7 @@ fn excluded_steps_and_fully_excluded_trees_hatch_and_speak_reasons() {
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree2_id,
                 tree: tree2,
                 step_feasibility: vec![(step_only, high)],

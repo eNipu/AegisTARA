@@ -14,6 +14,7 @@ use serde_json::Value;
 
 fn add_tree(n: u64) -> Op {
     Op::AddAttackTree {
+        role: Default::default(),
         id: tree_id(n),
         tree: AttackTree::new(node_id(100 + n), Node::step("Step")).expect("tree"),
         step_feasibility: vec![],

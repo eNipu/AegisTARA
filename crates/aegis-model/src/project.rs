@@ -4,12 +4,18 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
+#[cfg(test)]
+#[path = "../tests/common/shared_fragment_guards.rs"]
+mod shared_fragments;
+
 use crate::applicability::{
     Applicability, Assumption, AttackFilter, Condition, MAX_ASSUMPTION_EXCLUDES, MAX_ASSUMPTIONS,
     MAX_CLAIM_ASSUMPTIONS, MAX_CONDITIONS, MAX_CONDITIONS_PER_ELEMENT, StepRef,
 };
 use crate::asset::{Asset, PropertySet};
-use crate::blocks::{MAX_SHARED_STEPS, SharedStep};
+use crate::blocks::{
+    MAX_FRAGMENT_DEPTH, MAX_FRAGMENT_REFERENCES, MAX_SHARED_STEPS, SharedStep, TreeRole,
+};
 use crate::control::{
     CeilingSource, ControlRule, ControlStatus, CybersecurityClaim, CybersecurityGoal, DecidingStep,
     MAX_CONTROL_RULES, MAX_CONTROL_TARGETS, MAX_GOAL_CONTROLS, MAX_STEP_MITIGATIONS, RiskTreatment,
@@ -187,6 +193,7 @@ impl<Id: Copy + Ord, Idx: ArenaIndex, T> Arena<Id, Idx, T> {
 /// step mitigations, and provenance. Gate slots are always `None` and empty.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TreeEntry {
+    role: TreeRole,
     tree: AttackTree,
     step_feasibility: Vec<Option<FeasibilityLevel>>,
     step_factors: Vec<Box<[Option<FactorLevel>]>>,
@@ -208,6 +215,7 @@ struct StepLinks {
     attack_type: Vec<Option<AttackType>>,
     condition: Vec<Vec<ConditionIdx>>,
     shared: Vec<Option<SharedStepIdx>>,
+    fragment: Vec<Option<TreeIdx>>,
 }
 
 impl StepLinks {
@@ -216,6 +224,7 @@ impl StepLinks {
             && self.attack_type.iter().all(Option::is_none)
             && self.condition.iter().all(Vec::is_empty)
             && self.shared.iter().all(Option::is_none)
+            && self.fragment.iter().all(Option::is_none)
     }
 }
 
@@ -237,6 +246,17 @@ impl TreeEntry {
         self.step_links.as_ref()?.shared.get(i).copied().flatten()
     }
 
+    fn fragment_at(&self, i: usize) -> Option<TreeIdx> {
+        self.step_links.as_ref()?.fragment.get(i).copied().flatten()
+    }
+
+    /// The fragments this tree's steps reference, in slot order.
+    fn fragments(&self) -> impl Iterator<Item = TreeIdx> + '_ {
+        self.step_links
+            .iter()
+            .flat_map(|l| l.fragment.iter().flatten().copied())
+    }
+
     /// The slots that have a "through" item, with the item.
     fn vias(&self) -> impl Iterator<Item = (usize, ItemIdx)> + '_ {
         self.step_links
@@ -253,8 +273,9 @@ impl TreeEntry {
                 .zip(&l.attack_type)
                 .zip(&l.condition)
                 .zip(&l.shared)
-                .filter(|(((v, t), c), s)| {
-                    v.is_some() || t.is_some() || !c.is_empty() || s.is_some()
+                .zip(&l.fragment)
+                .filter(|((((v, t), c), s), f)| {
+                    v.is_some() || t.is_some() || !c.is_empty() || s.is_some() || f.is_some()
                 })
                 .count()
         })
@@ -278,6 +299,7 @@ impl TreeEntry {
                 attack_type: vec![None; len],
                 condition: vec![Vec::new(); len],
                 shared: vec![None; len],
+                fragment: vec![None; len],
             })
         });
         let old = field(links)
@@ -299,12 +321,17 @@ impl TreeEntry {
         self.set_link(at, value, |l| &mut l.shared)
     }
 
+    fn set_fragment(&mut self, at: usize, value: Option<TreeIdx>) -> Option<TreeIdx> {
+        self.set_link(at, value, |l| &mut l.fragment)
+    }
+
     fn insert_links(&mut self, i: usize) {
         if let Some(l) = self.step_links.as_mut() {
             l.via.insert(i, None);
             l.attack_type.insert(i, None);
             l.condition.insert(i, Vec::new());
             l.shared.insert(i, None);
+            l.fragment.insert(i, None);
         }
     }
 
@@ -314,6 +341,7 @@ impl TreeEntry {
             l.attack_type.remove(i);
             l.condition.remove(i);
             l.shared.remove(i);
+            l.fragment.remove(i);
             if l.is_empty() {
                 self.step_links = None;
             }
@@ -338,6 +366,7 @@ impl TreeEntry {
                 attack_type: vec![None; len],
                 condition: vec![Vec::new(); len],
                 shared: vec![None; len],
+                fragment: vec![None; len],
             })
         });
         if let Some(slot) = links.condition.get_mut(i) {
@@ -1272,6 +1301,7 @@ impl Project {
     /// let id = TreeId::new_v7();
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
@@ -1298,6 +1328,7 @@ impl Project {
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
     /// let prov = Provenance::ai("tara-assistant", 1_700_000_000_000);
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id,
     ///     tree,
     ///     step_feasibility: vec![],
@@ -1341,6 +1372,7 @@ impl Project {
     /// let id = TreeId::new_v7();
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
@@ -1380,6 +1412,7 @@ impl Project {
     /// let id = TreeId::new_v7();
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// assert_eq!(project.attack_trees().map(|(_, id, _)| id).collect::<Vec<_>>(), [id]);
@@ -1406,6 +1439,7 @@ impl Project {
     /// let tree = AttackTree::new(step, Node::step("Step"))?;
     /// let root = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id, tree, step_feasibility: vec![(step, level)], provenance: Provenance::default(),
     /// })?;
     /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
@@ -1433,6 +1467,202 @@ impl Project {
     pub fn step_shared_id(&self, tree: TreeIdx, node: NodeIdx) -> Option<SharedStepId> {
         self.step_shared(tree, node)
             .and_then(|idx| self.shared_step_id(idx))
+    }
+
+    /// The fragment referenced by this step, if any. Time O(1).
+    #[must_use]
+    pub fn step_fragment(&self, tree: TreeIdx, node: NodeIdx) -> Option<TreeIdx> {
+        self.trees.get(tree)?.fragment_at(node.index())
+    }
+
+    /// The stable ID of the fragment referenced by this step. Time O(1).
+    #[must_use]
+    pub fn step_fragment_id(&self, tree: TreeIdx, node: NodeIdx) -> Option<TreeId> {
+        self.step_fragment(tree, node)
+            .and_then(|f| self.attack_tree_id(f))
+    }
+
+    /// Source steps referencing `fragment`, sorted by stable tree/node IDs.
+    #[must_use]
+    pub fn fragment_users(&self, fragment: TreeIdx) -> Vec<StepRef> {
+        let mut users = Vec::new();
+        for (_, tree, entry) in self.trees.iter() {
+            for (idx, node, _) in entry.tree.iter() {
+                if entry.fragment_at(idx.index()) == Some(fragment) {
+                    users.push(StepRef { tree, node });
+                }
+            }
+        }
+        users.sort();
+        users
+    }
+
+    /// All live trees, dependency-first, with stable-ID ties.
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::FragmentCycle`] for a cycle, [`ModelError::FragmentDepth`]
+    /// for a path longer than [`MAX_FRAGMENT_DEPTH`] edges.
+    pub fn fragment_order(&self) -> Result<Vec<TreeIdx>, ModelError> {
+        self.check_fragment_graph(None)
+    }
+
+    /// Whether any step references a fragment. Time O(T + linked slots).
+    fn has_fragment_references(&self) -> bool {
+        self.trees
+            .iter()
+            .any(|(_, _, e)| e.fragments().next().is_some())
+    }
+
+    /// The deciding path from `node` of `tree` in one mode (residual when
+    /// `residual`), as stable tree/node IDs. Where the path ends at a step
+    /// that references a fragment, it continues from that fragment's root,
+    /// so a crossing lists the host step and then the fragment root. At most
+    /// [`MAX_FRAGMENT_DEPTH`] references are crossed.
+    ///
+    /// Every tree of the dependency closure is evaluated once, in the same
+    /// mode. [`Evaluation::why_path`] itself stays tree-local, and a crossed
+    /// reference is followed even when a local ceiling on the host step
+    /// decided its value; callers resolve such ceilings themselves.
+    /// Time O(closure nodes * m + depth), space O(closure nodes).
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::UnknownAttackTree`] or [`ModelError::UnknownTreeNode`]
+    /// for unknown IDs; otherwise the error [`evaluate_tree`](Self::evaluate_tree)
+    /// (or the residual one) gives for `tree` or a crossed fragment.
+    pub fn fragment_why_path(
+        &self,
+        tree: TreeId,
+        node: NodeId,
+        residual: bool,
+    ) -> Result<Vec<StepRef>, ModelError> {
+        let (mut idx, mut entry) = self.live_tree(tree)?;
+        let mut at = entry
+            .tree
+            .idx_of(&node)
+            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+        let (_, mut evals) = self.closure_evals(&self.applicability(), idx, residual)?;
+        let mut path = Vec::new();
+        for _ in 0..=MAX_FRAGMENT_DEPTH {
+            let id = self
+                .trees
+                .id(idx)
+                .ok_or(ModelError::UnknownAttackTree(tree))?;
+            let eval = evals
+                .remove(&idx)
+                .ok_or(ModelError::UnknownAttackTree(id))??;
+            if eval.root_value().is_excluded() {
+                return Err(ModelError::TreeNotApplicable(id));
+            }
+            let mut last = at;
+            for n in eval.why_path(at) {
+                let node = entry
+                    .tree
+                    .id_of(n)
+                    .ok_or(ModelError::UnknownAttackTree(id))?;
+                path.push(StepRef { tree: id, node });
+                last = n;
+            }
+            let Some(target) = entry.fragment_at(last.index()) else {
+                return Ok(path);
+            };
+            idx = target;
+            entry = self
+                .trees
+                .get(target)
+                .ok_or(ModelError::UnknownAttackTree(id))?;
+            at = entry.tree.root();
+        }
+        Err(ModelError::FragmentDepth {
+            max: MAX_FRAGMENT_DEPTH,
+        })
+    }
+
+    fn check_fragment_graph(
+        &self,
+        candidate: Option<(TreeIdx, NodeIdx, TreeIdx)>,
+    ) -> Result<Vec<TreeIdx>, ModelError> {
+        let mut deps = BTreeMap::<TreeId, BTreeSet<TreeId>>::new();
+        for (idx, id, entry) in self.trees.iter() {
+            let targets = deps.entry(id).or_default();
+            for (node, _, _) in entry.tree.iter() {
+                let target = match candidate {
+                    Some((source, at, target)) if source == idx && at == node => Some(target),
+                    _ => entry.fragment_at(node.index()),
+                };
+                if let Some(target) = target {
+                    let target_id = self
+                        .attack_tree_id(target)
+                        .ok_or(ModelError::FragmentRole(id))?;
+                    if self.attack_tree_role(target) != Some(TreeRole::Fragment) {
+                        return Err(ModelError::FragmentRole(target_id));
+                    }
+                    targets.insert(target_id);
+                }
+            }
+        }
+        let mut users = BTreeMap::<TreeId, Vec<TreeId>>::new();
+        let mut remaining: BTreeMap<_, _> = deps.iter().map(|(&id, d)| (id, d.len())).collect();
+        for (&source, targets) in &deps {
+            for &target in targets {
+                users.entry(target).or_default().push(source);
+            }
+        }
+        let mut ready: BTreeSet<_> = remaining
+            .iter()
+            .filter_map(|(&id, &count)| (count == 0).then_some(id))
+            .collect();
+        let mut order = Vec::new();
+        let mut depth = BTreeMap::<TreeId, usize>::new();
+        while let Some(id) = ready.pop_first() {
+            order.push(self.live_tree(id)?.0);
+            let d = deps[&id].iter().map(|t| depth[t] + 1).max().unwrap_or(0);
+            depth.insert(id, d);
+            for source in users.get(&id).into_iter().flatten() {
+                if let Some(count) = remaining.get_mut(source) {
+                    *count -= 1;
+                    if *count == 0 {
+                        ready.insert(*source);
+                    }
+                }
+            }
+        }
+        if order.len() != deps.len() {
+            // Kahn residual: each remaining source has a remaining dependency.
+            // Walking those dependencies already follows source -> target edges.
+            let mut at = remaining
+                .iter()
+                .find_map(|(&id, &n)| (n > 0).then_some(id))
+                .ok_or(ModelError::FragmentDepth {
+                    max: MAX_FRAGMENT_DEPTH,
+                })?;
+            let mut positions = BTreeMap::new();
+            let mut walk = Vec::new();
+            loop {
+                if let Some(&start) = positions.get(&at) {
+                    let mut cycle = walk[start..].to_vec();
+                    if let Some((pos, _)) = cycle.iter().enumerate().min_by_key(|(_, id)| *id) {
+                        cycle.rotate_left(pos);
+                    }
+                    cycle.push(cycle[0]);
+                    return Err(ModelError::FragmentCycle(cycle));
+                }
+                positions.insert(at, walk.len());
+                walk.push(at);
+                at = deps[&at].iter().copied().find(|t| remaining[t] > 0).ok_or(
+                    ModelError::FragmentDepth {
+                        max: MAX_FRAGMENT_DEPTH,
+                    },
+                )?;
+            }
+        }
+        if depth.values().any(|&d| d > MAX_FRAGMENT_DEPTH) {
+            return Err(ModelError::FragmentDepth {
+                max: MAX_FRAGMENT_DEPTH,
+            });
+        }
+        Ok(order)
     }
 
     /// How many attack-tree steps use `shared`. Time O(1).
@@ -1481,6 +1711,7 @@ impl Project {
     /// let level = m.feasibility_level("high").ok_or("no level")?;
     /// let tree = AttackTree::new(step, Node::step("Step"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id, tree, step_feasibility: vec![(step, level)], provenance: Provenance::default(),
     /// })?;
     /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
@@ -1508,6 +1739,7 @@ impl Project {
     /// let tree = AttackTree::new(step, Node::step("Extract key"))?;
     /// let root = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// let eq = m.feasibility_factor("equipment").ok_or("no factor")?;
@@ -1550,6 +1782,7 @@ impl Project {
     /// let tree = AttackTree::new(step, Node::step("Extract key"))?;
     /// let root = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// let eq = m.feasibility_factor("equipment").ok_or("no factor")?;
@@ -1622,6 +1855,7 @@ impl Project {
     /// let tree = AttackTree::new(step, Node::step("Glitch boot ROM"))?;
     /// let root = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// for (f_key, l_key) in [
@@ -1675,6 +1909,7 @@ impl Project {
     /// let tree = AttackTree::new(step, Node::step("Step"))?;
     /// let root = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, high)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -1683,6 +1918,11 @@ impl Project {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// Own or shared-step ratings only, in O(leaf): a step that references a
+    /// fragment returns `None` here. Its value comes from the dependency
+    /// closure in [`evaluate_tree`](Self::evaluate_tree) or the cache, which
+    /// this accessor never recomputes.
     #[must_use]
     pub fn effective_step_feasibility(
         &self,
@@ -2999,6 +3239,7 @@ impl Project {
     /// let id = TreeId::new_v7();
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
@@ -3022,6 +3263,7 @@ impl Project {
     /// let id = TreeId::new_v7();
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// let idx = project.attack_tree_idx(&id).ok_or("missing")?;
@@ -3031,8 +3273,17 @@ impl Project {
     /// ```
     #[must_use]
     pub fn attack_tree_visual_id(&self, idx: TreeIdx) -> Option<String> {
-        self.attack_tree_visual_num(idx)
-            .map(|n| VisualPrefix::Tree.format(n))
+        self.attack_tree_visual_num(idx).map(|n| {
+            self.trees
+                .get(idx)
+                .map(|e| e.role.visual_prefix().format(n))
+        })?
+    }
+
+    /// A live tree's immutable role, or `None` for a missing slot. Time O(1).
+    #[must_use]
+    pub fn attack_tree_role(&self, idx: TreeIdx) -> Option<TreeRole> {
+        self.trees.get(idx).map(|entry| entry.role)
     }
 
     /// Returns a live security control's 0-based visual sequence number in
@@ -3562,6 +3813,7 @@ impl Project {
     /// let root = tree.root();
     /// let low = m.feasibility_level("low").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, low)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -3600,6 +3852,7 @@ impl Project {
     /// let (tree_id, step) = (TreeId::new_v7(), NodeId::new_v7());
     /// let tree = AttackTree::new(step, Node::step("Flash firmware"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepVia {
@@ -3675,6 +3928,7 @@ impl Project {
     /// let tree = AttackTree::new(step, Node::step("Extract key"))?;
     /// let root = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, high)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -3688,6 +3942,10 @@ impl Project {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// Like [`effective_step_feasibility`](Self::effective_step_feasibility),
+    /// own or shared-step ratings only in O(leaf): a fragment reference gives
+    /// `None`, never a recomputed dependency closure.
     #[must_use]
     pub fn residual_step_feasibility(
         &self,
@@ -3746,6 +4004,7 @@ impl Project {
     /// let tree = AttackTree::new(step, Node::step("Inject frame"))?;
     /// let root = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepVia {
@@ -3859,6 +4118,10 @@ impl Project {
     ///
     /// Time O(depth + controls), space O(ceilings on the step).
     ///
+    /// Tree-local: a chain ending at a fragment reference returns `None`,
+    /// because the reference has no own rating. Use
+    /// [`fragment_why_path`](Self::fragment_why_path) to cross references.
+    ///
     /// ```
     /// # use std::sync::Arc;
     /// # use aegis_model::{
@@ -3890,6 +4153,7 @@ impl Project {
     /// })?;
     /// let tree = AttackTree::new(step, Node::step("Dump flash"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetStepVia {
@@ -4008,6 +4272,11 @@ impl Project {
         entry: &TreeEntry,
         idx: NodeIdx,
     ) -> Option<FeasibilityLevel> {
+        // A reference has no own rating: only a dependency-closure
+        // evaluation gives it the fragment's root (see `lifted_leaf`).
+        if entry.fragment_at(idx.index()).is_some() {
+            return None;
+        }
         match entry.shared_at(idx.index()) {
             Some(shared) => {
                 let step = self.shared_steps.get(shared)?;
@@ -4025,7 +4294,19 @@ impl Project {
         idx: NodeIdx,
         residual: bool,
     ) -> Option<FeasibilityLevel> {
-        let mut res = self.entry_effective_step_feasibility(entry, idx)?;
+        let own = self.entry_effective_step_feasibility(entry, idx)?;
+        Some(self.entry_local_ceiling(entry, idx, residual, own))
+    }
+
+    /// `res` lowered by every mitigation and control rule of step `idx` that
+    /// counts in the mode (`ControlStatus::counts_for`). Time O(m + C).
+    fn entry_local_ceiling(
+        &self,
+        entry: &TreeEntry,
+        idx: NodeIdx,
+        residual: bool,
+        mut res: FeasibilityLevel,
+    ) -> FeasibilityLevel {
         if let Some(mitigations) = entry.step_mitigations.get(idx.index()) {
             for m in mitigations {
                 if self
@@ -4056,7 +4337,7 @@ impl Project {
                 }
             }
         }
-        Some(res)
+        res
     }
 
     fn entry_residual_step_feasibility(
@@ -4096,6 +4377,7 @@ impl Project {
     /// let low = m.feasibility_level("low").ok_or("no level")?;
     /// let high = m.feasibility_level("high").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id,
     ///     tree,
     ///     step_feasibility: vec![(s1, low), (s2, high)],
@@ -4111,7 +4393,9 @@ impl Project {
     }
 
     /// The rating of step `idx` of tree `id` (inherent or residual), or
-    /// `Excluded` when applicability excludes it. Time O(log n + m).
+    /// `Excluded` when applicability excludes it. A reference step takes its
+    /// fragment's root from `roots`, lowered by its own ceilings in the same
+    /// mode; an unknown or unrated root leaves it unrated. Time O(log n + m).
     fn lifted_leaf(
         &self,
         app: &Applicability,
@@ -4119,29 +4403,100 @@ impl Project {
         entry: &TreeEntry,
         idx: NodeIdx,
         residual: bool,
+        roots: &FragmentRoots,
     ) -> Option<Lifted<FeasibilityLevel>> {
         if app.node_excluded_at(id, idx) {
             return Some(Lifted::Excluded);
+        }
+        if let Some(target) = entry.fragment_at(idx.index()) {
+            return match (*roots.get(&target)?)? {
+                Lifted::Value(v) => Some(Lifted::Value(
+                    self.entry_local_ceiling(entry, idx, residual, v),
+                )),
+                Lifted::Excluded => Some(Lifted::Excluded),
+            };
         }
         let rating = self.entry_step_feasibility_for(entry, idx, residual);
         rating.map(Lifted::Value)
     }
 
-    /// Evaluates tree `id` under `app`, leaving excluded steps out.
+    /// Evaluates live tree `idx` under `app` with its references reading
+    /// `roots`. The root is `Excluded` when every step is excluded.
     /// Time O(V * m + E), space O(V).
+    fn lifted_tree_with(
+        &self,
+        app: &Applicability,
+        (id, entry): (TreeId, &TreeEntry),
+        residual: bool,
+        roots: &FragmentRoots,
+    ) -> Result<Evaluation<Lifted<FeasibilityLevel>>, ModelError> {
+        if app.is_excluded(ElementRef::Tree(id)) {
+            return Err(ModelError::TreeNotApplicable(id));
+        }
+        evaluate(&entry.tree, &Applicable(MaxMin::new()), |i| {
+            self.lifted_leaf(app, id, entry, i, residual, roots)
+        })
+    }
+
+    /// Evaluates, in one mode, tree `idx` and every tree it depends on,
+    /// dependency first and each once. Only that closure is evaluated, so
+    /// unrelated invalid trees cannot block `idx`. Returns the root each
+    /// evaluated tree gives its references, and each tree's evaluation.
+    /// Time O(closure nodes * m) plus O(all nodes) for the order when `idx`
+    /// has references; space O(closure nodes).
+    #[allow(clippy::type_complexity)] // the two outputs of one fold
+    fn closure_evals(
+        &self,
+        app: &Applicability,
+        idx: TreeIdx,
+        residual: bool,
+    ) -> Result<
+        (
+            FragmentRoots,
+            BTreeMap<TreeIdx, Result<Evaluation<Lifted<FeasibilityLevel>>, ModelError>>,
+        ),
+        ModelError,
+    > {
+        let mut need = BTreeSet::from([idx]);
+        let mut stack = vec![idx];
+        while let Some(t) = stack.pop() {
+            for target in self.trees.get(t).into_iter().flat_map(TreeEntry::fragments) {
+                if need.insert(target) {
+                    stack.push(target);
+                }
+            }
+        }
+        let order = if need.len() == 1 {
+            vec![idx]
+        } else {
+            self.fragment_order()?
+        };
+        let (mut roots, mut evals) = (FragmentRoots::new(), BTreeMap::new());
+        for t in order.into_iter().filter(|t| need.contains(t)) {
+            let (Some(id), Some(entry)) = (self.trees.id(t), self.trees.get(t)) else {
+                continue;
+            };
+            let eval = self.lifted_tree_with(app, (id, entry), residual, &roots);
+            roots.insert(t, reference_root(eval.as_ref().map(|e| *e.root_value())));
+            evals.insert(t, eval);
+        }
+        Ok((roots, evals))
+    }
+
+    /// Evaluates tree `id` under `app`, leaving excluded steps out and
+    /// folding the trees it references first.
+    /// Time O(closure nodes * m), space O(closure nodes).
     fn evaluate_tree_with(
         &self,
         app: &Applicability,
         id: TreeId,
         residual: bool,
     ) -> Result<Evaluation<FeasibilityLevel>, ModelError> {
-        let (_, entry) = self.live_tree(id)?;
-        if app.is_excluded(ElementRef::Tree(id)) {
-            return Err(ModelError::TreeNotApplicable(id));
-        }
-        let eval = evaluate(&entry.tree, &Applicable(MaxMin::new()), |idx| {
-            self.lifted_leaf(app, id, entry, idx, residual)
-        })?;
+        let (idx, _) = self.live_tree(id)?;
+        let (_, mut evals) = self.closure_evals(app, idx, residual)?;
+        let eval = evals
+            .remove(&idx)
+            .ok_or(ModelError::UnknownAttackTree(id))??;
         Evaluation::from_lifted(&eval).ok_or(ModelError::TreeNotApplicable(id))
     }
 
@@ -4230,6 +4585,7 @@ impl Project {
     /// let med = m.feasibility_level("medium").ok_or("no level")?;
     /// let tree = AttackTree::new(step, Node::step("Step"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, med)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -4303,6 +4659,7 @@ impl Project {
     /// let step = NodeId::new_v7();
     /// let high = m.feasibility_level("high").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -4360,6 +4717,7 @@ impl Project {
     /// tree.add_child(tree.root(), ota, Node::step("Via OTA update"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id,
     ///     tree,
     ///     step_feasibility: vec![(obd, high), (ota, med)],
@@ -4426,6 +4784,7 @@ impl Project {
     /// let tree_id = TreeId::new_v7();
     /// let step = NodeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Replay frame"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -4507,6 +4866,7 @@ impl Project {
     /// let tree_id = TreeId::new_v7();
     /// let step = NodeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -4557,6 +4917,7 @@ impl Project {
     /// let low = m.feasibility_level("low").ok_or("no level")?;
     /// let high = m.feasibility_level("high").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id,
     ///     tree,
     ///     step_feasibility: vec![(s1, low), (s2, high)],
@@ -4611,6 +4972,7 @@ impl Project {
     /// let i_ota = tree.add_child(tree.root(), ota, Node::step("OTA"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id,
     ///     tree,
     ///     step_feasibility: vec![(obd, high), (ota, med)],
@@ -4674,6 +5036,7 @@ impl Project {
     /// let step = NodeId::new_v7();
     /// let med = m.feasibility_level("medium").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Step"))?,
     ///     step_feasibility: vec![(step, med)], provenance: Provenance::default(),
     /// })?;
@@ -4738,6 +5101,7 @@ impl Project {
     /// let tree_id = TreeId::new_v7();
     /// let step = NodeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Replay"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -4805,6 +5169,7 @@ impl Project {
     /// tree.add_child(i_or, z, Node::step("Z"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id,
     ///     tree,
     ///     step_feasibility: vec![(x, high), (y, med), (z, med)],
@@ -4857,6 +5222,7 @@ impl Project {
     /// let i_ota = tree.add_child(tree.root(), ota, Node::step("OTA"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(obd, high), (ota, med)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -4919,6 +5285,7 @@ impl Project {
     /// let step = NodeId::new_v7();
     /// let med = m.feasibility_level("medium").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Step"))?,
     ///     step_feasibility: vec![(step, med)], provenance: Provenance::default(),
     /// })?;
@@ -4983,6 +5350,7 @@ impl Project {
     /// let tree_id = TreeId::new_v7();
     /// let step = NodeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Replay"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -5044,6 +5412,7 @@ impl Project {
     /// tree.add_child(tree.root(), y, Node::step("Y"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(x, high), (y, high)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -5088,6 +5457,7 @@ impl Project {
     /// let i_ota = tree.add_child(tree.root(), ota, Node::step("OTA"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(obd, high), (ota, med)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -5150,6 +5520,7 @@ impl Project {
     /// let root_idx = tree.root();
     /// let med = m.feasibility_level("medium").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, med)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -5211,6 +5582,7 @@ impl Project {
     /// let tree = AttackTree::new(step, Node::step("Replay"))?;
     /// let root_idx = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, high)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -5277,6 +5649,7 @@ impl Project {
     /// tree.add_child(tree.root(), s2, Node::step("Dominant"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(s1, low), (s2, med)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -5326,6 +5699,7 @@ impl Project {
     /// tree.add_child(tree.root(), ota, Node::step("OTA"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(obd, high), (ota, med)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -5404,6 +5778,7 @@ impl Project {
     /// tree.add_child(tree.root(), s2, Node::step("Easy"))?;
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(s1, med), (s2, high)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -5468,6 +5843,7 @@ impl Project {
     /// let tree_id = TreeId::new_v7();
     /// let step = NodeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -5511,7 +5887,8 @@ impl Project {
             return Err(ModelError::TreeNotApplicable(id));
         }
         let domain = Applicable(MaxMin::<FeasibilityLevel>::new());
-        let leaf = |idx| self.lifted_leaf(app, id, entry, idx, residual);
+        let (roots, _) = self.closure_evals(app, self.live_tree(id)?.0, residual)?;
+        let leaf = |idx| self.lifted_leaf(app, id, entry, idx, residual, &roots);
         let mut cache = TreeEvalCache::new(&entry.tree, &domain, leaf)?;
         let Lifted::Value(baseline_root) = *cache.evaluation().root_value() else {
             return Err(ModelError::TreeNotApplicable(id));
@@ -5857,6 +6234,7 @@ impl Project {
     /// let step = NodeId::new_v7();
     /// let high = m.feasibility_level("high").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -5920,6 +6298,7 @@ impl Project {
     /// let tree_id = TreeId::new_v7();
     /// let step = NodeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -6256,7 +6635,10 @@ impl Project {
                         }
                     }
                     Node::Step { .. } => {
-                        if self.effective_step_feasibility(idx, node_idx).is_none() {
+                        // A reference is rated by its fragment, which is linted itself.
+                        if entry.fragment_at(node_idx.index()).is_none()
+                            && self.effective_step_feasibility(idx, node_idx).is_none()
+                        {
                             findings.push(LintFinding::new(LintCode::AttackTreeStepUnrated {
                                 tree: id,
                                 node: node_id,
@@ -7210,6 +7592,12 @@ impl Project {
                 }
                 check_provenance(provenance)?;
             }
+            Op::SetTreeNodeKind {
+                tree,
+                id,
+                provenance,
+                ..
+            } => return self.check_set_tree_node_kind(*tree, *id, provenance),
             Op::AddAsset {
                 id,
                 name,
@@ -7293,6 +7681,7 @@ impl Project {
                 tree,
                 step_feasibility,
                 provenance,
+                ..
             } => return self.check_add_tree(*id, tree, step_feasibility, provenance),
             Op::SetStepFeasibility { target, level, .. } => match target {
                 StepTarget::Step(tree, node) => {
@@ -7520,6 +7909,17 @@ impl Project {
                 node,
                 provenance,
             } => return self.check_unuse_shared_step(*tree, *node, provenance),
+            Op::UseFragment {
+                tree,
+                node,
+                fragment,
+                provenance,
+            } => return self.check_use_fragment(*tree, *node, *fragment, provenance),
+            Op::UnuseFragment {
+                tree,
+                node,
+                provenance,
+            } => return self.check_unuse_fragment(*tree, *node, provenance),
             Op::NeedCondition {
                 element,
                 condition,
@@ -7848,6 +8248,26 @@ impl Project {
                     provenance,
                 })
             }
+            Op::SetTreeNodeKind {
+                tree,
+                id,
+                gate,
+                provenance,
+            } => {
+                let entry = self.tree_mut(tree)?;
+                let idx = entry
+                    .tree
+                    .idx_of(&id)
+                    .ok_or(ModelError::UnknownTreeNode { tree, node: id })?;
+                let gate = entry.tree.set_node_kind(idx, gate)?;
+                let provenance = std::mem::replace(&mut entry.provenance, provenance);
+                Ok(Op::SetTreeNodeKind {
+                    tree,
+                    id,
+                    gate,
+                    provenance,
+                })
+            }
             Op::AddAsset {
                 id,
                 name,
@@ -7926,11 +8346,12 @@ impl Project {
             } => self.commit_link(threat, damage, provenance, false),
             Op::RemoveThreatScenario { id } => self.commit_remove_threat(id),
             Op::AddAttackTree {
+                role,
                 id,
                 tree,
                 step_feasibility,
                 provenance,
-            } => self.commit_add_tree(id, tree, step_feasibility, provenance),
+            } => self.commit_add_tree(id, role, tree, step_feasibility, provenance),
             Op::SetStepFeasibility {
                 target,
                 level,
@@ -8181,6 +8602,17 @@ impl Project {
                 node,
                 provenance,
             } => self.commit_unuse_shared_step(tree, node, provenance),
+            Op::UseFragment {
+                tree,
+                node,
+                fragment,
+                provenance,
+            } => self.commit_use_fragment(tree, node, fragment, provenance),
+            Op::UnuseFragment {
+                tree,
+                node,
+                provenance,
+            } => self.commit_unuse_fragment(tree, node, provenance),
             Op::NeedCondition {
                 element,
                 condition,
@@ -8980,18 +9412,8 @@ impl Project {
             .check_insert(parent_idx, at, position as usize, id, node)
     }
 
-    fn check_remove_tree_node(
-        &self,
-        tree: TreeId,
-        id: NodeId,
-        provenance: &Provenance,
-    ) -> Result<(), ModelError> {
-        let (entry, idx) = self.tree_node(tree, id)?;
-        entry.tree.check_remove(idx)?;
-        if let Some(shared) = entry.shared_at(idx.index()) {
-            return Err(self.shared_link_error(tree, id, shared));
-        }
-        let rated = self.review_marks.contains(&(tree, id))
+    fn has_node_metadata(&self, tree: TreeId, id: NodeId, entry: &TreeEntry, idx: NodeIdx) -> bool {
+        self.review_marks.contains(&(tree, id))
             || entry
                 .step_feasibility
                 .get(idx.index())
@@ -9011,8 +9433,39 @@ impl Project {
                 a.excludes_steps
                     .binary_search(&StepRef { tree, node: id })
                     .is_ok()
-            });
-        if rated {
+            })
+    }
+
+    fn check_set_tree_node_kind(
+        &self,
+        tree: TreeId,
+        id: NodeId,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let (entry, idx) = self.tree_node(tree, id)?;
+        let bare = entry.tree.children(idx).is_empty()
+            && entry.fragment_at(idx.index()).is_none()
+            && entry.shared_at(idx.index()).is_none()
+            && !self.has_node_metadata(tree, id, entry, idx);
+        if !bare {
+            return Err(ModelError::BareTreeNodeRequired { tree, node: id });
+        }
+        check_provenance(provenance)
+    }
+
+    fn check_remove_tree_node(
+        &self,
+        tree: TreeId,
+        id: NodeId,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let (entry, idx) = self.tree_node(tree, id)?;
+        entry.tree.check_remove(idx)?;
+        self.require_no_fragment(tree, id, entry.fragment_at(idx.index()))?;
+        if let Some(shared) = entry.shared_at(idx.index()) {
+            return Err(self.shared_link_error(tree, id, shared));
+        }
+        if self.has_node_metadata(tree, id, entry, idx) {
             return Err(ModelError::NodeIsRated(id));
         }
         check_provenance(provenance)
@@ -9763,6 +10216,7 @@ impl Project {
     pub(crate) fn load_attack_tree(
         &mut self,
         id: TreeId,
+        role: TreeRole,
         tree: AttackTree,
         step_feasibility: Vec<(NodeId, FeasibilityLevel)>,
         provenance: Provenance,
@@ -9774,7 +10228,7 @@ impl Project {
             &provenance,
             MAX_ATTACK_TREE_NODES,
         )?;
-        self.commit_add_tree(id, tree, step_feasibility, provenance)
+        self.commit_add_tree(id, role, tree, step_feasibility, provenance)
             .map(|_| ())
     }
 
@@ -9833,6 +10287,75 @@ impl Project {
         }
     }
 
+    fn require_no_fragment(
+        &self,
+        tree: TreeId,
+        node: NodeId,
+        fragment: Option<TreeIdx>,
+    ) -> Result<(), ModelError> {
+        if let Some(fragment) = fragment {
+            return Err(ModelError::NodeUsesFragment {
+                tree,
+                node,
+                fragment: self
+                    .attack_tree_id(fragment)
+                    .ok_or(ModelError::UnknownAttackTree(tree))?,
+            });
+        }
+        Ok(())
+    }
+
+    fn check_use_fragment(
+        &self,
+        tree: TreeId,
+        node: NodeId,
+        fragment: TreeId,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let (target, entry) = self.live_tree(fragment)?;
+        if entry.role != TreeRole::Fragment {
+            return Err(ModelError::FragmentRole(fragment));
+        }
+        let at = self.unshared_step_slot(tree, node)?;
+        check_provenance(provenance)?;
+        let (source, entry) = self.live_tree(tree)?;
+        if entry.step_feasibility[at.index()].is_some()
+            || entry.step_factors[at.index()].iter().any(Option::is_some)
+            || entry.via_at(at.index()).is_some()
+            || entry.attack_type_at(at.index()).is_some()
+        {
+            return Err(ModelError::StepIsRated { tree, node });
+        }
+        if entry
+            .step_links
+            .as_ref()
+            .map_or(0, |l| l.fragment.iter().filter(|f| f.is_some()).count())
+            >= MAX_FRAGMENT_REFERENCES
+        {
+            return Err(ModelError::TooManyFragmentReferences {
+                tree,
+                max: MAX_FRAGMENT_REFERENCES,
+            });
+        }
+        self.check_fragment_graph(Some((source, at, target)))
+            .map(|_| ())
+    }
+
+    fn check_unuse_fragment(
+        &self,
+        tree: TreeId,
+        node: NodeId,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let at = self.step_slot(tree, node)?;
+        check_provenance(provenance)?;
+        self.live_tree(tree)?
+            .1
+            .fragment_at(at.index())
+            .ok_or(ModelError::NodeNotFragment { tree, node })
+            .map(|_| ())
+    }
+
     fn check_use_shared_step(
         &self,
         tree: TreeId,
@@ -9845,6 +10368,7 @@ impl Project {
             return Err(ModelError::NotAStep { tree, node });
         }
         self.live_shared_step(step)?;
+        self.require_no_fragment(tree, node, entry.fragment_at(idx.index()))?;
         check_provenance(provenance)?;
         if let Some(shared) = entry.shared_at(idx.index()) {
             return Err(self.shared_link_error(tree, node, shared));
@@ -9909,6 +10433,7 @@ impl Project {
     fn unshared_step_slot(&self, tree: TreeId, node: NodeId) -> Result<NodeIdx, ModelError> {
         let node_idx = self.step_slot(tree, node)?;
         let (_, entry) = self.live_tree(tree)?;
+        self.require_no_fragment(tree, node, entry.fragment_at(node_idx.index()))?;
         if let Some(shared) = entry.shared_at(node_idx.index()) {
             return Err(self.shared_link_error(tree, node, shared));
         }
@@ -9974,8 +10499,10 @@ impl Project {
         tree: Option<TreeId>,
     ) -> Result<(), ModelError> {
         self.live_threat(threat)?;
-        if let Some(tree) = tree {
-            self.live_tree(tree)?;
+        if let Some(tree) = tree
+            && self.live_tree(tree)?.1.role == TreeRole::Fragment
+        {
+            return Err(ModelError::FragmentRole(tree));
         }
         Ok(())
     }
@@ -9998,6 +10525,16 @@ impl Project {
         self.require_no_description(ElementRef::Tree(id), EntityKind::AttackTree)?;
         self.require_no_conditions(ElementRef::Tree(id))?;
         let (idx, entry) = self.live_tree(id)?;
+        let users = self.fragment_users(idx).len();
+        if users > 0 {
+            return Err(ModelError::FragmentInUse {
+                fragment: id,
+                users,
+            });
+        }
+        for (at, node, _) in entry.tree.iter() {
+            self.require_no_fragment(id, node, entry.fragment_at(at.index()))?;
+        }
         let threats = self.refs.trees.get(idx.index()).copied().unwrap_or(0);
         if threats > 0 {
             return Err(ModelError::AttackTreeInUse { tree: id, threats });
@@ -11495,6 +12032,7 @@ impl Project {
     fn commit_add_tree(
         &mut self,
         id: TreeId,
+        role: TreeRole,
         tree: AttackTree,
         step_feasibility: Vec<(NodeId, FeasibilityLevel)>,
         provenance: Provenance,
@@ -11512,6 +12050,7 @@ impl Project {
         let step_factors = vec![Box::default(); tree.len()];
         let step_mitigations = vec![Box::default(); tree.len()];
         let entry = TreeEntry {
+            role,
             tree,
             step_feasibility: slots,
             step_factors,
@@ -11760,6 +12299,7 @@ impl Project {
             .filter_map(|((_, node_id, _), &level)| level.map(|l| (node_id, l)))
             .collect();
         Ok(Op::AddAttackTree {
+            role: entry.role,
             id,
             tree: entry.tree,
             step_feasibility,
@@ -12652,6 +13192,47 @@ impl Project {
         })
     }
 
+    fn commit_use_fragment(
+        &mut self,
+        tree: TreeId,
+        node: NodeId,
+        fragment: TreeId,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let target = self.live_tree(fragment)?.0;
+        let (_, node_idx) = self.tree_node(tree, node)?;
+        let entry = self.tree_mut(tree)?;
+        entry.set_fragment(node_idx.index(), Some(target));
+        Ok(Op::UnuseFragment {
+            tree,
+            node,
+            provenance,
+        })
+    }
+
+    fn commit_unuse_fragment(
+        &mut self,
+        tree: TreeId,
+        node: NodeId,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let (entry, node_idx) = self.tree_node(tree, node)?;
+        let fragment_idx = entry
+            .fragment_at(node_idx.index())
+            .ok_or(ModelError::NodeNotFragment { tree, node })?;
+        let fragment = self
+            .attack_tree_id(fragment_idx)
+            .ok_or(ModelError::UnknownAttackTree(tree))?;
+        let entry = self.tree_mut(tree)?;
+        entry.set_fragment(node_idx.index(), None);
+        Ok(Op::UseFragment {
+            tree,
+            node,
+            fragment,
+            provenance,
+        })
+    }
+
     fn commit_condition_link(
         &mut self,
         element: ElementRef,
@@ -13488,12 +14069,15 @@ impl Project {
     /// Compares two trees from two projects by content, with control
     /// references resolved to public IDs. O(V + M).
     fn same_tree(&self, x: &TreeEntry, other: &Project, y: &TreeEntry) -> bool {
-        x.tree == y.tree
+        x.role == y.role
+            && x.tree == y.tree
             && x.step_feasibility == y.step_feasibility
             && x.step_factors == y.step_factors
             && (0..x.tree.len()).all(|i| {
                 x.attack_type_at(i) == y.attack_type_at(i)
                     && self.item_ref(x.via_at(i)) == other.item_ref(y.via_at(i))
+                    && x.fragment_at(i).and_then(|f| self.attack_tree_id(f))
+                        == y.fragment_at(i).and_then(|f| other.attack_tree_id(f))
                     && x.shared_at(i).and_then(|s| self.shared_step_id(s))
                         == y.shared_at(i).and_then(|s| other.shared_step_id(s))
             })
@@ -13886,6 +14470,9 @@ impl Project {
                 self.trees
                     .get(tree)
                     .ok_or_else(|| format!("threat {id} links a dead tree slot"))?;
+                if self.attack_tree_role(tree) != Some(TreeRole::Threat) {
+                    return Err(format!("threat {id} links a fragment"));
+                }
                 bump(&mut trees, Some(tree.index()), true);
             }
             for &goal in &t.goals {
@@ -14173,6 +14760,8 @@ impl Project {
                 || links.attack_type.len() != entry.tree.len()
                 || links.condition.len() != entry.tree.len()
                 || links.shared.len() != entry.tree.len()
+                || links.fragment.len() != entry.tree.len()
+                || links.fragment.iter().filter(|f| f.is_some()).count() > MAX_FRAGMENT_REFERENCES
                 || links.is_empty())
         {
             return Err(format!("tree {id} has malformed step link slots"));
@@ -14180,6 +14769,19 @@ impl Project {
         for (i, (_, node_id, node)) in entry.tree.iter().enumerate() {
             let (via, attack_type) = (entry.via_at(i), entry.attack_type_at(i));
             let shared = entry.shared_at(i);
+            if let Some(fragment) = entry.fragment_at(i)
+                && (self.attack_tree_role(fragment) != Some(TreeRole::Fragment)
+                    || matches!(node, Node::Gate { .. })
+                    || shared.is_some()
+                    || entry.step_feasibility[i].is_some()
+                    || entry.step_factors[i].iter().any(Option::is_some)
+                    || via.is_some()
+                    || attack_type.is_some())
+            {
+                return Err(format!(
+                    "tree {id} node {node_id} has an invalid fragment slot"
+                ));
+            }
             if let Some(shared) = shared {
                 if self.shared_steps.get(shared).is_none() {
                     return Err(format!("tree {id} node {node_id} links a dead shared step"));
@@ -14219,6 +14821,7 @@ impl Project {
 
     #[cfg(test)]
     fn tree_invariants(&self) -> Result<(Vec<u32>, Vec<u32>), String> {
+        self.fragment_order().map_err(|e| e.to_string())?;
         let m = &*self.methodology;
         let mut controls = vec![0u32; self.controls.slot_count()];
         let mut shared_step_users = vec![0u32; self.shared_steps.slot_count()];
@@ -14460,6 +15063,35 @@ struct CachedTreeEval {
     residual: Result<LiftedTree, ModelError>,
 }
 
+/// The root each fragment gives a reference to it in one mode; `None` when
+/// the fragment cannot be evaluated.
+type FragmentRoots = BTreeMap<TreeIdx, Option<Lifted<FeasibilityLevel>>>;
+
+/// Source steps waiting to be refolded, per tree, keyed by the tree's
+/// dependency rank so a fragment is folded before the trees referencing it.
+type DirtyTrees = BTreeMap<(u32, TreeIdx), BTreeSet<NodeIdx>>;
+
+/// Live trees dependency-first, falling back to arena order for a reference
+/// graph that no valid op can produce (a cycle leaves roots unrated).
+fn dependency_order(project: &Project) -> Vec<TreeIdx> {
+    project
+        .fragment_order()
+        .unwrap_or_else(|_| project.trees.iter().map(|(idx, _, _)| idx).collect())
+}
+
+/// What a reference consumes from its fragment's evaluation `root`: a tree
+/// that does not apply is excluded at the reference, and any other error
+/// leaves the reference unrated rather than defaulting to a level.
+fn reference_root(
+    root: Result<Lifted<FeasibilityLevel>, &ModelError>,
+) -> Option<Lifted<FeasibilityLevel>> {
+    match root {
+        Ok(v) => Some(v),
+        Err(ModelError::TreeNotApplicable(_)) => Some(Lifted::Excluded),
+        Err(_) => None,
+    }
+}
+
 /// Maps a tree's [`ModelError::TreeNotApplicable`] to
 /// [`ModelError::ThreatNotApplicable`] for threat `id`; other errors pass.
 fn not_applicable_threat(e: ModelError, id: ThreatId) -> ModelError {
@@ -14496,6 +15128,8 @@ const fn may_change_applicability(op: &Op, filter: &AttackFilter) -> bool {
         | Op::SetStepVia { .. }
         | Op::UseSharedStep { .. }
         | Op::UnuseSharedStep { .. }
+        | Op::UseFragment { .. }
+        | Op::UnuseFragment { .. }
         | Op::AddAttackTree { .. }
         | Op::RemoveAttackTree { .. }
         | Op::AddTreeNode { .. }
@@ -14503,6 +15137,7 @@ const fn may_change_applicability(op: &Op, filter: &AttackFilter) -> bool {
         | Op::LinkTreeNode { .. }
         | Op::UnlinkTreeNode { .. }
         | Op::SetTreeNodeGate { .. }
+        | Op::SetTreeNodeKind { .. }
         | Op::RemoveCybersecurityGoal { .. }
         | Op::RemoveCybersecurityClaim { .. }
         | Op::SetAttackFilter { .. } => true,
@@ -14598,7 +15233,8 @@ const fn structure_tree(op: &Op) -> Option<TreeId> {
         | Op::RemoveTreeNode { tree, .. }
         | Op::LinkTreeNode { tree, .. }
         | Op::UnlinkTreeNode { tree, .. }
-        | Op::SetTreeNodeGate { tree, .. } => Some(*tree),
+        | Op::SetTreeNodeGate { tree, .. }
+        | Op::SetTreeNodeKind { tree, .. } => Some(*tree),
         Op::AddAttackTree { id, .. } | Op::RemoveAttackTree { id } => Some(*id),
         _ => None,
     }
@@ -14635,6 +15271,12 @@ struct CachedThreatEval {
 ///    threats linked to that damage scenario update their risk entries in
 ///    place. Metadata, asset, control, goal, and claim edits do zero
 ///    evaluation work (`O(1)`).
+/// 3. **Cross-tree fragment level**: a reverse index maps each fragment to
+///    the steps referencing it, by stable tree and node ID. An edit inside a
+///    fragment refolds the fragment, and only when its root for that mode
+///    changes does it refold the using trees, in dependency order and each
+///    once per mode, transitively. A project-wide applicability change still
+///    rebuilds every tree, fragments before their users.
 ///
 /// ```
 /// use std::sync::Arc;
@@ -14675,6 +15317,7 @@ struct CachedThreatEval {
 /// tree.add_child(tree.root(), s2, Node::step("Path B"))?;
 /// let tree_id = TreeId::new_v7();
 /// project.apply(Op::AddAttackTree {
+///     role: Default::default(),
 ///     id: tree_id,
 ///     tree,
 ///     step_feasibility: vec![(s1, high), (s2, med)],
@@ -14716,6 +15359,12 @@ pub struct ProjectEvalCache {
     damage_threats: Vec<Vec<ThreatIdx>>,
     shared_users: Vec<Vec<(TreeIdx, NodeId)>>,
     node_shared: HashMap<(TreeIdx, NodeId), SharedStepIdx>,
+    fragment_users: Vec<Vec<(TreeIdx, NodeId)>>,
+    node_fragment: HashMap<(TreeIdx, NodeId), TreeIdx>,
+    /// Position of every live tree in dependency order, so dirty work folds
+    /// a fragment before the trees that reference it; `u32::MAX` for a slot
+    /// no live tree holds.
+    fragment_rank: Vec<u32>,
     recomputed_nodes: u64,
     recomputed_threats: u64,
 }
@@ -14729,6 +15378,9 @@ impl PartialEq for ProjectEvalCache {
             && self.damage_threats == other.damage_threats
             && self.shared_users == other.shared_users
             && self.node_shared == other.node_shared
+            && self.fragment_users == other.fragment_users
+            && self.node_fragment == other.node_fragment
+            && self.fragment_rank == other.fragment_rank
     }
 }
 
@@ -14761,6 +15413,9 @@ impl ProjectEvalCache {
             damage_threats: Vec::new(),
             shared_users: Vec::new(),
             node_shared: HashMap::new(),
+            fragment_users: Vec::new(),
+            node_fragment: HashMap::new(),
+            fragment_rank: Vec::new(),
             recomputed_nodes: 0,
             recomputed_threats: 0,
         };
@@ -14801,14 +15456,26 @@ impl ProjectEvalCache {
             .resize_with(project.threats.slot_count(), || None);
         self.shared_users = vec![Vec::new(); project.shared_steps.slot_count()];
         self.node_shared.clear();
+        self.fragment_users = vec![Vec::new(); project.trees.slot_count()];
+        self.node_fragment.clear();
         self.recomputed_nodes = 0;
         self.recomputed_threats = 0;
 
-        for (idx, id, entry) in project.trees.iter() {
+        // Dependency order lets each reference read its fragment's cached root.
+        let order = dependency_order(project);
+        self.set_ranks(project, &order);
+        for idx in order {
+            let (Some(id), Some(entry)) = (project.trees.id(idx), project.trees.get(idx)) else {
+                continue;
+            };
             for (node_idx, node_id, _) in entry.tree.iter() {
                 if let Some(shared) = entry.shared_at(node_idx.index()) {
                     self.node_shared.insert((idx, node_id), shared);
-                    insert_shared_user(&mut self.shared_users, shared, (idx, node_id));
+                    insert_user(&mut self.shared_users, shared.index(), (idx, node_id));
+                }
+                if let Some(target) = entry.fragment_at(node_idx.index()) {
+                    self.node_fragment.insert((idx, node_id), target);
+                    insert_user(&mut self.fragment_users, target.index(), (idx, node_id));
                 }
             }
             let cached = self.build_tree_eval(project, id, entry);
@@ -14846,8 +15513,9 @@ impl ProjectEvalCache {
     /// [`Project::apply`] or the inverse [`Op`] returned by it.
     ///
     /// Time O(depth x fan-out) for a single step rating or mitigation
-    /// change, O(linked threats x d x c) for a damage impact change, and
-    /// O(1) for metadata, asset, control, goal, and claim operations.
+    /// change, plus O(depth x fan-out) per tree that reads a fragment root
+    /// changed by it; O(linked threats x d x c) for a damage impact change,
+    /// and O(1) for metadata, asset, control, goal, and claim operations.
     ///
     /// ```
     /// # use std::sync::Arc;
@@ -14883,6 +15551,7 @@ impl ProjectEvalCache {
     /// let tree_id = TreeId::new_v7();
     /// let step = NodeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -14905,6 +15574,12 @@ impl ProjectEvalCache {
             self.shared_users
                 .resize_with(project.shared_steps.slot_count(), Vec::new);
         }
+        if matches!(op, Op::AddAttackTree { .. } | Op::RemoveAttackTree { .. }) {
+            self.fragment_users
+                .resize_with(project.trees.slot_count(), Vec::new);
+            self.fragment_rank
+                .resize(project.trees.slot_count(), u32::MAX);
+        }
         if !self.arenas_compatible(project, op) {
             self.rebuild(project);
             return;
@@ -14912,6 +15587,10 @@ impl ProjectEvalCache {
         if may_change_applicability(op, project.attack_filter()) {
             let next = project.applicability();
             if next != self.applicability {
+                if project.has_fragment_references() {
+                    self.rebuild(project);
+                    return;
+                }
                 self.apply_applicability_change(project, next, structure_tree(op));
             }
         }
@@ -15002,7 +15681,7 @@ impl ProjectEvalCache {
             | Op::AddBoundaryComponent { .. }
             | Op::RemoveBoundaryComponent { .. }
             | Op::RemoveTrustBoundary { .. }
-            | Op::SetAssetComponent { .. } => {}
+            | Op::SetAssetComponent { .. } => (),
 
             Op::AddDamageScenario { .. } | Op::RemoveDamageScenario { .. } => {
                 self.damage_threats
@@ -15016,14 +15695,19 @@ impl ProjectEvalCache {
                 } else {
                     self.update_tree_removed(project);
                 }
+                self.rebuild_fragment_rank(project);
             }
             Op::AddTreeNode { tree, .. }
             | Op::RemoveTreeNode { tree, .. }
             | Op::LinkTreeNode { tree, .. }
             | Op::UnlinkTreeNode { tree, .. }
-            | Op::SetTreeNodeGate { tree, .. } => self.update_tree_structure(project, *tree),
+            | Op::SetTreeNodeGate { tree, .. }
+            | Op::SetTreeNodeKind { tree, .. } => self.update_tree_structure(project, *tree),
             Op::UseSharedStep { tree, node, .. } | Op::UnuseSharedStep { tree, node, .. } => {
                 self.update_shared_link(project, *tree, *node);
+            }
+            Op::UseFragment { tree, node, .. } | Op::UnuseFragment { tree, node, .. } => {
+                self.update_fragment_link(project, *tree, *node);
             }
             Op::SetStepFeasibility { target, .. } | Op::SetStepFactor { target, .. } => {
                 if let StepTarget::Step(tree, node) = target {
@@ -15112,6 +15796,7 @@ impl ProjectEvalCache {
     /// let step = NodeId::new_v7();
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -15160,6 +15845,7 @@ impl ProjectEvalCache {
     /// let step = NodeId::new_v7();
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -15226,6 +15912,7 @@ impl ProjectEvalCache {
     /// let step = NodeId::new_v7();
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -15290,6 +15977,7 @@ impl ProjectEvalCache {
     /// let step = NodeId::new_v7();
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -15427,6 +16115,7 @@ impl ProjectEvalCache {
     /// let step = NodeId::new_v7();
     /// let tree_id = TreeId::new_v7();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
     ///     step_feasibility: vec![(step, high)], provenance: Provenance::default(),
     /// })?;
@@ -15568,6 +16257,8 @@ impl ProjectEvalCache {
             && threats_ok
             && damages_ok
             && self.shared_users.len() == project.shared_steps.slot_count()
+            && self.fragment_users.len() == project.trees.slot_count()
+            && self.fragment_rank.len() == project.trees.slot_count()
             && self.tree_threats.len() == self.trees.len()
     }
 
@@ -15590,12 +16281,146 @@ impl ProjectEvalCache {
         if self.applicability.is_excluded(ElementRef::Tree(id)) {
             return Err(ModelError::TreeNotApplicable(id));
         }
+        let roots = self.cached_roots(entry, residual);
         let cache = TreeEvalCache::new(&entry.tree, &Applicable(MaxMin::new()), |idx| {
-            project.lifted_leaf(&self.applicability, id, entry, idx, residual)
+            project.lifted_leaf(&self.applicability, id, entry, idx, residual, &roots)
         })?;
         let view =
             Evaluation::from_lifted(cache.evaluation()).ok_or(ModelError::TreeNotApplicable(id))?;
         Ok(LiftedTree { cache, view })
+    }
+
+    /// The cached root, in one mode, of every fragment `entry` references.
+    /// Time O(references).
+    fn cached_roots(&self, entry: &TreeEntry, residual: bool) -> FragmentRoots {
+        entry
+            .fragments()
+            .map(|t| (t, self.fragment_root(t, residual)))
+            .collect()
+    }
+
+    /// What a step referencing `tree` reads from its cached evaluation in
+    /// one mode: a level, `Excluded`, or `None` while the fragment is
+    /// unrated, unknown or in error. Time O(1).
+    fn fragment_root(&self, tree: TreeIdx, residual: bool) -> Option<Lifted<FeasibilityLevel>> {
+        let cached = self.trees.get(tree.index()).and_then(Option::as_ref)?;
+        let res = if residual {
+            &cached.residual
+        } else {
+            &cached.inherent
+        };
+        reference_root(res.as_ref().map(|lt| *lt.cache.evaluation().root_value()))
+    }
+
+    /// Stores each tree's position in `order`, dependency-first.
+    fn set_ranks(&mut self, project: &Project, order: &[TreeIdx]) {
+        self.fragment_rank.clear();
+        self.fragment_rank
+            .resize(project.trees.slot_count(), u32::MAX);
+        for (pos, t) in order.iter().enumerate() {
+            if let Some(slot) = self.fragment_rank.get_mut(t.index()) {
+                *slot = u32::try_from(pos).unwrap_or(u32::MAX);
+            }
+        }
+    }
+
+    /// Recomputes the dependency ranks after a reference or tree-set change.
+    /// Time O(K + references).
+    fn rebuild_fragment_rank(&mut self, project: &Project) {
+        let order = dependency_order(project);
+        self.set_ranks(project, &order);
+    }
+
+    /// Adds `nodes` to the dirty set of `tree`, at its dependency rank.
+    fn enqueue(
+        &self,
+        queue: &mut DirtyTrees,
+        tree: TreeIdx,
+        nodes: impl IntoIterator<Item = NodeIdx>,
+    ) {
+        let rank = self
+            .fragment_rank
+            .get(tree.index())
+            .copied()
+            .unwrap_or(u32::MAX);
+        queue.entry((rank, tree)).or_default().extend(nodes);
+    }
+
+    /// Adds every step that references `fragment` to the dirty set, resolved
+    /// through its stable node ID, so a moved index cannot be missed.
+    fn enqueue_users(&self, project: &Project, fragment: TreeIdx, queue: &mut DirtyTrees) {
+        for &(tree, node) in self
+            .fragment_users
+            .get(fragment.index())
+            .into_iter()
+            .flatten()
+        {
+            if let Some(node_idx) = project.trees.get(tree).and_then(|e| e.tree.idx_of(&node)) {
+                self.enqueue(queue, tree, [node_idx]);
+            }
+        }
+    }
+
+    /// Folds the dirty trees in one mode, each once and fragments first,
+    /// following references on to the using steps of every fragment whose
+    /// root for that mode changed. Ranks rise along a reference, so a tree
+    /// collects all of its dirty steps before it is folded.
+    /// Time O(sum over dirty trees of depth x fan-out).
+    fn run_dirty(&mut self, project: &Project, mut queue: DirtyTrees, residual: bool) {
+        let mut folded = BTreeSet::new();
+        while let Some(&key) = queue.keys().next() {
+            let Some(nodes) = queue.remove(&key) else {
+                break;
+            };
+            let (_, tree_idx) = key;
+            // Rule A2: one fold per tree and mode, even if ranks collapse.
+            if !folded.insert(tree_idx) {
+                continue;
+            }
+            let Some(entry) = project.trees.get(tree_idx) else {
+                continue;
+            };
+            let before = self.fragment_root(tree_idx, residual);
+            let dirty: Vec<NodeIdx> = nodes.into_iter().collect();
+            self.update_tree_mode(project, tree_idx, entry, &dirty, residual);
+            if before != self.fragment_root(tree_idx, residual) {
+                self.enqueue_users(project, tree_idx, &mut queue);
+            }
+        }
+    }
+
+    /// Recomputes the seeded steps and every fragment user they reach, in
+    /// the residual mode and, when `include_inherent`, the inherent one. The
+    /// two modes stay separate: a residual-only edit never dirties an
+    /// inherent user.
+    fn update_dirty(&mut self, project: &Project, seeds: &DirtyTrees, include_inherent: bool) {
+        if include_inherent {
+            self.run_dirty(project, seeds.clone(), false);
+        }
+        self.run_dirty(project, seeds.clone(), true);
+    }
+
+    /// A reference was created or dropped at one step: both directions of
+    /// the index and the dependency ranks follow, then the step and the
+    /// trees above it are recomputed.
+    fn update_fragment_link(&mut self, project: &Project, tree: TreeId, node: NodeId) {
+        let Some((tree_idx, node_idx)) = project.attack_tree_idx(&tree).and_then(|tree| {
+            let entry = project.trees.get(tree)?;
+            Some((tree, entry.tree.idx_of(&node)?))
+        }) else {
+            return;
+        };
+        let user = (tree_idx, node);
+        if let Some(target) = project.step_fragment(tree_idx, node_idx) {
+            self.node_fragment.insert(user, target);
+            insert_user(&mut self.fragment_users, target.index(), user);
+        } else if let Some(target) = self.node_fragment.remove(&user)
+            && let Some(users) = self.fragment_users.get_mut(target.index())
+        {
+            users.retain(|candidate| *candidate != user);
+        }
+        self.rebuild_fragment_rank(project);
+        self.update_step(project, tree, node, true);
     }
 
     fn build_threat_eval(
@@ -15665,11 +16490,16 @@ impl ProjectEvalCache {
 
     /// The shape of a tree changed: indices moved or a gate changed meaning,
     /// so this tree's evaluation is rebuilt (O(V + E)) and the threats that
-    /// use it are refreshed from it. Other trees and threats are untouched.
+    /// use it are refreshed from it. When the tree is a fragment whose root
+    /// moved in a mode, the steps referencing it follow in that mode; other
+    /// trees and threats are untouched. Dependency ranks keep their values:
+    /// a node holding a reference cannot be removed and a new node carries
+    /// none, so no structural edit can change the reference graph.
     fn update_tree_structure(&mut self, project: &Project, tree: TreeId) {
         let Some(tree_idx) = project.attack_tree_idx(&tree) else {
             return;
         };
+        let before = [false, true].map(|residual| self.fragment_root(tree_idx, residual));
         self.update_tree_added(project, tree_idx);
         let linked = self
             .tree_threats
@@ -15679,6 +16509,13 @@ impl ProjectEvalCache {
         for threat_idx in linked {
             for residual in [false, true] {
                 self.sync_threat_from_tree(project, threat_idx, tree_idx, residual, &[], true);
+            }
+        }
+        for (residual, old_root) in [false, true].into_iter().zip(before) {
+            if old_root != self.fragment_root(tree_idx, residual) {
+                let mut queue = DirtyTrees::new();
+                self.enqueue_users(project, tree_idx, &mut queue);
+                self.run_dirty(project, queue, residual);
             }
         }
     }
@@ -15772,6 +16609,12 @@ impl ProjectEvalCache {
                 if let Some(list) = self.tree_threats.get_mut(i) {
                     list.clear();
                 }
+                // A later tree can take this freed slot, so no reference
+                // index entry may outlive the tree it described.
+                if let Some(list) = self.fragment_users.get_mut(i) {
+                    list.clear();
+                }
+                self.node_fragment.retain(|&(t, _), _| t.index() != i);
             }
         }
     }
@@ -15792,10 +16635,9 @@ impl ProjectEvalCache {
         let Some(node_idx) = entry.tree.idx_of(&node_id) else {
             return;
         };
-        if include_inherent {
-            self.update_tree_mode(project, tree_idx, entry, &[node_idx], false);
-        }
-        self.update_tree_mode(project, tree_idx, entry, &[node_idx], true);
+        let mut seeds = DirtyTrees::new();
+        self.enqueue(&mut seeds, tree_idx, [node_idx]);
+        self.update_dirty(project, &seeds, include_inherent);
     }
 
     fn update_shared_link(&mut self, project: &Project, tree: TreeId, node: NodeId) {
@@ -15808,7 +16650,7 @@ impl ProjectEvalCache {
         let user = (tree_idx, node);
         if let Some(shared) = project.step_shared(tree_idx, node_idx) {
             self.node_shared.insert(user, shared);
-            insert_shared_user(&mut self.shared_users, shared, user);
+            insert_user(&mut self.shared_users, shared.index(), user);
         } else if let Some(shared) = self.node_shared.remove(&user)
             && let Some(users) = self.shared_users.get_mut(shared.index())
         {
@@ -15826,16 +16668,20 @@ impl ProjectEvalCache {
         let Some(idx) = project.shared_step_idx(&shared) else {
             return;
         };
-        let users = self
+        // One batch, so a parent above several users of this step, and a
+        // fragment reached through several of them, still folds once.
+        let mut seeds = DirtyTrees::new();
+        for (tree, node) in self
             .shared_users
             .get(idx.index())
             .cloned()
-            .unwrap_or_default();
-        for (tree, node) in users {
-            if let Some(tree_id) = project.trees.id(tree) {
-                self.update_step(project, tree_id, node, include_inherent);
+            .unwrap_or_default()
+        {
+            if let Some(node_idx) = project.trees.get(tree).and_then(|e| e.tree.idx_of(&node)) {
+                self.enqueue(&mut seeds, tree, [node_idx]);
             }
         }
+        self.update_dirty(project, &seeds, include_inherent);
     }
 
     fn update_control_target(
@@ -15847,6 +16693,7 @@ impl ProjectEvalCache {
         let Ok(target_idx) = project.item_idx(target) else {
             return;
         };
+        let mut seeds = DirtyTrees::new();
         for (tree_idx, _, entry) in project.trees.iter() {
             let dirty: Vec<NodeIdx> = entry
                 .tree
@@ -15859,12 +16706,10 @@ impl ProjectEvalCache {
                 })
                 .collect();
             if !dirty.is_empty() {
-                if include_inherent {
-                    self.update_tree_mode(project, tree_idx, entry, &dirty, false);
-                }
-                self.update_tree_mode(project, tree_idx, entry, &dirty, true);
+                self.enqueue(&mut seeds, tree_idx, dirty);
             }
         }
+        self.update_dirty(project, &seeds, include_inherent);
     }
 
     fn update_control_rule(
@@ -15883,6 +16728,7 @@ impl ProjectEvalCache {
             return;
         }
         let include_inherent = ctrl.status.counts_for_initial();
+        let mut seeds = DirtyTrees::new();
         for (tree_idx, _, entry) in project.trees.iter() {
             let dirty: Vec<NodeIdx> = entry
                 .tree
@@ -15899,12 +16745,10 @@ impl ProjectEvalCache {
                 })
                 .collect();
             if !dirty.is_empty() {
-                if include_inherent {
-                    self.update_tree_mode(project, tree_idx, entry, &dirty, false);
-                }
-                self.update_tree_mode(project, tree_idx, entry, &dirty, true);
+                self.enqueue(&mut seeds, tree_idx, dirty);
             }
         }
+        self.update_dirty(project, &seeds, include_inherent);
     }
 
     fn update_control_status(&mut self, project: &Project, control: ControlId) {
@@ -15914,6 +16758,7 @@ impl ProjectEvalCache {
         let Some(ctrl) = project.controls.get(ctrl_idx) else {
             return;
         };
+        let mut seeds = DirtyTrees::new();
         for (tree_idx, _, entry) in project.trees.iter() {
             let mut dirty = Vec::new();
             for (i, mitigations) in entry.step_mitigations.iter().enumerate() {
@@ -15936,10 +16781,10 @@ impl ProjectEvalCache {
                 }
             }
             if !dirty.is_empty() {
-                self.update_tree_mode(project, tree_idx, entry, &dirty, false);
-                self.update_tree_mode(project, tree_idx, entry, &dirty, true);
+                self.enqueue(&mut seeds, tree_idx, dirty);
             }
         }
+        self.update_dirty(project, &seeds, true);
     }
 
     fn update_tree_mode(
@@ -15955,8 +16800,9 @@ impl ProjectEvalCache {
             self.rebuild(project);
             return;
         };
+        let roots = self.cached_roots(entry, residual);
         let app = &self.applicability;
-        let leaf = |i| project.lifted_leaf(app, tree_id, entry, i, residual);
+        let leaf = |i| project.lifted_leaf(app, tree_id, entry, i, residual, &roots);
         let all_rated = node_indices.iter().all(|&i| leaf(i).is_some());
         let mut touched = Vec::new();
 
@@ -16225,15 +17071,12 @@ fn insert_sorted_unique(list: &mut Vec<ThreatIdx>, idx: ThreatIdx) {
     }
 }
 
-fn insert_shared_user(
-    users: &mut Vec<Vec<(TreeIdx, NodeId)>>,
-    shared: SharedStepIdx,
-    user: (TreeIdx, NodeId),
-) {
-    if users.len() <= shared.index() {
-        users.resize_with(shared.index() + 1, Vec::new);
+/// Records `user` in the sorted reverse index of `slot`, by stable IDs.
+fn insert_user(users: &mut Vec<Vec<(TreeIdx, NodeId)>>, slot: usize, user: (TreeIdx, NodeId)) {
+    if users.len() <= slot {
+        users.resize_with(slot + 1, Vec::new);
     }
-    let list = &mut users[shared.index()];
+    let list = &mut users[slot];
     let key = (user.0.index(), user.1);
     if let Err(pos) = list.binary_search_by(|&(tree, node)| (tree.index(), node).cmp(&key)) {
         list.insert(pos, user);
@@ -16674,6 +17517,7 @@ mod tests {
         tree.add_child(tree.root(), s2_id, crate::tree::Node::step("Step 2"))
             .expect("s2");
         proj.apply(Op::AddAttackTree {
+            role: crate::TreeRole::default(),
             id: tr,
             tree,
             step_feasibility: vec![(s2_id, high)],
@@ -16918,6 +17762,7 @@ mod tests {
         tree.add_child(tree.root(), s1_id, crate::tree::Node::step("Step 1"))
             .expect("s1");
         p.apply(Op::AddAttackTree {
+            role: crate::TreeRole::default(),
             id: tr,
             tree,
             step_feasibility: vec![],

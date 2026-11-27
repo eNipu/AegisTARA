@@ -502,6 +502,7 @@ async fn a_tree_of_many_nodes_is_built_by_atomic_batches_and_survives_a_restart(
         &lease,
         0,
         &[Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree"),
             step_feasibility: vec![],

@@ -9,9 +9,9 @@ use serde::{Serialize, Serializer};
 use serde_json::{Map, Value};
 
 use super::{Limit, MAX_PROJECT_FILE_BYTES, MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_FILES, wire};
+use crate::blocks::TreeRole;
 use crate::element::{ElementKind, KINDS};
 use crate::error::{ModelError, StoreError, WorkspaceProblem};
-use crate::id::VisualPrefix;
 use crate::methodology::Methodology;
 use crate::project::Project;
 
@@ -263,6 +263,20 @@ fn lookup(path: &str) -> Option<(&'static str, &'static [&'static str])> {
     (!name.is_empty() && !name.contains('/')).then_some(("tree", &[TREES_KEY][..]))
 }
 
+/// The visual number in a tree file name (`at03`, `tt04`), if its prefix
+/// agrees with the tree's stored role. Checked here rather than by the
+/// snapshot loader so the error names the tree file, not `aegis.json`.
+fn tree_file_number(stem: &str, tree: &Map<String, Value>) -> Option<u32> {
+    let upper = stem.to_uppercase();
+    let role = match tree.get("role") {
+        None => TreeRole::Threat,
+        Some(Value::String(r)) if r == "threat" => TreeRole::Threat,
+        Some(Value::String(r)) if r == "fragment" => TreeRole::Fragment,
+        Some(_) => return None,
+    };
+    role.visual_prefix().parse_num(&upper)
+}
+
 /// The file name of a tree file without directory and extension.
 fn tree_stem(path: &str) -> &str {
     let name = path.rsplit('/').next().unwrap_or(path);
@@ -492,10 +506,10 @@ impl Project {
                 // The writer leaves out a tree's visual ID when it equals the
                 // tree's position, so the file name is the ID to fall back on.
                 let stem = tree_stem(path);
-                let Some(num) = VisualPrefix::Tree.parse_num(&stem.to_uppercase()) else {
+                let [Value::Object(tree)] = list.as_mut_slice() else {
                     return Err(tree_name());
                 };
-                let [Value::Object(tree)] = list.as_mut_slice() else {
+                let Some(num) = tree_file_number(stem, tree) else {
                     return Err(tree_name());
                 };
                 match tree.get("visual_id") {

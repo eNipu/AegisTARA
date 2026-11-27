@@ -188,6 +188,7 @@ fn loaded() -> (Workspace, Ids) {
             provenance: p(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: i.tree,
             tree,
             step_feasibility: vec![],

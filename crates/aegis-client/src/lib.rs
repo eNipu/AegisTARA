@@ -14,6 +14,8 @@ pub mod exclusion;
 pub mod explorer;
 pub mod find;
 pub mod folder;
+#[doc(hidden)]
+pub mod fragments;
 pub mod grid;
 pub mod i18n;
 pub mod inspector;

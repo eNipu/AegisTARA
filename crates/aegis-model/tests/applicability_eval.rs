@@ -95,6 +95,7 @@ impl Fx {
     ) -> Res<TreeId> {
         let id = tree_id(10);
         self.p.apply(Op::AddAttackTree {
+            role: Default::default(),
             id,
             tree,
             step_feasibility,

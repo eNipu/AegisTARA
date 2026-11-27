@@ -713,6 +713,39 @@ impl AttackTree {
         }
     }
 
+    /// Changes a bare node `idx` between a step (`None`) and an empty gate
+    /// (`Some(kind)`), returning the previous gate kind while retaining label,
+    /// ID, index, owner, and all incoming edges. Time O(1).
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::UnknownNode`], [`ModelError::NodeHasChildren`] if `idx`
+    /// has outgoing children.
+    pub fn set_node_kind(
+        &mut self,
+        idx: NodeIdx,
+        gate: Option<GateKind>,
+    ) -> Result<Option<GateKind>, ModelError> {
+        let Some(id) = self.ids.get(idx.index()).copied() else {
+            return Err(ModelError::UnknownNode(idx));
+        };
+        let Some(slot) = self.nodes.get_mut(idx.index()) else {
+            return Err(ModelError::UnknownNode(idx));
+        };
+        if !slot.children().is_empty() {
+            return Err(ModelError::NodeHasChildren(id));
+        }
+        let (old, label) = match slot {
+            Node::Gate { kind, label, .. } => (Some(*kind), Arc::clone(label)),
+            Node::Step { label } => (None, Arc::clone(label)),
+        };
+        *slot = match gate {
+            Some(kind) => Node::gate(kind, label),
+            None => Node::step(label),
+        };
+        Ok(old)
+    }
+
     /// Moves every index at or after `from` by `by` (+1 after an insert, -1
     /// after a removal): child lists, owners, extra parents and the ID map.
     /// The root is index 0 and never moves. Time O(1) when appending at the
@@ -1544,6 +1577,77 @@ mod errors {
                 .to_string()
                 .contains(&sid.to_string())
         );
+    }
+
+    #[test]
+    fn set_node_kind_converts_bare_root_and_shared_nodes_retaining_ids_and_parents() {
+        let root_id = NodeId::new_v7();
+        let g1_id = NodeId::new_v7();
+        let g2_id = NodeId::new_v7();
+        let s0_id = NodeId::new_v7();
+        let m_id = NodeId::new_v7();
+        let s2_id = NodeId::new_v7();
+        let mut tree = AttackTree::new(root_id, Node::gate(GateKind::Or, "root")).expect("root");
+        let r = tree.root();
+        let g1 = tree
+            .add_child(r, g1_id, Node::gate(GateKind::And, "g1"))
+            .expect("g1");
+        let g2 = tree
+            .add_child(r, g2_id, Node::gate(GateKind::Or, "g2"))
+            .expect("g2");
+        let s0 = tree.add_child(g1, s0_id, Node::step("s0")).expect("s0");
+        let m = tree.add_child(g1, m_id, Node::step("shared")).expect("m");
+        let s2 = tree.add_child(g1, s2_id, Node::step("s2")).expect("s2");
+        tree.link(g2, m).expect("link m under g2");
+
+        // Non-root multiply-parented Step -> empty Gate -> Step, retaining ID, index, owner, parents.
+        assert_eq!(tree.set_node_kind(m, Some(GateKind::SeqAnd)), Ok(None));
+        assert_eq!(tree.idx_of(&m_id), Some(m));
+        assert_eq!(tree.id_of(m), Some(m_id));
+        assert_eq!(tree.get(m).map(Node::label), Some("shared"));
+        assert_eq!(
+            tree.get(m).and_then(Node::gate_kind),
+            Some(GateKind::SeqAnd)
+        );
+        assert_eq!(tree.owner(m), Some(g1));
+        assert_eq!(tree.parents(m).collect::<Vec<_>>(), [g1, g2]);
+        assert_eq!(tree.children(g1), &[s0, m, s2]);
+        assert_eq!(tree.children(g2), &[m]);
+        tree.check_invariants().expect("invariants");
+
+        assert_eq!(tree.set_node_kind(m, None), Ok(Some(GateKind::SeqAnd)));
+        assert_eq!(tree.get(m).and_then(Node::gate_kind), None);
+        assert_eq!(tree.parents(m).collect::<Vec<_>>(), [g1, g2]);
+        assert_eq!(tree.children(g1), &[s0, m, s2]);
+        tree.check_invariants().expect("invariants");
+
+        // Child-bearing gate and unknown node are rejected without mutation.
+        let before = snapshot(&tree);
+        assert_eq!(
+            tree.set_node_kind(g1, None),
+            Err(ModelError::NodeHasChildren(g1_id))
+        );
+        assert_eq!(
+            tree.set_node_kind(g1, Some(GateKind::Or)),
+            Err(ModelError::NodeHasChildren(g1_id))
+        );
+        let missing = NodeIdx::try_from_usize(999).expect("idx");
+        assert_eq!(
+            tree.set_node_kind(missing, None),
+            Err(ModelError::UnknownNode(missing))
+        );
+        assert_unchanged(&tree, &before);
+
+        // Single-node root Step <-> Gate.
+        let mut solo = AttackTree::new(root_id, Node::step("solo")).expect("solo");
+        let sr = solo.root();
+        assert_eq!(solo.set_node_kind(sr, Some(GateKind::And)), Ok(None));
+        assert_eq!(solo.get(sr).and_then(Node::gate_kind), Some(GateKind::And));
+        assert_eq!(solo.id_of(sr), Some(root_id));
+        assert_eq!(solo.get(sr).map(Node::label), Some("solo"));
+        assert_eq!(solo.set_node_kind(sr, None), Ok(Some(GateKind::And)));
+        assert_eq!(solo.get(sr).and_then(Node::gate_kind), None);
+        solo.check_invariants().expect("solo invariants");
     }
 }
 

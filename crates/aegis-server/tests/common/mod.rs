@@ -38,6 +38,35 @@ impl Interceptor for DevUser {
         if self.admin {
             md.insert(DEV_ADMIN_HEADER, "1".parse().expect("ascii"));
         }
+        add_contract_headers(&mut request);
+        Ok(request)
+    }
+}
+
+/// Test clients speak the current protocol, like the real client.
+pub fn add_contract_headers(request: &mut Request<()>) {
+    let md = request.metadata_mut();
+    md.insert(
+        pb::ENGINE_SEMANTICS_HEADER,
+        aegis_model::ENGINE_SEMANTICS_VERSION
+            .to_string()
+            .parse()
+            .expect("ascii"),
+    );
+    md.insert(
+        pb::PROTOCOL_VERSION_HEADER,
+        aegis_model::PROTOCOL_VERSION
+            .to_string()
+            .parse()
+            .expect("ascii"),
+    );
+}
+
+pub struct CurrentContract;
+
+impl Interceptor for CurrentContract {
+    fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, Status> {
+        add_contract_headers(&mut request);
         Ok(request)
     }
 }
@@ -296,6 +325,7 @@ pub fn fixture(m: &Methodology) -> Fixture {
             provenance: Provenance::default(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: t,
             step_feasibility: vec![(step, low)],

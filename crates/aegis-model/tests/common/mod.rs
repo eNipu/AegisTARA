@@ -560,6 +560,7 @@ pub fn linked_shared_project() -> (Project, SharedStepId, TreeId, NodeId) {
             provenance: provenance.clone(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: AttackTree::new(node, Node::step("Linked step")).expect("tree"),
             step_feasibility: vec![],
@@ -657,10 +658,24 @@ pub struct Seed {
     list: Vec<u16>,
 }
 
+impl Seed {
+    /// A fixed seed, for replaying a saved proptest regression by value.
+    pub fn new(kind: u8, a: u16, b: u16, c: u16, bits: u64, list: Vec<u16>) -> Self {
+        Self {
+            kind,
+            a,
+            b,
+            c,
+            bits,
+            list,
+        }
+    }
+}
+
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..89,
+        0u8..92,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -890,6 +905,23 @@ impl Gen {
         }
     }
 
+    fn fragment_tree(&mut self, p: &Project, sel: u16) -> TreeId {
+        let existing: Vec<_> = p
+            .attack_trees()
+            .filter(|(idx, _, _)| p.attack_tree_role(*idx) == Some(aegis_model::TreeRole::Fragment))
+            .map(|(_, id, _)| id)
+            .collect();
+        match nth(existing, sel / 8) {
+            Some(id) if !sel.is_multiple_of(8) => id,
+            _ => tree_id(self.fresh()),
+        }
+    }
+
+    fn has_fragment_tree(p: &Project) -> bool {
+        p.attack_trees()
+            .any(|(idx, _, _)| p.attack_tree_role(idx) == Some(aegis_model::TreeRole::Fragment))
+    }
+
     fn linkable_steps(p: &Project) -> Vec<(TreeId, NodeId)> {
         p.attack_trees()
             .flat_map(|(t, tree, nodes)| {
@@ -919,6 +951,40 @@ impl Gen {
                     .collect::<Vec<_>>()
             })
             .filter(|(t, _, n, _)| p.step_shared(*t, *n).is_some())
+            .map(|(_, tree, _, node)| (tree, node))
+            .collect()
+    }
+
+    fn fragment_linkable_steps(p: &Project) -> Vec<(TreeId, NodeId)> {
+        p.attack_trees()
+            .flat_map(|(t, tree, nodes)| {
+                nodes
+                    .iter()
+                    .filter(|(_, _, n)| matches!(n, Node::Step { .. }))
+                    .map(move |(n, node, _)| (t, tree, n, node))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|(t, _, n, _)| {
+                p.step_shared(*t, *n).is_none()
+                    && p.step_fragment(*t, *n).is_none()
+                    && p.step_feasibility(*t, *n).is_none()
+                    && p.step_factors(*t, *n).next().is_none()
+                    && p.step_via(*t, *n).is_none()
+                    && p.step_attack_type(*t, *n).is_none()
+            })
+            .map(|(_, tree, _, node)| (tree, node))
+            .collect()
+    }
+
+    fn fragment_user_steps(p: &Project) -> Vec<(TreeId, NodeId)> {
+        p.attack_trees()
+            .flat_map(|(t, tree, nodes)| {
+                nodes
+                    .iter()
+                    .map(move |(n, node, _)| (t, tree, n, node))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|(t, _, n, _)| p.step_fragment(*t, *n).is_some())
             .map(|(_, tree, _, node)| (tree, node))
             .collect()
     }
@@ -1505,6 +1571,11 @@ impl Gen {
                     ],
                 };
                 Op::AddAttackTree {
+                    role: if s.b.is_multiple_of(4) {
+                        aegis_model::TreeRole::Fragment
+                    } else {
+                        aegis_model::TreeRole::Threat
+                    },
                     id: if s.a.is_multiple_of(12) {
                         self.tree(p, s.b)
                     } else {
@@ -2302,6 +2373,109 @@ impl Gen {
                     }
                 }
             }
+            89 => {
+                if !Self::has_fragment_tree(p) {
+                    return Op::AddAttackTree {
+                        role: aegis_model::TreeRole::Fragment,
+                        id: tree_id(self.fresh()),
+                        tree: AttackTree::new(node_id(self.fresh()), Node::step("Fragment"))
+                            .expect("tree"),
+                        step_feasibility: Vec::new(),
+                        provenance,
+                    };
+                }
+                let (tree, node) = match nth(Self::fragment_linkable_steps(p), s.a) {
+                    Some(step) if !s.c.is_multiple_of(4) => step,
+                    _ => self.step_node(p, s.a, s.b),
+                };
+                Op::UseFragment {
+                    tree,
+                    node,
+                    fragment: self.fragment_tree(p, s.c),
+                    provenance,
+                }
+            }
+            90 => {
+                if let Some((tree, node)) = nth(Self::fragment_user_steps(p), s.a) {
+                    Op::UnuseFragment {
+                        tree,
+                        node,
+                        provenance,
+                    }
+                } else if let Some((tree, node)) = nth(Self::fragment_linkable_steps(p), s.b)
+                    && Self::has_fragment_tree(p)
+                {
+                    Op::UseFragment {
+                        tree,
+                        node,
+                        fragment: self.fragment_tree(p, s.c),
+                        provenance,
+                    }
+                } else {
+                    let (tree, node) = self.step_node(p, s.a, s.b);
+                    Op::UnuseFragment {
+                        tree,
+                        node,
+                        provenance,
+                    }
+                }
+            }
+            91 => {
+                let mut bare = Vec::new();
+                let mut non_bare = Vec::new();
+                for (t_idx, t_id, tree) in p.attack_trees() {
+                    for (n_idx, n_id, node) in tree.iter() {
+                        let is_bare = node.children().is_empty()
+                            && p.step_feasibility(t_idx, n_idx).is_none()
+                            && p.step_factors(t_idx, n_idx).next().is_none()
+                            && p.step_mitigations(t_idx, n_idx).is_empty()
+                            && p.step_via(t_idx, n_idx).is_none()
+                            && p.step_attack_type(t_idx, n_idx).is_none()
+                            && p.step_shared(t_idx, n_idx).is_none()
+                            && p.step_fragment(t_idx, n_idx).is_none()
+                            && p.step_condition_link_ids(t_id, n_id).is_empty()
+                            && !p.review_marked(t_id, n_id)
+                            && !p.assumptions().any(|(_, _, a)| {
+                                a.excludes_steps()
+                                    .binary_search(&aegis_model::StepRef {
+                                        tree: t_id,
+                                        node: n_id,
+                                    })
+                                    .is_ok()
+                            });
+                        if is_bare {
+                            bare.push((t_id, n_id, node.gate_kind().is_some()));
+                        } else {
+                            non_bare.push((t_id, n_id, node.gate_kind().is_some()));
+                        }
+                    }
+                }
+                let (tree, id, was_gate) = if !bare.is_empty() && !s.c.is_multiple_of(3) {
+                    nth(bare, s.a).expect("non-empty")
+                } else if !non_bare.is_empty() && !s.b.is_multiple_of(4) {
+                    nth(non_bare, s.a).expect("non-empty")
+                } else {
+                    let (t, n) = self.step_node(p, s.a, s.b);
+                    (t, n, false)
+                };
+                let gate = if (was_gate && !s.b.is_multiple_of(3))
+                    || (!was_gate && s.b.is_multiple_of(5))
+                {
+                    None
+                } else {
+                    Some(match s.b % 3 {
+                        0 => GateKind::Or,
+                        1 => GateKind::And,
+                        _ => GateKind::SeqAnd,
+                    })
+                };
+                Op::SetTreeNodeKind {
+                    tree,
+                    id,
+                    gate,
+                    provenance,
+                }
+            }
             _ => Op::SetComponentSystem {
                 id: self.component(p, s.a),
                 system: (!s.b.is_multiple_of(4)).then(|| self.system(p, s.b)),
@@ -2936,6 +3110,7 @@ pub fn second_every_op(m: Arc<Methodology>) {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: attack_tree,
             step_feasibility: vec![(s1, feas(&m, "remote")), (s2, feas(&m, "occasional"))],

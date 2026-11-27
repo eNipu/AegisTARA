@@ -412,6 +412,7 @@ impl Workbench {
             TableId::Claims => self.names.cybersecurity_claim.plural.to_string().into(),
             TableId::Problems => self.catalog.tr("explorer-problems").into(),
             TableId::SharedSteps => self.catalog.tr("page-shared-blocks").into(),
+            TableId::Fragments => self.catalog.tr("folder-fragments").into(),
         }
     }
 

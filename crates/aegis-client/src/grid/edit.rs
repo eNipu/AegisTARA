@@ -37,17 +37,23 @@ fn push_flat(out: &mut Vec<Edit>, edit: Edit) {
 }
 
 /// Whether `target` is the row selection kind belonging to `table`. Time O(1).
-pub(crate) fn target_matches_table(table: TableId, target: Selection) -> bool {
-    matches!(
-        (table, target),
+pub(crate) fn target_matches_table(project: &Project, table: TableId, target: Selection) -> bool {
+    match (table, target) {
         (TableId::Assets, Selection::Asset(_))
-            | (TableId::Damage, Selection::Damage(_))
-            | (TableId::Threats | TableId::Risks, Selection::Threat(_))
-            | (TableId::Controls, Selection::Control(_))
-            | (TableId::Goals, Selection::Goal(_))
-            | (TableId::Claims, Selection::Claim(_))
-            | (TableId::SharedSteps, Selection::SharedStep(_))
-    )
+        | (TableId::Damage, Selection::Damage(_))
+        | (TableId::Threats | TableId::Risks, Selection::Threat(_))
+        | (TableId::Controls, Selection::Control(_))
+        | (TableId::Goals, Selection::Goal(_))
+        | (TableId::Claims, Selection::Claim(_))
+        | (TableId::SharedSteps, Selection::SharedStep(_)) => true,
+        (TableId::Fragments, Selection::Tree(id)) => {
+            project
+                .attack_tree_idx(&id)
+                .and_then(|i| project.attack_tree_role(i))
+                == Some(aegis_model::TreeRole::Fragment)
+        }
+        _ => false,
+    }
 }
 
 /// Whether the element identified by `target` currently exists in `project`.
@@ -180,7 +186,7 @@ pub fn cell_editor(
     let Some(t) = target else {
         return CellEditorKind::ReadOnly;
     };
-    if !target_matches_table(table, t) || !target_exists(project, t) {
+    if !target_matches_table(project, table, t) || !target_exists(project, t) {
         return CellEditorKind::ReadOnly;
     }
     match col.kind {
@@ -210,6 +216,10 @@ pub(crate) fn element_name(p: &Project, target: Selection) -> Option<String> {
             .cybersecurity_claim(p.cybersecurity_claim_idx(&id)?)?
             .name(),
         Selection::SharedStep(id) => p.shared_step(p.shared_step_idx(&id)?)?.name(),
+        Selection::Tree(id) => {
+            let tree = p.attack_tree(p.attack_tree_idx(&id)?)?;
+            tree.get(tree.root())?.label()
+        }
         _ => return None,
     };
     Some(name.to_owned())
@@ -354,7 +364,7 @@ pub fn edit_cell(
     input: &CellInput,
 ) -> Result<Edit, GridError> {
     if table == TableId::Problems
-        || !target_matches_table(table, target)
+        || !target_matches_table(project, table, target)
         || !target_exists(project, target)
     {
         return Err(GridError::NotEditable);
@@ -385,6 +395,7 @@ fn edit_name_cell(target: Selection, col_key: &str, input: &CellInput) -> Result
         Selection::Goal(goal) => Ok(Edit::RenameGoal { goal, name }),
         Selection::Claim(claim) => Ok(Edit::RenameClaim { claim, name }),
         Selection::SharedStep(shared_step) => Ok(Edit::RenameSharedStep { shared_step, name }),
+        Selection::Tree(tree) => Ok(Edit::RenameFragment { tree, name }),
         _ => Err(GridError::NotEditable),
     }
 }

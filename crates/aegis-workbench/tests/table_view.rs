@@ -17,14 +17,15 @@ use aegis_client::table::{Tone, table_rows_for_owner, table_source_json};
 use aegis_client::table_filter::ColumnFilter;
 use aegis_client::view::{ColumnKind, Selection, TableId};
 use aegis_model::{
-    AssetId, ClaimId, ComponentId, ConditionId, ElementId, ElementRef, GoalId, Methodology, Op,
-    PartyId, PartyKind, Project, Provenance, SharedStepId,
+    AssetId, AttackTree, ClaimId, ComponentId, ConditionId, ElementId, ElementRef, GateKind,
+    GoalId, Methodology, Node, NodeId, Op, PartyId, PartyKind, Project, Provenance, SharedStepId,
+    TreeId, TreeRole,
 };
 use aegis_workbench::app::{Workbench, apply_appearance, bind_all};
 use aegis_workbench::sample::workbench_sample;
 use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
 
-const TABLE_FOLDERS: [(TableId, Folder); 9] = [
+const TABLE_FOLDERS: [(TableId, Folder); 10] = [
     (TableId::Assets, Folder::Assets),
     (TableId::Damage, Folder::Damage),
     (TableId::Threats, Folder::Threats),
@@ -34,6 +35,7 @@ const TABLE_FOLDERS: [(TableId, Folder); 9] = [
     (TableId::Claims, Folder::Claims),
     (TableId::Problems, Folder::Problems),
     (TableId::SharedSteps, Folder::SharedSteps),
+    (TableId::Fragments, Folder::Fragments),
 ];
 
 fn open_workbench(
@@ -81,6 +83,17 @@ fn fixture_all_nine_tables() -> Project {
         Op::AddSharedStep {
             id: SharedStepId::new_v7(),
             name: "Replay a diagnostic request".into(),
+            provenance: prov.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: TreeId::new_v7(),
+            tree: AttackTree::new(
+                NodeId::new_v7(),
+                Node::gate(GateKind::Or, "Extract firmware key"),
+            )
+            .expect("fragment tree"),
+            step_feasibility: Vec::new(),
             provenance: prov.clone(),
         },
         Op::AddParty {

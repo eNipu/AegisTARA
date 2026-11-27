@@ -383,12 +383,14 @@ fn save_is_deterministic() {
             Op::RemoveDamageScenario { id: damage_id(9) },
             threat(vec!["5", "4.1", "4"], vec![d2, d1]),
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tr1,
                 tree: build_tree(),
                 step_feasibility: vec![(s2, feas(&m, "high")), (s1, feas(&m, "low"))],
                 provenance: p_tree.clone(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tr2,
                 tree: AttackTree::new(node_id(99), Node::step("temp")).expect("temp"),
                 step_feasibility: vec![],
@@ -421,6 +423,7 @@ fn save_is_deterministic() {
         &m,
         &[
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tr1,
                 tree: build_tree(),
                 step_feasibility: vec![],
@@ -593,6 +596,7 @@ fn second_ops(m: &Methodology) -> Vec<Op> {
             provenance: Provenance::catalog("capec", 600),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree_id(7),
             tree,
             step_feasibility: vec![(s2, feas(m, "remote")), (s1, feas(m, "occasional"))],
@@ -892,6 +896,7 @@ fn op_log_sequencing_unencodable_op_writes_nothing() {
         },
         // A repeated step feasibility node could not be read back either.
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree_id(2),
             tree: AttackTree::new(node_id(1), Node::step("s")).expect("step"),
             step_feasibility: vec![
@@ -902,6 +907,7 @@ fn op_log_sequencing_unencodable_op_writes_nothing() {
         },
         // An attack tree with more than MAX_ATTACK_TREE_NODES nodes.
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree_id(3),
             tree: big_tree,
             step_feasibility: vec![],
@@ -1464,6 +1470,7 @@ fn attack_trees_and_provenance_round_trip_and_evaluate() {
             provenance: Provenance::import("reqif", 1_700_000_000_100),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tr2,
             tree: AttackTree::new(node_id(90), Node::step("Temp")).expect("temp"),
             step_feasibility: vec![],
@@ -1471,6 +1478,7 @@ fn attack_trees_and_provenance_round_trip_and_evaluate() {
         },
         Op::RemoveAttackTree { id: tr2 },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tr1,
             tree,
             step_feasibility: vec![(s1, feas(&m, "medium")), (s2, feas(&m, "high"))],
@@ -1916,6 +1924,7 @@ fn conditions_and_links_round_trip_byte_for_byte() {
             provenance: who(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: at,
             step_feasibility: vec![],

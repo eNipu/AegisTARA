@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use aegis_model::{
     AssetId, ClaimId, ControlId, DamageId, GoalId, ItemRef, PartyId, Project, SharedStepId,
-    ThreatId,
+    ThreatId, TreeId,
 };
 
 use crate::commands::{Edit, TREATMENTS};
@@ -115,7 +115,9 @@ pub fn paste_tsv(
 
 impl PasteCtx<'_> {
     fn check_target(&self, target: Selection) -> Result<(), GridError> {
-        if !target_matches_table(self.table, target) || !target_exists(self.project, target) {
+        if !target_matches_table(self.project, self.table, target)
+            || !target_exists(self.project, target)
+        {
             return Err(GridError::NotEditable);
         }
         Ok(())
@@ -227,6 +229,10 @@ impl PasteCtx<'_> {
                     }));
             }
             TableId::SharedSteps => self.append_shared_step(&cells, name, row)?,
+            TableId::Fragments => self.edits.push(Edit::NewFragment {
+                id: TreeId::new_v7(),
+                root: name,
+            }),
             TableId::Problems => return Err(GridError::NotEditable),
         }
         Ok(true)

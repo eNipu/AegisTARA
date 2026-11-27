@@ -331,6 +331,7 @@ impl ThreatScenario {
     /// let tree_id = TreeId::new_v7();
     /// let tree = AttackTree::new(NodeId::new_v7(), Node::step("Step"))?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![], provenance: Provenance::default(),
     /// })?;
     /// project.apply(Op::SetThreatAttackTree {
@@ -565,6 +566,7 @@ impl ThreatScenario {
 /// let high = m.feasibility_level("high").ok_or("no level")?;
 /// let tree = AttackTree::new(step, Node::step("Inject"))?;
 /// project.apply(Op::AddAttackTree {
+///     role: Default::default(),
 ///     id: tree_id, tree, step_feasibility: vec![(step, high)],
 ///     provenance: Provenance::default(),
 /// })?;
@@ -614,7 +616,7 @@ impl ImpactRisk {
     /// # let tree_id = TreeId::new_v7();
     /// # let step = NodeId::new_v7();
     /// # let high = m.feasibility_level("high").ok_or("no level")?;
-    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, high)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::AddAttackTree { role: Default::default(), id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, high)], provenance: Provenance::default() })?;
     /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
     /// let eval = project.evaluate_risk(threat)?;
     /// assert_eq!(eval.entries()[0].damage(), damage);
@@ -649,7 +651,7 @@ impl ImpactRisk {
     /// # let tree_id = TreeId::new_v7();
     /// # let step = NodeId::new_v7();
     /// # let high = m.feasibility_level("high").ok_or("no level")?;
-    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, high)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::AddAttackTree { role: Default::default(), id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, high)], provenance: Provenance::default() })?;
     /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
     /// let eval = project.evaluate_risk(threat)?;
     /// assert_eq!(eval.entries()[0].category(), safety);
@@ -684,7 +686,7 @@ impl ImpactRisk {
     /// # let tree_id = TreeId::new_v7();
     /// # let step = NodeId::new_v7();
     /// # let high = m.feasibility_level("high").ok_or("no level")?;
-    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, high)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::AddAttackTree { role: Default::default(), id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, high)], provenance: Provenance::default() })?;
     /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
     /// let eval = project.evaluate_risk(threat)?;
     /// assert_eq!(eval.entries()[0].impact(), severe);
@@ -720,7 +722,7 @@ impl ImpactRisk {
     /// # let tree_id = TreeId::new_v7();
     /// # let step = NodeId::new_v7();
     /// let high = m.feasibility_level("high").ok_or("no level")?;
-    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, high)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::AddAttackTree { role: Default::default(), id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, high)], provenance: Provenance::default() })?;
     /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
     /// let eval = project.evaluate_risk(threat)?;
     /// assert_eq!(eval.entries()[0].feasibility(), high);
@@ -756,7 +758,7 @@ impl ImpactRisk {
     /// # let tree_id = TreeId::new_v7();
     /// # let step = NodeId::new_v7();
     /// # let high = m.feasibility_level("high").ok_or("no level")?;
-    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, high)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::AddAttackTree { role: Default::default(), id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, high)], provenance: Provenance::default() })?;
     /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
     /// let eval = project.evaluate_risk(threat)?;
     /// assert_eq!(eval.entries()[0].risk(), m.risk_level("r5").ok_or("no risk")?);
@@ -810,6 +812,7 @@ impl ImpactRisk {
 /// let step = NodeId::new_v7();
 /// let med = m.feasibility_level("medium").ok_or("no level")?;
 /// project.apply(Op::AddAttackTree {
+///     role: Default::default(),
 ///     id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?,
 ///     step_feasibility: vec![(step, med)], provenance: Provenance::default(),
 /// })?;
@@ -853,7 +856,7 @@ impl ThreatRisk {
     /// # let tree_id = TreeId::new_v7();
     /// # let step = NodeId::new_v7();
     /// let low = m.feasibility_level("low").ok_or("no level")?;
-    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, low)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::AddAttackTree { role: Default::default(), id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, low)], provenance: Provenance::default() })?;
     /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
     /// assert_eq!(project.evaluate_risk(threat)?.feasibility(), low);
     /// # Ok(())
@@ -885,7 +888,7 @@ impl ThreatRisk {
     /// # let tree_id = TreeId::new_v7();
     /// # let step = NodeId::new_v7();
     /// # let low = m.feasibility_level("low").ok_or("no level")?;
-    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, low)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::AddAttackTree { role: Default::default(), id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, low)], provenance: Provenance::default() })?;
     /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
     /// let risk = project.evaluate_risk(threat)?;
     /// assert_eq!(risk.tree_evaluation().map(|e| *e.root_value()), Some(low));
@@ -917,7 +920,7 @@ impl ThreatRisk {
     /// # let tree_id = TreeId::new_v7();
     /// # let step = NodeId::new_v7();
     /// # let low = m.feasibility_level("low").ok_or("no level")?;
-    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, low)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::AddAttackTree { role: Default::default(), id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, low)], provenance: Provenance::default() })?;
     /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
     /// let risk = project.evaluate_risk(threat)?;
     /// assert!(risk.entries().is_empty());
@@ -950,7 +953,7 @@ impl ThreatRisk {
     /// # let tree_id = TreeId::new_v7();
     /// # let step = NodeId::new_v7();
     /// # let low = m.feasibility_level("low").ok_or("no level")?;
-    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, low)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::AddAttackTree { role: Default::default(), id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, low)], provenance: Provenance::default() })?;
     /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
     /// assert_eq!(project.evaluate_risk(threat)?.max_risk(), None);
     /// # Ok(())
@@ -982,7 +985,7 @@ impl ThreatRisk {
     /// # let tree_id = TreeId::new_v7();
     /// # let step = NodeId::new_v7();
     /// # let low = m.feasibility_level("low").ok_or("no level")?;
-    /// # project.apply(Op::AddAttackTree { id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, low)], provenance: Provenance::default() })?;
+    /// # project.apply(Op::AddAttackTree { role: Default::default(), id: tree_id, tree: AttackTree::new(step, Node::step("Inject"))?, step_feasibility: vec![(step, low)], provenance: Provenance::default() })?;
     /// # project.apply(Op::SetThreatAttackTree { threat, tree: Some(tree_id), provenance: Provenance::default() })?;
     /// assert_eq!(project.evaluate_risk(threat)?.deciding_entry(), None);
     /// # Ok(())

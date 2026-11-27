@@ -33,6 +33,7 @@ fn folder_for_table(table: TableId) -> Folder {
         TableId::Claims => Folder::Claims,
         TableId::Problems => Folder::Problems,
         TableId::SharedSteps => Folder::SharedSteps,
+        TableId::Fragments => Folder::Fragments,
     }
 }
 

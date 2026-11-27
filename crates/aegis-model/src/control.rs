@@ -297,6 +297,7 @@ pub enum CeilingSource {
 /// let tree = AttackTree::new(step, Node::step("Dump flash"))?;
 /// let root_idx = tree.root();
 /// project.apply(Op::AddAttackTree {
+///     role: Default::default(),
 ///     id: tree_id, tree, step_feasibility: vec![(step, high)], provenance: Provenance::default(),
 /// })?;
 /// project.apply(Op::SetStepVia {
@@ -700,6 +701,7 @@ impl SecurityControl {
 /// let tree = AttackTree::new(step_id, Node::step("Extract key"))?;
 /// let root_idx = tree.root();
 /// project.apply(Op::AddAttackTree {
+///     role: Default::default(),
 ///     id: tree_id,
 ///     tree,
 ///     step_feasibility: vec![(step_id, high)],
@@ -751,6 +753,7 @@ impl StepMitigation {
     /// let tree = AttackTree::new(step_id, Node::step("Inject"))?;
     /// let root = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id,
     ///     tree,
     ///     step_feasibility: vec![(step_id, low)],
@@ -798,6 +801,7 @@ impl StepMitigation {
     /// let tree = AttackTree::new(step_id, Node::step("Inject"))?;
     /// let root = tree.root();
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id,
     ///     tree,
     ///     step_feasibility: vec![(step_id, very_low)],

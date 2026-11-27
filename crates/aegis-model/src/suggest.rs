@@ -394,6 +394,7 @@ fn rebase_and_stamp_op(op: &Op, project: &Project, provenance: Provenance) -> Op
 /// let root_id = NodeId::new_v7();
 /// let tree = AttackTree::new(root_id, Node::gate(GateKind::Or, "Compromise ECU"))?;
 /// project.apply(Op::AddAttackTree {
+///     role: Default::default(),
 ///     id: tree_id,
 ///     tree,
 ///     step_feasibility: Vec::new(),
@@ -685,6 +686,7 @@ mod tests {
             AttackTree::new(root_id, Node::gate(GateKind::Or, "Unlock doors")).expect("valid root");
         project
             .apply(Op::AddAttackTree {
+                role: crate::TreeRole::default(),
                 id: tree_id,
                 tree,
                 step_feasibility: Vec::new(),

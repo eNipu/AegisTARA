@@ -41,6 +41,7 @@ use crate::methodology::{FeasibilityLevel, ImpactCategory, Level, RiskLevel};
 /// tree.add_child(tree.root(), s2, Node::step("Easy"))?;
 /// let tree_id = TreeId::new_v7();
 /// project.apply(Op::AddAttackTree {
+///     role: Default::default(),
 ///     id: tree_id,
 ///     tree,
 ///     step_feasibility: vec![(s1, med), (s2, high)],
@@ -82,6 +83,7 @@ impl StepTippingPoint {
     /// let tree_id = TreeId::new_v7();
     /// let med = m.feasibility_level("medium").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree, step_feasibility: vec![(step, med)],
     ///     provenance: Provenance::default(),
     /// })?;
@@ -107,6 +109,7 @@ impl StepTippingPoint {
     /// let tree_id = TreeId::new_v7();
     /// let med = m.feasibility_level("medium").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Only"))?,
     ///     step_feasibility: vec![(step, med)], provenance: Provenance::default(),
     /// })?;
@@ -133,6 +136,7 @@ impl StepTippingPoint {
     /// let tree_id = TreeId::new_v7();
     /// let med = m.feasibility_level("medium").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Only"))?,
     ///     step_feasibility: vec![(step, med)], provenance: Provenance::default(),
     /// })?;
@@ -162,6 +166,7 @@ impl StepTippingPoint {
     ///     m.feasibility_level("medium").ok_or("no level")?,
     /// );
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Only"))?,
     ///     step_feasibility: vec![(step, med)], provenance: Provenance::default(),
     /// })?;
@@ -187,6 +192,7 @@ impl StepTippingPoint {
     /// let tree_id = TreeId::new_v7();
     /// let med = m.feasibility_level("medium").ok_or("no level")?;
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Only"))?,
     ///     step_feasibility: vec![(step, med)], provenance: Provenance::default(),
     /// })?;
@@ -216,6 +222,7 @@ impl StepTippingPoint {
     ///     m.feasibility_level("medium").ok_or("no level")?,
     /// );
     /// project.apply(Op::AddAttackTree {
+    ///     role: Default::default(),
     ///     id: tree_id, tree: AttackTree::new(step, Node::step("Only"))?,
     ///     step_feasibility: vec![(step, med)], provenance: Provenance::default(),
     /// })?;

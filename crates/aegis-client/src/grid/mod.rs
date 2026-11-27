@@ -6,7 +6,7 @@ use std::ops::RangeInclusive;
 
 use aegis_model::{
     AssetId, ClaimId, ComponentId, ControlId, DamageId, ElementId, GoalId, Project, SharedStepId,
-    ThreatId,
+    ThreatId, TreeId,
 };
 
 use crate::commands::Edit;
@@ -318,6 +318,10 @@ pub fn add_row_edit(
             let id = SharedStepId::new_v7();
             Ok((Edit::AddSharedStep { id, name }, Selection::SharedStep(id)))
         }
+        TableId::Fragments => {
+            let id = TreeId::new_v7();
+            Ok((Edit::NewFragment { id, root: name }, Selection::Tree(id)))
+        }
         TableId::Problems => Err(GridError::NotEditable),
     }
 }
@@ -344,6 +348,7 @@ pub fn delete_rows_edit(targets: &[Selection]) -> Option<Edit> {
             Selection::Goal(goal) => Edit::RemoveGoal { goal },
             Selection::Claim(claim) => Edit::RemoveClaim { claim },
             Selection::SharedStep(shared_step) => Edit::RemoveSharedStep { shared_step },
+            Selection::Tree(tree) => Edit::RemoveTree { tree },
             _ => continue,
         };
         edits.push(edit);

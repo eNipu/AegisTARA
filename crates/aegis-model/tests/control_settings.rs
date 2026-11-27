@@ -129,6 +129,7 @@ fn reach_fixture() -> ReachFx {
             provenance: Provenance::default(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: t,
             step_feasibility: vec![
@@ -1161,6 +1162,7 @@ proptest! {
                 provenance: Provenance::default(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree,
                 tree: t,
                 step_feasibility: steps

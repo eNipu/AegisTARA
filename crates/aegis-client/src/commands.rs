@@ -18,7 +18,7 @@ use aegis_model::{
     AssetId, AssumptionId, AttackTree, AttackType, ClaimId, ComponentId, ControlId, DamageId,
     DataFlowId, ElementId, ElementKind, FeasibilityFactor, FeasibilityLevel, GateKind, GoalId,
     InterfaceId, ItemRef, NodeId, Op, Project, PropertySet, Provenance, RiskTreatment,
-    SharedStepId, StepRef, StepTarget, ThreatId, TreeId, TrustBoundaryId,
+    SharedStepId, StepRef, StepTarget, ThreatId, TreeId, TreeRole, TrustBoundaryId,
 };
 
 use crate::outline::{OutlineError, ResolvedNote, parse_outline_annotated, resolve_notes};
@@ -196,7 +196,18 @@ pub enum Edit {
         /// New shared step ID.
         id: SharedStepId,
     },
-    /// Copies a linked shared step's ratings onto its tree step and unlinks it.
+    /// Extracts a selected node and its reachable descendants into a new
+    /// fragment and replaces the selection with a reference to it.
+    MakeSharedFragment {
+        /// Source tree.
+        tree: TreeId,
+        /// Selected node whose reachable subtree is extracted.
+        node: NodeId,
+        /// New fragment tree ID.
+        id: TreeId,
+    },
+    /// Unshares a linked shared step or materializes a fragment reference into
+    /// its tree and unlinks it.
     Unshare {
         /// Tree.
         tree: TreeId,
@@ -603,6 +614,36 @@ pub enum Edit {
         root: String,
         /// The threat to link it to.
         threat: Option<ThreatId>,
+    },
+    /// Creates a standalone reusable OR-root fragment.
+    NewFragment {
+        /// New ID.
+        id: TreeId,
+        /// Text of the root gate.
+        root: String,
+    },
+    /// Links an unrated, unshared leaf to a fragment.
+    UseFragment {
+        /// Using tree.
+        tree: TreeId,
+        /// Leaf node.
+        node: NodeId,
+        /// Target fragment.
+        fragment: TreeId,
+    },
+    /// Explicitly detaches a fragment, leaving an unrated leaf.
+    UnuseFragment {
+        /// Using tree.
+        tree: TreeId,
+        /// Leaf node.
+        node: NodeId,
+    },
+    /// Renames a fragment's root without changing its role or links.
+    RenameFragment {
+        /// Fragment tree.
+        tree: TreeId,
+        /// New root name.
+        name: String,
     },
     /// Replaces a tree's structure with an outline (see [`crate::outline`]).
     /// Nodes that keep their text keep their ratings, factors and controls.
@@ -1126,6 +1167,17 @@ pub enum EditError {
     /// The pack preset is not meant for this kind of element.
     #[error("{0}")]
     PresetDoesNotFit(String),
+    /// Copying or materializing a fragment subtree exceeded a model bound.
+    #[error("copied subtree exceeds {resource} limit ({max})")]
+    FragmentCopyLimit {
+        /// The bounded resource that overflowed.
+        resource: &'static str,
+        /// The model bound on that resource.
+        max: usize,
+    },
+    /// The selected node already uses a shared step or fragment.
+    #[error("the selected node is already shared; use Unshare first")]
+    AlreadyShared,
 }
 
 /// The refusal for a preset that does not fit `target`.
@@ -1290,6 +1342,131 @@ fn unshare_step_ops(project: &Project, tree: TreeId, node: NodeId, p: &Provenanc
         p,
     ));
     ops
+}
+
+fn make_shared_fragment_ops(
+    project: &Project,
+    tree: TreeId,
+    node: NodeId,
+    id: TreeId,
+    p: &Provenance,
+) -> Result<Vec<Op>, EditError> {
+    let t_idx = project.attack_tree_idx(&tree).ok_or(EditError::Missing)?;
+    let src_tree = project.attack_tree(t_idx).ok_or(EditError::Missing)?;
+    let n_idx = src_tree.idx_of(&node).ok_or(EditError::Missing)?;
+    let src_node = src_tree.get(n_idx).ok_or(EditError::Missing)?;
+    if project.step_shared(t_idx, n_idx).is_some() || project.step_fragment(t_idx, n_idx).is_some()
+    {
+        return Err(EditError::AlreadyShared);
+    }
+    let plan = crate::fragments::copy_subtree(
+        project,
+        tree,
+        node,
+        crate::fragments::CopyMode::PreserveReferences,
+    )?;
+    let mut ops = plan.new_tree_ops(id, TreeRole::Fragment, p)?;
+    ops.extend(crate::tree_diff::collapse_subtree_ops(
+        project, tree, node, p,
+    )?);
+    ops.extend(crate::tree_diff::clear_step_ops(project, tree, node, p));
+    ops.extend(unneed_step_conditions_ops(project, tree, Some(node), p));
+    if src_node.gate_kind().is_some() {
+        ops.push(Op::SetTreeNodeKind {
+            tree,
+            id: node,
+            gate: None,
+            provenance: p.clone(),
+        });
+    }
+    ops.push(Op::UseFragment {
+        tree,
+        node,
+        fragment: id,
+        provenance: p.clone(),
+    });
+    Ok(ops)
+}
+
+fn unshare_fragment_ops(
+    project: &Project,
+    tree: TreeId,
+    node: NodeId,
+    p: &Provenance,
+) -> Result<Vec<Op>, EditError> {
+    let t_idx = project.attack_tree_idx(&tree).ok_or(EditError::Missing)?;
+    let host_tree = project.attack_tree(t_idx).ok_or(EditError::Missing)?;
+    let n_idx = host_tree.idx_of(&node).ok_or(EditError::Missing)?;
+    if project.step_fragment(t_idx, n_idx).is_none() {
+        return Err(EditError::Missing);
+    }
+    let plan = crate::fragments::copy_subtree(
+        project,
+        tree,
+        node,
+        crate::fragments::CopyMode::Materialize,
+    )?;
+    let insert = plan.insert_ops(tree, node, host_tree.len(), p)?;
+    let root_kind = plan.root_kind();
+    let target_sr = StepRef { tree, node };
+    let distributed = plan.materialized_assumptions(node);
+    let mut pre_excludes = Vec::new();
+    let mut post_excludes = Vec::new();
+    for (_, aid, a) in project.assumptions() {
+        let had_target = a.excludes_steps().contains(&target_sr);
+        let add_nodes = distributed.get(&aid);
+        if !had_target && add_nodes.is_none() {
+            continue;
+        }
+        let trees: BTreeSet<TreeId> = a
+            .excludes_trees()
+            .iter()
+            .filter_map(|&ti| project.attack_tree_id(ti))
+            .collect();
+        let existing: BTreeSet<StepRef> = a.excludes_steps().iter().copied().collect();
+        let mut after = existing.clone();
+        let mut without_target = None;
+        if had_target && root_kind.is_some() {
+            after.remove(&target_sr);
+            without_target = Some(after.clone());
+        }
+        if let Some(nodes) = add_nodes {
+            after.extend(nodes.iter().map(|&n| StepRef { tree, node: n }));
+        }
+        if trees.len().saturating_add(after.len()) > aegis_model::MAX_ASSUMPTION_EXCLUDES {
+            return Err(EditError::FragmentCopyLimit {
+                resource: "assumption_excludes",
+                max: aegis_model::MAX_ASSUMPTION_EXCLUDES,
+            });
+        }
+        let current = without_target.as_ref().unwrap_or(&existing);
+        let changed_after = after != *current;
+        if let Some(without) = without_target {
+            pre_excludes.push((aid, trees.clone(), without));
+        }
+        if changed_after {
+            post_excludes.push((aid, trees, after));
+        }
+    }
+
+    let mut ops = crate::tree_diff::clear_step_ops(project, tree, node, p);
+    ops.extend(unneed_step_conditions_ops(project, tree, Some(node), p));
+    for (aid, trees, steps) in &pre_excludes {
+        ops.push(set_excludes_op(*aid, trees, steps, p));
+    }
+    if root_kind.is_some() {
+        ops.push(Op::SetTreeNodeKind {
+            tree,
+            id: node,
+            gate: root_kind,
+            provenance: p.clone(),
+        });
+    }
+    ops.extend(insert);
+    for (aid, trees, steps) in &post_excludes {
+        ops.push(set_excludes_op(*aid, trees, steps, p));
+    }
+    Ok(ops)
 }
 
 /// Ops that clear the "through" of every step that goes through `item`
@@ -1973,11 +2150,20 @@ impl Edit {
                 });
                 ops
             }
+            Edit::MakeSharedFragment { tree, node, id } => {
+                make_shared_fragment_ops(project, *tree, *node, *id, &p)?
+            }
             Edit::Unshare { tree, node } => {
-                if !matches!(step_op_target(project, *tree, *node), StepTarget::Shared(_)) {
+                let t_idx = project.attack_tree_idx(tree).ok_or(EditError::Missing)?;
+                let src_tree = project.attack_tree(t_idx).ok_or(EditError::Missing)?;
+                let n_idx = src_tree.idx_of(node).ok_or(EditError::Missing)?;
+                if project.step_fragment(t_idx, n_idx).is_some() {
+                    unshare_fragment_ops(project, *tree, *node, &p)?
+                } else if project.step_shared(t_idx, n_idx).is_some() {
+                    unshare_step_ops(project, *tree, *node, &p)
+                } else {
                     return Err(EditError::Missing);
                 }
-                unshare_step_ops(project, *tree, *node, &p)
             }
 
             Edit::AddAsset {
@@ -2695,19 +2881,56 @@ impl Edit {
                 ops
             }
 
-            Edit::NewTree { id, root, threat } => {
+            Edit::UseFragment {
+                tree,
+                node,
+                fragment,
+            } => vec![Op::UseFragment {
+                tree: *tree,
+                node: *node,
+                fragment: *fragment,
+                provenance: p,
+            }],
+            Edit::UnuseFragment { tree, node } => vec![Op::UnuseFragment {
+                tree: *tree,
+                node: *node,
+                provenance: p,
+            }],
+            Edit::RenameFragment { tree, name: label } => {
+                let idx = project.attack_tree_idx(tree).ok_or(EditError::Missing)?;
+                if project.attack_tree_role(idx) != Some(TreeRole::Fragment) {
+                    return Err(EditError::Missing);
+                }
+                let old = project.attack_tree(idx).ok_or(EditError::Missing)?;
+                vec![Op::RenameTreeNode {
+                    tree: *tree,
+                    id: old.id_of(old.root()).ok_or(EditError::Missing)?,
+                    label: name(label)?,
+                    provenance: p,
+                }]
+            }
+            Edit::NewTree { id, root, .. } | Edit::NewFragment { id, root } => {
                 let tree = AttackTree::new(
                     NodeId::new_v7(),
                     aegis_model::Node::gate(aegis_model::GateKind::Or, &*name(root)?),
                 )
                 .map_err(|_| EditError::EmptyName)?;
                 let mut ops = vec![Op::AddAttackTree {
+                    role: if matches!(self, Edit::NewFragment { .. }) {
+                        TreeRole::Fragment
+                    } else {
+                        TreeRole::Threat
+                    },
                     id: *id,
                     tree,
                     step_feasibility: Vec::new(),
                     provenance: p.clone(),
                 }];
-                if let Some(threat) = threat {
+                if let Edit::NewTree {
+                    threat: Some(threat),
+                    ..
+                } = self
+                {
                     ops.push(Op::SetThreatAttackTree {
                         threat: *threat,
                         tree: Some(*id),
@@ -3809,6 +4032,20 @@ impl Edit {
                 shared_step,
                 attack_type,
             } => shared(shared_step).is_some_and(|s| s.attack_type() == *attack_type),
+            Edit::UseFragment {
+                tree,
+                node,
+                fragment,
+            } => project
+                .attack_tree_idx(tree)
+                .and_then(|t| Some((t, project.attack_tree(t)?.idx_of(node)?)))
+                .is_some_and(|(t, n)| project.step_fragment_id(t, n) == Some(*fragment)),
+            Edit::RenameFragment { tree, name } => project
+                .attack_tree_idx(tree)
+                .filter(|&t| project.attack_tree_role(t) == Some(TreeRole::Fragment))
+                .and_then(|t| project.attack_tree(t))
+                .and_then(|t| t.get(t.root()))
+                .is_some_and(|n| n.label() == name.trim()),
             Edit::SetAttackFilter { filter } => project.attack_filter() == filter,
             _ => false,
         }
@@ -3879,7 +4116,9 @@ impl Edit {
             Edit::AddThreat { id, .. } | Edit::AddThreatLeading { id, .. } => {
                 Some(Selection::Threat(*id))
             }
-            Edit::NewTree { id, .. } => Some(Selection::Tree(*id)),
+            Edit::NewTree { id, .. }
+            | Edit::NewFragment { id, .. }
+            | Edit::MakeSharedFragment { id, .. } => Some(Selection::Tree(*id)),
             Edit::AddSharedStep { id, .. } => Some(Selection::SharedStep(*id)),
             Edit::AddTreeChild { tree, id, .. }
             | Edit::BranchStepToGate { tree, id, .. }

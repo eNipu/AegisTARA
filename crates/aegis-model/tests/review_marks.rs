@@ -65,6 +65,7 @@ fn fixture() -> Fx {
             provenance: Provenance::default(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: t,
             step_feasibility: vec![(step, low)],

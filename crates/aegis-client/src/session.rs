@@ -3786,19 +3786,42 @@ fn find_rows(f: &crate::find::Find, p: &Project, page: Page, d: &mut PageData) -
             row(&r.visual_id, &r.threat, E::Threat(r.id))
         }),
         Page::Trees => keep(&mut d.trees, |r| row(&r.visual_id, &r.title, E::Tree(r.id))),
-        Page::SharedBlocks => p
-            .shared_steps()
-            .fold((0, 0), |(shown, total), (idx, id, s)| {
-                (
-                    shown
-                        + usize::from(f.hit(&[
-                            &p.shared_step_visual_id(idx).unwrap_or_default(),
-                            s.name(),
-                            described(p, E::SharedStep(id)),
-                        ])),
-                    total + 1,
-                )
-            }),
+        Page::SharedBlocks => {
+            let steps = p
+                .shared_steps()
+                .fold((0, 0), |(shown, total), (idx, id, s)| {
+                    (
+                        shown
+                            + usize::from(f.hit(&[
+                                &p.shared_step_visual_id(idx).unwrap_or_default(),
+                                s.name(),
+                                described(p, E::SharedStep(id)),
+                            ])),
+                        total + 1,
+                    )
+                });
+            let fragments = p
+                .attack_trees()
+                .filter(|(idx, _, _)| {
+                    p.attack_tree_role(*idx) == Some(aegis_model::TreeRole::Fragment)
+                })
+                .fold((0, 0), |(shown, total), (idx, id, t)| {
+                    let root = t
+                        .get(t.root())
+                        .map(aegis_model::Node::label)
+                        .unwrap_or_default();
+                    (
+                        shown
+                            + usize::from(f.hit(&[
+                                &p.attack_tree_visual_id(idx).unwrap_or_default(),
+                                root,
+                                described(p, E::Tree(id)),
+                            ])),
+                        total + 1,
+                    )
+                });
+            sum(&[steps, fragments])
+        }
         Page::Controls => keep(&mut d.controls, |r| {
             row(&r.visual_id, &r.name, E::Control(r.id))
         }),

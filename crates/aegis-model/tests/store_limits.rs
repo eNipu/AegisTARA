@@ -894,6 +894,7 @@ fn limits_admit_every_valid_project() {
         .expect("link shared step");
     assert_eq!(tree.len(), MAX_TREE_OP_NODES);
     ops.push(Op::AddAttackTree {
+        role: Default::default(),
         id: tree_id(1),
         tree,
         step_feasibility: step_feasibility.clone(),

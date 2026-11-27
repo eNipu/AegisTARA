@@ -78,6 +78,7 @@ fn add_tree(ws: &mut Workspace, tree: AttackTree) -> TreeId {
     let id = TreeId::new_v7();
     ws.apply(
         vec![Op::AddAttackTree {
+            role: Default::default(),
             id,
             tree,
             step_feasibility: Vec::new(),
@@ -804,7 +805,10 @@ fn shared_blocks_page_table_and_description_select_the_shared_step() {
     let (ws, _, _, shared, component) = linked_workspace(1);
     assert_eq!(Page::SharedBlocks.index(), 9);
     assert_eq!(Page::SharedBlocks.group(), Some(PageGroup::Feasibility));
-    assert_eq!(Page::SharedBlocks.tables(), [TableId::SharedSteps]);
+    assert_eq!(
+        Page::SharedBlocks.tables(),
+        [TableId::SharedSteps, TableId::Fragments]
+    );
     assert_eq!(
         TableId::SharedSteps
             .columns()

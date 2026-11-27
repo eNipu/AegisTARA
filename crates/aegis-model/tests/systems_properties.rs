@@ -332,6 +332,7 @@ fn threat_on_brake_asset_is_in_brake_with_its_tree_and_damage() {
     ok(
         &mut p,
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree_id(300),
             tree,
             step_feasibility: Vec::new(),

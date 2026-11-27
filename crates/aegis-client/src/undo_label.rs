@@ -118,6 +118,8 @@ impl Label {
             "unlink" => "unlinked",
             "rate" => "rated",
             "reset" => "reset",
+            "share" => "shared",
+            "unshare" => "unshared",
             _ => "changed",
         };
         if self.count > 0 {
@@ -183,6 +185,67 @@ pub fn describe(ops: &[Op], project: &Project) -> Label {
             .all(|op| matches!(op, Op::SetComponentSystem { .. }))
     {
         return Label::bulk("move", "components", ops.len());
+    }
+    if let Some((id, name)) = ops.iter().find_map(|op| match op {
+        Op::AddAttackTree {
+            role: aegis_model::TreeRole::Fragment,
+            id,
+            tree,
+            ..
+        } if ops
+            .iter()
+            .any(|u| matches!(u, Op::UseFragment { fragment, .. } if fragment == id)) =>
+        {
+            Some((*id, tree.get(tree.root()).map(|n| n.label().to_owned())))
+        }
+        _ => None,
+    }) {
+        return Label {
+            verb: "share",
+            noun: "fragment",
+            name,
+            others: 0,
+            unlinked: 0,
+            lost_via: 0,
+            target: Some(Selection::Tree(id)),
+            count: 0,
+            no_system: 0,
+        };
+    }
+    if let Some((tree, node)) = ops.iter().find_map(|op| match op {
+        Op::UnuseFragment { tree, node, .. }
+            if ops.len() > 1
+                && !ops.iter().any(|o| {
+                    matches!(
+                        o,
+                        Op::RemoveTreeNode { .. }
+                            | Op::RemoveAttackTree { .. }
+                            | Op::UseFragment { .. }
+                    )
+                }) =>
+        {
+            Some((*tree, *node))
+        }
+        _ => None,
+    }) {
+        let name = project.attack_tree_idx(&tree).and_then(|t_idx| {
+            let t = project.attack_tree(t_idx)?;
+            let n_idx = t.idx_of(&node)?;
+            let frag_idx = project.step_fragment(t_idx, n_idx)?;
+            let frag = project.attack_tree(frag_idx)?;
+            frag.get(frag.root()).map(|n| n.label().to_owned())
+        });
+        return Label {
+            verb: "unshare",
+            noun: "fragment",
+            name,
+            others: 0,
+            unlinked: 0,
+            lost_via: 0,
+            target: Some(Selection::TreeNode(tree, node)),
+            count: 0,
+            no_system: 0,
+        };
     }
     let parts: Vec<_> = ops.iter().map(|op| parts(op, project)).collect();
     // The edit is named after its removal, else its first addition, else its
@@ -265,9 +328,12 @@ fn target_of(op: &Op) -> Option<Selection> {
         Op::AddTreeNode { tree, id: node, .. }
         | Op::RenameTreeNode { tree, id: node, .. }
         | Op::SetTreeNodeGate { tree, id: node, .. }
+        | Op::SetTreeNodeKind { tree, id: node, .. }
         | Op::SetStepMitigation { tree, node, .. }
         | Op::SetReviewMark { tree, node, .. }
         | Op::UnuseSharedStep { tree, node, .. }
+        | Op::UseFragment { tree, node, .. }
+        | Op::UnuseFragment { tree, node, .. }
         | Op::LinkTreeNode {
             tree, child: node, ..
         }
@@ -482,6 +548,7 @@ fn parts(op: &Op, p: &Project) -> Parts {
         Op::SetStepAttackType { .. } => ("change", "attack type of a step in attack tree", None),
         Op::LinkTreeNode { .. }
         | Op::SetTreeNodeGate { .. }
+        | Op::SetTreeNodeKind { .. }
         | Op::SetReviewMark { .. }
         | Op::SetStepFeasibility { .. }
         | Op::SetStepFactor { .. }
@@ -492,6 +559,8 @@ fn parts(op: &Op, p: &Project) -> Parts {
         Op::RemoveSharedStep { id } => ("remove", "shared step", shared(id)),
         Op::UseSharedStep { step, .. } => ("use", "shared step", shared(step)),
         Op::UnuseSharedStep { .. } => ("unuse", "shared step", None),
+        Op::UseFragment { .. } => ("use", "fragment", None),
+        Op::UnuseFragment { .. } => ("unuse", "fragment", None),
 
         Op::AddSecurityControl { name, .. } => ("add", "security control", some(name)),
         Op::RenameSecurityControl { id, .. } => ("rename", "security control", control(id)),

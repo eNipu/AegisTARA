@@ -442,6 +442,7 @@ fn add_and_delete_row_edits_cover_all_editable_tables_with_exact_undo() {
             Owner::Project,
             "Replay diagnostic request",
         ),
+        (TableId::Fragments, Owner::Project, "Extract firmware key"),
     ];
 
     let mut created_for_delete = Vec::new();
@@ -461,6 +462,7 @@ fn add_and_delete_row_edits_cover_all_editable_tables_with_exact_undo() {
             TableId::Goals => assert!(matches!(sel, Selection::Goal(_))),
             TableId::Claims => assert!(matches!(sel, Selection::Claim(_))),
             TableId::SharedSteps => assert!(matches!(sel, Selection::SharedStep(_))),
+            TableId::Fragments => assert!(matches!(sel, Selection::Tree(_))),
             TableId::Assets | TableId::Problems => unreachable!(),
         }
         apply_edit(&mut ws, &edit);

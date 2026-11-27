@@ -1,8 +1,12 @@
 //! Inspector core types, Fluent keys, explain-why causes, and `primary_cause`
 //! resolution (WBX-06, WBX-11).
 
+#[path = "common/fragments.rs"]
+mod fragments;
+
 use std::sync::Arc;
 
+use aegis_canvas::Tone;
 use aegis_client::commands::Edit;
 use aegis_client::i18n::{Catalog, Language};
 use aegis_client::inspector::{
@@ -13,10 +17,10 @@ use aegis_client::table::selection_exclusion;
 use aegis_client::view::Selection;
 use aegis_client::workspace::{Origin, Workspace};
 use aegis_model::{
-    AssetId, AssumptionId, AttackTree, ClaimId, ComponentId, ConditionId, ControlId, DamageId,
-    DataFlowId, ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId, ItemRef,
-    Methodology, Node, NodeId, Op, PartyId, PartyKind, Provenance, RiskTreatment, SharedStepId,
-    StepRef, StepTarget, ThreatId, TreeId, TrustBoundaryId,
+    AssetId, AssumptionId, AttackTree, ClaimId, ComponentId, ConditionId, ControlId, ControlStatus,
+    DamageId, DataFlowId, ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId,
+    ItemRef, Methodology, Node, NodeId, Op, PartyId, PartyKind, Provenance, RiskTreatment,
+    SharedStepId, StepRef, StepTarget, ThreatId, TreeId, TrustBoundaryId,
 };
 
 const NEW_KEYS: &[&str] = &[
@@ -26,6 +30,9 @@ const NEW_KEYS: &[&str] = &[
     "inspector-explain-why",
     "inspector-used-by",
     "inspector-used-in",
+    "fragment",
+    "inspector-fragment-reference",
+    "inspector-rev-fragment-used-in",
     "inspector-shared-step-line-one",
     "inspector-shared-step-line",
     "inspector-rev-shared-step-used-in",
@@ -79,6 +86,39 @@ fn all_inspector_fluent_keys_and_reverse_labels_resolve() {
                 rel.key
             );
         }
+        for key in ["fragment", "inspector-rev-fragment-used-in"] {
+            let value = catalog.tr(key);
+            assert_ne!(value, key, "{language:?} fallback key");
+            assert_ne!(value, format!("[{key}]"), "{language:?} missing key");
+            if language == Language::Pseudo {
+                assert!(value.starts_with('⟦'), "pseudo must be visibly localized");
+            } else {
+                assert_eq!(
+                    value,
+                    if language == Language::En {
+                        "Fragment"
+                    } else {
+                        "フラグメント"
+                    }
+                );
+            }
+        }
+        assert_eq!(
+            catalog.tr("inspector-fragment-reference"),
+            match language {
+                Language::En => "Fragment reference",
+                Language::Ja => "フラグメント参照",
+                Language::Pseudo => "⟦Frâgmént référéncé␣⟧",
+            }
+        );
+        assert_eq!(
+            reverse_relation_label(RelationKey::FRAGMENT_USED_IN, &catalog),
+            catalog.tr("inspector-rev-fragment-used-in"),
+        );
+        assert_ne!(
+            reverse_relation_label(RelationKey::FRAGMENT_USED_IN, &catalog),
+            catalog.tr("inspector-rev-conditions"),
+        );
         let cond_label = reverse_relation_label(RelationKey::STEP_CONDITIONS, &catalog);
         assert_eq!(cond_label, catalog.tr("inspector-rev-conditions"));
         assert_eq!(
@@ -158,6 +198,7 @@ fn primary_cause_resolves_threat_tree_gate_step_damage_and_condition() {
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree_id,
                 tree,
                 step_feasibility: vec![(step_easy, high), (step_hard, low)],
@@ -458,6 +499,7 @@ fn inspector_view_populates_all_14_selection_kinds_relations_systems_and_exclusi
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree_id,
                 tree,
                 step_feasibility: vec![(step_via_iface, high), (step_excluded, high)],
@@ -881,12 +923,14 @@ fn assumption_inspector_relations_and_excluded_tree_step_causes() {
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree_id,
                 tree: AttackTree::new(root1, Node::gate(GateKind::Or, "Tamper ECU")).expect("t1"),
                 step_feasibility: vec![],
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree2_id,
                 tree: tree2,
                 step_feasibility: vec![],
@@ -1064,6 +1108,7 @@ fn shared_step_selection_has_visual_id_ratings_and_forward_relations() {
                 provenance: prov(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree_id,
                 tree,
                 step_feasibility: Vec::new(),
@@ -1103,4 +1148,562 @@ fn shared_step_selection_has_visual_id_ratings_and_forward_relations() {
         .expect("used-in row");
     assert_eq!(used.chips[0].target, Selection::TreeNode(tree_id, step));
     assert!(inspector_view(&ws, Selection::SharedStep(SharedStepId::new_v7()), &catalog).is_none());
+}
+
+fn fragment_rows(
+    view: &aegis_client::inspector::InspectorView,
+) -> Vec<&aegis_client::inspector::InspectorRelationRow> {
+    view.relations
+        .iter()
+        .chain(&view.reverse_relations)
+        .filter(|r| r.key == RelationKey::FRAGMENT_USED_IN)
+        .collect()
+}
+
+fn assert_fragment_user(ws: &Workspace, catalog: &Catalog, tree: TreeId, node: NodeId, a: TreeId) {
+    let view = inspector_view(ws, Selection::TreeNode(tree, node), catalog).expect("user view");
+    let rows = fragment_rows(&view);
+    assert_eq!(
+        rows.len(),
+        1,
+        "exactly one fragment row across both directions"
+    );
+    assert!(
+        !view
+            .relations
+            .iter()
+            .any(|r| r.key == RelationKey::FRAGMENT_USED_IN)
+    );
+    assert_eq!(rows[0].label, catalog.tr("inspector-rev-fragment-used-in"));
+    assert!(!rows[0].editable);
+    assert_eq!(
+        rows[0].chips.iter().map(|c| c.target).collect::<Vec<_>>(),
+        vec![Selection::Tree(a)]
+    );
+    let a_view = inspector_view(ws, Selection::Tree(a), catalog).expect("fragment");
+    let note = view.shared_note.expect("fragment note");
+    assert!(note.contains(&catalog.tr("fragment")));
+    assert!(note.contains(&a_view.visual_id));
+    assert!(note.contains("Fragment A"));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn loaded_fragments_have_one_read_only_relation_and_localized_notes() {
+    assert_eq!(
+        RELATIONS
+            .iter()
+            .filter(|r| r.key.as_str() == "fragment-used-in")
+            .count(),
+        1
+    );
+    assert!(!RELATIONS.iter().any(|r| r.key.as_str() == "step-fragment"));
+    let registry = RELATIONS
+        .iter()
+        .find(|r| r.key == RelationKey::FRAGMENT_USED_IN)
+        .expect("row");
+    assert_eq!(registry.from, aegis_client::relations::ElementKind::Tree);
+    assert_eq!(registry.to, &[aegis_client::relations::ElementKind::Step]);
+    assert!(registry.many);
+    assert!(registry.link.is_none());
+    assert!(registry.unlink.is_none());
+
+    for language in [Language::En, Language::Ja, Language::Pseudo] {
+        let catalog = Catalog::load(language);
+        let (mut ws, i) = fragments::loaded();
+        let mut expected = [(i.first, i.user_a), (i.second, i.user_b), (i.b, i.user_c)];
+        expected.sort();
+        let expected: Vec<_> = expected
+            .into_iter()
+            .map(|(t, n)| Selection::TreeNode(t, n))
+            .collect();
+        let check_a = |ws: &Workspace, targets: &[Selection]| {
+            let view = inspector_view(ws, Selection::Tree(i.a), &catalog).expect("A");
+            let rows = fragment_rows(&view);
+            assert_eq!(rows.len(), 1);
+            assert!(
+                !view
+                    .reverse_relations
+                    .iter()
+                    .any(|r| r.key == RelationKey::FRAGMENT_USED_IN)
+            );
+            assert_eq!(rows[0].label, catalog.tr("inspector-used-in"));
+            assert!(!rows[0].editable);
+            assert_eq!(
+                rows[0].chips.iter().map(|c| c.target).collect::<Vec<_>>(),
+                targets
+            );
+        };
+        check_a(&ws, &expected);
+        for (tree, node) in [(i.first, i.user_a), (i.second, i.user_b), (i.b, i.user_c)] {
+            assert_fragment_user(&ws, &catalog, tree, node, i.a);
+        }
+        for tree in [i.unused, i.first] {
+            let view = inspector_view(&ws, Selection::Tree(tree), &catalog).expect("tree");
+            assert!(fragment_rows(&view).iter().all(|r| r.chips.is_empty()));
+        }
+        let ordinary = inspector_view(&ws, Selection::TreeNode(i.first, i.ordinary), &catalog)
+            .expect("ordinary");
+        assert!(fragment_rows(&ordinary).is_empty());
+        assert!(ordinary.shared_note.is_none());
+        let shared =
+            inspector_view(&ws, Selection::TreeNode(i.first, i.shared), &catalog).expect("shared");
+        assert!(fragment_rows(&shared).is_empty());
+        let note = shared.shared_note.as_ref().expect("shared note");
+        assert_eq!(
+            note,
+            match language {
+                Language::En => "Shared step L00, used in 1 tree",
+                Language::Ja => "共通ステップ L00、1 件のツリーで使用",
+                Language::Pseudo => "⟦Shâréd stép L00, ûséd în 1 tréé␣⟧",
+            }
+        );
+        assert_eq!(
+            shared
+                .reverse_relations
+                .iter()
+                .find(|r| r.key == RelationKey::SHARED_STEP_USED_IN)
+                .expect("shared reverse")
+                .label,
+            catalog.tr("inspector-rev-shared-step-used-in")
+        );
+
+        let ops = Edit::UnuseFragment {
+            tree: i.first,
+            node: i.user_a,
+        }
+        .to_ops(ws.project(), "inspector-editor", 900)
+        .expect("unuse ops");
+        assert_eq!(ops.len(), 1, "Unuse is detach, never Unshare");
+        ws.apply(ops, Origin::Edit).expect("detach");
+        let detached: Vec<_> = expected
+            .iter()
+            .copied()
+            .filter(|s| *s != Selection::TreeNode(i.first, i.user_a))
+            .collect();
+        check_a(&ws, &detached);
+        let check_detached = |ws: &Workspace| {
+            let view = inspector_view(ws, Selection::TreeNode(i.first, i.user_a), &catalog)
+                .expect("detached");
+            assert!(fragment_rows(&view).is_empty());
+            assert!(view.shared_note.is_none());
+        };
+        check_detached(&ws);
+        ws.undo().expect("undo detach");
+        check_a(&ws, &expected);
+        assert_fragment_user(&ws, &catalog, i.first, i.user_a, i.a);
+        ws.redo().expect("redo detach");
+        check_a(&ws, &detached);
+        check_detached(&ws);
+        assert_eq!(
+            shared,
+            inspector_view(&ws, Selection::TreeNode(i.first, i.shared), &catalog)
+                .expect("unchanged shared")
+        );
+    }
+}
+
+fn named_node(ws: &Workspace, tree_id: TreeId, label: &str) -> NodeId {
+    let project = ws.project();
+    let tree = project
+        .attack_tree(project.attack_tree_idx(&tree_id).expect("tree index"))
+        .expect("tree");
+    tree.iter()
+        .find_map(|(_, id, node)| (node.label() == label).then_some(id))
+        .expect("named node")
+}
+
+fn root_node(ws: &Workspace, tree_id: TreeId) -> NodeId {
+    let project = ws.project();
+    let tree = project
+        .attack_tree(project.attack_tree_idx(&tree_id).expect("tree index"))
+        .expect("tree");
+    tree.id_of(tree.root()).expect("root ID")
+}
+
+fn assert_reference_ratings(
+    ws: &Workspace,
+    tree: TreeId,
+    node: NodeId,
+    before: (&str, Option<Tone>),
+    after: (&str, Option<Tone>),
+) {
+    let catalog = Catalog::load(Language::En);
+    let view = inspector_view(ws, Selection::TreeNode(tree, node), &catalog).expect("reference");
+    assert_eq!(view.kind, "Fragment reference");
+    let fields: Vec<_> = view
+        .fields
+        .iter()
+        .map(|field| (field.label.as_str(), field.value.as_str(), field.tone))
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            ("Before controls", before.0, before.1),
+            ("After controls", after.0, after.1),
+        ]
+    );
+}
+
+fn explained_causes(ws: &Workspace, selection: Selection) -> Vec<(String, Selection, String)> {
+    explain_selection(ws, selection, &Catalog::load(Language::En))
+        .expect("explanation")
+        .causes
+        .into_iter()
+        .map(|cause| (cause.role, cause.target, cause.label))
+        .collect()
+}
+
+fn set_control_status(ws: &mut Workspace, control: ControlId, status: ControlStatus) {
+    ws.apply(
+        vec![Op::SetControlStatus {
+            control,
+            status,
+            provenance: prov(),
+        }],
+        Origin::Edit,
+    )
+    .expect("control status");
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn fragment_reference_ratings_and_causes_use_the_actual_mode_and_target_trees() {
+    let (mut ws, i) = fragments::loaded();
+    let catalog = Catalog::load(Language::En);
+    let rated = named_node(&ws, i.a, "Rated fragment leaf");
+    let (a_root, b_root, second_root) = (
+        root_node(&ws, i.a),
+        root_node(&ws, i.b),
+        root_node(&ws, i.second),
+    );
+    let high = ws
+        .project()
+        .methodology()
+        .feasibility_level("high")
+        .expect("high");
+    let very_low = ws
+        .project()
+        .methodology()
+        .feasibility_level("very-low")
+        .expect("very low");
+    let nested_shared = SharedStepId::new_v7();
+    ws.apply(
+        vec![
+            Op::SetStepFeasibility {
+                target: StepTarget::Step(i.a, rated),
+                level: None,
+                provenance: prov(),
+            },
+            Op::AddSharedStep {
+                id: nested_shared,
+                name: "Nested shared leaf".into(),
+                provenance: prov(),
+            },
+            Op::SetStepFeasibility {
+                target: StepTarget::Shared(nested_shared),
+                level: Some(high),
+                provenance: prov(),
+            },
+            Op::UseSharedStep {
+                tree: i.a,
+                node: rated,
+                step: nested_shared,
+                provenance: prov(),
+            },
+            Op::SetStepMitigation {
+                tree: i.second,
+                node: i.user_b,
+                control: i.control,
+                feasibility: Some(very_low),
+                provenance: prov(),
+            },
+            Op::SetStepFeasibility {
+                target: StepTarget::Step(i.first, i.ordinary),
+                level: Some(very_low),
+                provenance: prov(),
+            },
+            Op::SetStepFeasibility {
+                target: StepTarget::Shared(i.shared_id),
+                level: Some(very_low),
+                provenance: prov(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("independent nested ratings");
+
+    let project = ws.project();
+    let first_idx = project.attack_tree_idx(&i.first).expect("first");
+    let user_idx = project
+        .attack_tree(first_idx)
+        .expect("first tree")
+        .idx_of(&i.user_a)
+        .expect("reference index");
+    assert_eq!(
+        project.effective_step_feasibility(first_idx, user_idx),
+        None,
+        "references intentionally have no own-rating value"
+    );
+    assert_eq!(project.residual_step_feasibility(first_idx, user_idx), None);
+    let a_idx = project.attack_tree_idx(&i.a).expect("fragment A");
+    let rated_idx = project
+        .attack_tree(a_idx)
+        .expect("fragment A tree")
+        .idx_of(&rated)
+        .expect("nested shared index");
+    let shared_idx = project
+        .step_shared(a_idx, rated_idx)
+        .expect("nested shared");
+    assert_eq!(
+        project.shared_step(shared_idx).expect("shared step").name(),
+        "Nested shared leaf"
+    );
+    assert_reference_ratings(
+        &ws,
+        i.first,
+        i.user_a,
+        ("High", Some(Tone::High)),
+        ("Low", Some(Tone::Low)),
+    );
+    let view = inspector_view(&ws, Selection::TreeNode(i.first, i.user_a), &catalog)
+        .expect("planned reference");
+    assert!(
+        view.shared_note
+            .expect("fragment note")
+            .contains("Fragment A")
+    );
+    assert_eq!(view.fields.len(), 2, "reference ratings stay read-only");
+
+    let direct = Selection::TreeNode(i.first, i.user_a);
+    let nested = Selection::TreeNode(i.a, rated);
+    assert_eq!(
+        explained_causes(&ws, Selection::Tree(i.first)),
+        [
+            (
+                "Fragment reference".to_owned(),
+                direct,
+                "First directly uses A".to_owned(),
+            ),
+            (
+                "Capped by".to_owned(),
+                Selection::Control(i.control),
+                "Loaded mitigation".to_owned(),
+            ),
+            (
+                "Deciding step".to_owned(),
+                Selection::TreeNode(i.a, a_root),
+                "Fragment A".to_owned(),
+            ),
+            (
+                "Deciding step".to_owned(),
+                nested,
+                "Rated fragment leaf".to_owned(),
+            ),
+        ]
+    );
+    assert_eq!(primary_cause(&ws, Selection::Tree(i.first)), Some(direct));
+    let selected_causes = explained_causes(&ws, direct);
+    assert_eq!(selected_causes[0].1, Selection::Control(i.control));
+    assert!(selected_causes.contains(&(
+        "Deciding step".to_owned(),
+        nested,
+        "Rated fragment leaf".to_owned(),
+    )));
+
+    let nested_targets = [
+        Selection::TreeNode(i.second, i.transitive),
+        Selection::TreeNode(i.b, b_root),
+        Selection::TreeNode(i.b, i.user_c),
+        Selection::TreeNode(i.a, a_root),
+        nested,
+    ];
+    let nested_labels = [
+        "Uses B",
+        "Fragment B",
+        "B directly uses A",
+        "Fragment A",
+        "Rated fragment leaf",
+    ];
+    let second_causes = explained_causes(&ws, Selection::Tree(i.second));
+    assert_eq!(
+        second_causes
+            .iter()
+            .map(|cause| cause.1)
+            .collect::<Vec<_>>(),
+        nested_targets
+    );
+    assert_eq!(
+        second_causes
+            .iter()
+            .map(|cause| cause.2.as_str())
+            .collect::<Vec<_>>(),
+        nested_labels
+    );
+    let gate_causes = explained_causes(&ws, Selection::TreeNode(i.second, second_root));
+    assert_eq!(gate_causes[0].0, "Deciding child");
+    assert_eq!(
+        gate_causes.iter().map(|cause| cause.1).collect::<Vec<_>>(),
+        nested_targets,
+        "a planned residual-only ceiling must select the residual path"
+    );
+
+    let asset = AssetId::new_v7();
+    let threat = ThreatId::new_v7();
+    let category = ws
+        .project()
+        .methodology()
+        .threat_categories()
+        .next()
+        .expect("threat category");
+    let properties = ws.project().methodology().all_properties();
+    ws.apply(
+        vec![
+            Op::AddAsset {
+                id: asset,
+                name: "Threat asset".into(),
+                properties,
+                provenance: prov(),
+            },
+            Op::AddThreatScenario {
+                id: threat,
+                name: "Nested threat".into(),
+                asset,
+                category,
+                catalog_refs: Vec::new(),
+                damages: Vec::new(),
+                provenance: prov(),
+            },
+            Op::SetThreatAttackTree {
+                threat,
+                tree: Some(i.second),
+                provenance: prov(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("threat fixture");
+    assert_eq!(
+        explained_causes(&ws, Selection::Threat(threat))
+            .iter()
+            .map(|cause| cause.1)
+            .collect::<Vec<_>>(),
+        nested_targets
+    );
+
+    set_control_status(&mut ws, i.control, ControlStatus::Implemented);
+    assert_reference_ratings(
+        &ws,
+        i.first,
+        i.user_a,
+        ("Low", Some(Tone::Low)),
+        ("Low", Some(Tone::Low)),
+    );
+    assert!(
+        explained_causes(&ws, Selection::Tree(i.first))
+            .iter()
+            .any(|cause| cause.1 == Selection::Control(i.control)),
+        "implemented ceilings decide both modes even when Before equals After"
+    );
+
+    set_control_status(&mut ws, i.control, ControlStatus::Off);
+    assert_reference_ratings(
+        &ws,
+        i.first,
+        i.user_a,
+        ("High", Some(Tone::High)),
+        ("High", Some(Tone::High)),
+    );
+    assert!(
+        !explained_causes(&ws, Selection::Tree(i.first))
+            .iter()
+            .any(|cause| cause.1 == Selection::Control(i.control)),
+        "an off control cannot remain a deciding cause"
+    );
+}
+
+#[test]
+fn unrated_and_excluded_fragments_never_invent_reference_numbers() {
+    let (mut unrated, i) = fragments::loaded();
+    let rated = named_node(&unrated, i.a, "Rated fragment leaf");
+    unrated
+        .apply(
+            vec![Op::SetStepFeasibility {
+                target: StepTarget::Step(i.a, rated),
+                level: None,
+                provenance: prov(),
+            }],
+            Origin::Edit,
+        )
+        .expect("unrate fragment");
+    set_control_status(&mut unrated, i.control, ControlStatus::Off);
+    assert_reference_ratings(
+        &unrated,
+        i.first,
+        i.user_a,
+        ("not rated", None),
+        ("not rated", None),
+    );
+
+    let (mut excluded, i) = fragments::loaded();
+    set_control_status(&mut excluded, i.control, ControlStatus::Off);
+    let condition = ConditionId::new_v7();
+    let local_condition = ConditionId::new_v7();
+    excluded
+        .apply(
+            vec![
+                Op::AddCondition {
+                    id: condition,
+                    name: "Fragment unavailable".into(),
+                    description: "".into(),
+                    present: false,
+                    provenance: prov(),
+                },
+                Op::NeedCondition {
+                    element: ElementRef::Tree(i.a),
+                    condition,
+                    provenance: prov(),
+                },
+                Op::AddCondition {
+                    id: local_condition,
+                    name: "Reference unavailable".into(),
+                    description: "".into(),
+                    present: false,
+                    provenance: prov(),
+                },
+                Op::NeedStepCondition {
+                    tree: i.first,
+                    node: i.user_a,
+                    condition: local_condition,
+                    provenance: prov(),
+                },
+            ],
+            Origin::Edit,
+        )
+        .expect("exclude fragment");
+    assert_reference_ratings(
+        &excluded,
+        i.first,
+        i.user_a,
+        ("not rated", None),
+        ("not rated", None),
+    );
+    let causes = explained_causes(&excluded, Selection::TreeNode(i.first, i.user_a));
+    assert!(causes.contains(&(
+        "Excluded by".to_owned(),
+        Selection::Condition(condition),
+        "Fragment unavailable".to_owned(),
+    )));
+    assert!(causes.contains(&(
+        "Excluded by".to_owned(),
+        Selection::Condition(local_condition),
+        "Reference unavailable".to_owned(),
+    )));
+    let catalog = Catalog::load(Language::En);
+    let fragment = inspector_view(&excluded, Selection::Tree(i.a), &catalog).expect("fragment");
+    assert!(fragment.excluded_reason.is_some());
+    assert_eq!(
+        fragment.exclusion_causes[0].target,
+        Selection::Condition(condition)
+    );
 }

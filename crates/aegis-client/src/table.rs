@@ -5,7 +5,7 @@
 
 pub use aegis_canvas::Tone;
 
-use aegis_model::{Applicability, ElementRef, Project, SystemSet, SystemUse};
+use aegis_model::{Applicability, ElementRef, Project, SystemSet, SystemUse, TreeRole};
 
 use crate::explorer::{Folder, Owner};
 use crate::i18n::Catalog;
@@ -63,6 +63,7 @@ pub fn table_key(table: TableId) -> &'static str {
         TableId::Claims => "claims",
         TableId::Problems => "problems",
         TableId::SharedSteps => "shared-steps",
+        TableId::Fragments => "fragments",
     }
 }
 
@@ -79,6 +80,7 @@ pub fn table_for_folder(folder: Folder) -> Option<TableId> {
         Folder::Claims => Some(TableId::Claims),
         Folder::Problems => Some(TableId::Problems),
         Folder::SharedSteps => Some(TableId::SharedSteps),
+        Folder::Fragments => Some(TableId::Fragments),
         _ => None,
     }
 }
@@ -94,6 +96,27 @@ pub fn table_source_json(project: &Project, table: TableId) -> String {
         TableId::Goals => ("shared/goals.json", "goals"),
         TableId::Claims => ("shared/claims.json", "claims"),
         TableId::SharedSteps => ("shared/steps.json", "shared-steps"),
+        TableId::Fragments => {
+            let entries: Vec<String> = project
+                .to_workspace_files()
+                .ok()
+                .into_iter()
+                .flatten()
+                .filter(|f| {
+                    f.path
+                        .rsplit_once("/trees/")
+                        .map(|(_, name)| name)
+                        .or_else(|| f.path.strip_prefix("trees/"))
+                        .is_some_and(|name| name.starts_with("tt") && name.ends_with(".json"))
+                })
+                .map(|f| String::from_utf8_lossy(&f.bytes).trim_end().to_owned())
+                .collect();
+            return if entries.is_empty() {
+                "[]\n".to_owned()
+            } else {
+                format!("[\n{}\n]\n", entries.join(",\n"))
+            };
+        }
         TableId::Problems => return "{}\n".to_owned(),
     };
     if let Ok(files) = project.to_workspace_files()
@@ -486,6 +509,43 @@ pub fn table_rows_for_owner(
                     "feasibility" => text(feasibility(step.feasibility())),
                     "via" | "used-in" => text(String::new()),
                     "attack-type" => text(attack_type(step.attack_type())),
+                    _ => None,
+                },
+            )
+        }
+        TableId::Fragments => {
+            if owner != Owner::Project {
+                return Vec::new();
+            }
+            let project = ws.project();
+            let m = project.methodology();
+            let fragments: Vec<_> = project
+                .attack_trees()
+                .filter(|(idx, _, _)| project.attack_tree_role(*idx) == Some(TreeRole::Fragment))
+                .collect();
+            let feasibility = |id, tree: &aegis_model::AttackTree| {
+                ws.cache()
+                    .evaluate_tree(project, id)
+                    .ok()
+                    .and_then(|eval| eval.get(tree.root()).copied())
+                    .and_then(|level| m.feasibility_levels().position(|(l, _, _)| l == level))
+                    .and_then(|i| vocab.feasibility.get(i))
+                    .cloned()
+                    .unwrap_or_else(unrated)
+            };
+            build(
+                table,
+                &fragments,
+                |(_, id, _)| Some(Selection::Tree(*id)),
+                |(idx, id, tree), key| match key {
+                    "id" => text(project.attack_tree_visual_id(*idx).unwrap_or_default()),
+                    "name" => text(
+                        tree.get(tree.root())
+                            .map(aegis_model::Node::label)
+                            .unwrap_or_default(),
+                    ),
+                    "feasibility" => text(feasibility(*id, tree)),
+                    "used-in" => text(String::new()),
                     _ => None,
                 },
             )

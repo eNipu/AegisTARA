@@ -225,7 +225,9 @@ impl ColumnKind {
     pub fn editable(self) -> bool {
         !matches!(
             self,
-            Self::Id | Self::Computed | Self::Links(RelationKey::SHARED_STEP_USED_IN)
+            Self::Id
+                | Self::Computed
+                | Self::Links(RelationKey::SHARED_STEP_USED_IN | RelationKey::FRAGMENT_USED_IN)
         )
     }
 }
@@ -365,11 +367,13 @@ pub enum TableId {
     Problems,
     /// Reusable attack-tree steps.
     SharedSteps,
+    /// Reusable attack-tree fragments.
+    Fragments,
 }
 
 impl TableId {
     /// Every table.
-    pub const ALL: [TableId; 9] = [
+    pub const ALL: [TableId; 10] = [
         TableId::Assets,
         TableId::Damage,
         TableId::Threats,
@@ -379,6 +383,7 @@ impl TableId {
         TableId::Claims,
         TableId::Problems,
         TableId::SharedSteps,
+        TableId::Fragments,
     ];
 
     /// The table's columns, in default order. Columns whose number depends
@@ -540,6 +545,20 @@ impl TableId {
                 ];
                 C
             }
+            TableId::Fragments => {
+                const C: &[ColumnSpec] = &[
+                    ID,
+                    col("name", ColumnKind::Name, msg("fragment"), 240),
+                    col("feasibility", Computed, msg("feasibility"), 120),
+                    col(
+                        "used-in",
+                        Links(RelationKey::FRAGMENT_USED_IN),
+                        msg("inspector-used-in"),
+                        180,
+                    ),
+                ];
+                C
+            }
         }
     }
 }
@@ -658,7 +677,7 @@ impl Page {
             Page::Controls => &[TableId::Controls],
             Page::Goals => &[TableId::Goals, TableId::Claims],
             Page::Problems => &[TableId::Problems],
-            Page::SharedBlocks => &[TableId::SharedSteps],
+            Page::SharedBlocks => &[TableId::SharedSteps, TableId::Fragments],
             Page::Overview
             | Page::Trees
             | Page::Versions
@@ -1126,6 +1145,14 @@ pub fn page_descriptions(ws: &Workspace, ui: &UiState) -> Vec<DescriptionView> {
                     project.shared_step_idx(&id).is_some(),
                     E::SharedStep(id),
                 );
+            }
+            if let Some(id) = ui.selected_tree
+                && project
+                    .attack_tree_idx(&id)
+                    .and_then(|i| project.attack_tree_role(i))
+                    == Some(aegis_model::TreeRole::Fragment)
+            {
+                push("fragment", true, E::Tree(id));
             }
         }
         Page::Controls => {

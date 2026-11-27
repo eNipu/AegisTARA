@@ -12,7 +12,8 @@ use super::wire::{
     ControlTargetsByItem, FORMAT_VERSION, ImpactsByKey, ItemView, KeyOrder, MethodologyView,
     NodesView, PropertyKeys, ProvenanceView, Required, RiskTreatmentWire, SnapshotWire,
     StepAttackTypeByNode, StepFactorsByNode, StepFactorsForNode, StepFeasibilityByNode,
-    StepMitigationsByNode, StepSharedByNode, StepViaByNode, TargetView, Text, VisualDisplay,
+    StepFragmentsByNode, StepMitigationsByNode, StepSharedByNode, StepViaByNode, TargetView, Text,
+    VisualDisplay,
 };
 use crate::applicability::{MAX_ASSUMPTION_EXCLUDES, StepRef};
 use crate::element::{AttrValue, ElementKind};
@@ -500,6 +501,8 @@ struct ThreatView<'a> {
 #[derive(Serialize)]
 struct TreeView<'a> {
     id: Text<TreeId>,
+    #[serde(skip_serializing_if = "crate::TreeRole::is_threat")]
+    role: crate::TreeRole,
     #[serde(skip_serializing_if = "Option::is_none")]
     visual_id: Option<Text<VisualDisplay>>,
     nodes: NodesView<'a>,
@@ -514,6 +517,8 @@ struct TreeView<'a> {
     step_attack_type: StepAttackTypeByNode<'a>,
     #[serde(skip_serializing_if = "StepSharedByNode::is_empty")]
     step_shared: StepSharedByNode<'a>,
+    #[serde(skip_serializing_if = "StepFragmentsByNode::is_empty")]
+    step_fragments: StepFragmentsByNode<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<ProvenanceView<'a>>,
 }
@@ -785,8 +790,12 @@ impl Serialize for Trees<'_> {
                 .enumerate()
                 .map(|(pos, (tree_idx, id, tree))| TreeView {
                     id: Text(id),
+                    // `attack_trees` yields live slots only, so the role is present.
+                    role: p.attack_tree_role(tree_idx).unwrap_or_default(),
                     visual_id: VisualDisplay::non_default(
-                        VisualPrefix::Tree,
+                        p.attack_tree_role(tree_idx)
+                            .unwrap_or_default()
+                            .visual_prefix(),
                         p.attack_tree_visual_num(tree_idx),
                         pos,
                     ),
@@ -818,6 +827,11 @@ impl Serialize for Trees<'_> {
                         tree,
                     },
                     step_shared: StepSharedByNode {
+                        project: p,
+                        tree_idx,
+                        tree,
+                    },
+                    step_fragments: StepFragmentsByNode {
                         project: p,
                         tree_idx,
                         tree,
@@ -1593,13 +1607,24 @@ impl Project {
                 .iter()
                 .map(|m| (m.tree.0, m.node.0))
                 .collect();
+        let mut pending_fragments: Vec<(crate::id::TreeId, crate::id::NodeId, crate::id::TreeId)> =
+            Vec::new();
         let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
         for (pos, tr) in snapshot.attack_trees.into_iter().enumerate() {
-            let vis = claim_visual(tr.visual_id, pos, &mut used, &mut next_vis)?;
+            if tr.visual_id.as_ref().is_some_and(|v| v.1 != tr.role) {
+                return Err(StoreError::InvalidId);
+            }
+            let vis = claim_visual_num(tr.visual_id.map(|v| v.0), pos, &mut used, &mut next_vis)?;
             let provenance = wire::unwrap_provenance(tr.provenance);
             let id = tr.id.0;
             // A snapshot may hold a bigger tree than one op can carry.
-            project.load_attack_tree(id, tr.nodes.0, tr.step_feasibility.0, provenance.clone())?;
+            project.load_attack_tree(
+                id,
+                tr.role,
+                tr.nodes.0,
+                tr.step_feasibility.0,
+                provenance.clone(),
+            )?;
             project.set_tree_loaded_visual(&id, vis, next_vis);
             for (node, factors) in tr.step_factors.0 {
                 for (factor, level) in factors {
@@ -1650,6 +1675,15 @@ impl Project {
                     provenance: crate::provenance::Provenance::default(),
                 })?;
             }
+            let mut fragment_nodes = std::collections::BTreeSet::new();
+            for entry in &tr.step_fragments.0 {
+                if !fragment_nodes.insert(entry.node.0) {
+                    return Err(StoreError::DuplicateEntry);
+                }
+            }
+            for entry in tr.step_fragments.0 {
+                pending_fragments.push((id, entry.node.0, entry.fragment.0));
+            }
             let own: Vec<_> = marks.iter().filter(|(t, _)| *t == id).copied().collect();
             for (tree, node) in own {
                 marks.remove(&(tree, node));
@@ -1660,6 +1694,19 @@ impl Project {
                     provenance: provenance.clone(),
                 })?;
             }
+        }
+        // Fragment references replay only after every tree and all source
+        // metadata exist, so forward IDs and file order cannot matter and
+        // the live role, rating, cycle, depth and cap guards all apply.
+        // Default provenance is safe because reference commits never change
+        // the provenance of any tree.
+        for (tree, node, fragment) in pending_fragments {
+            project.apply(Op::UseFragment {
+                tree,
+                node,
+                fragment,
+                provenance: crate::provenance::Provenance::default(),
+            })?;
         }
         let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
         for (pos, mut t) in snapshot.threat_scenarios.into_iter().enumerate() {
@@ -1818,8 +1865,17 @@ fn claim_visual<K>(
     used: &mut std::collections::BTreeSet<u32>,
     next: &mut u32,
 ) -> Result<u32, StoreError> {
+    claim_visual_num(wire.map(|v| v.0), pos, used, next)
+}
+
+fn claim_visual_num(
+    wire: Option<u32>,
+    pos: usize,
+    used: &mut std::collections::BTreeSet<u32>,
+    next: &mut u32,
+) -> Result<u32, StoreError> {
     let vis = match wire {
-        Some(v) => v.0,
+        Some(v) => v,
         None => u32::try_from(pos).map_err(|_| StoreError::InvalidId)?,
     };
     if !used.insert(vis) {

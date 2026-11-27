@@ -55,6 +55,7 @@ pub enum StepTarget {
 /// | `UnlinkTreeNode` | `LinkTreeNode` at the old place with the old tree provenance | O(k + p) |
 /// | `RenameTreeNode` | the same with the old label and provenance | O(1) |
 /// | `SetTreeNodeGate` | the same with the old gate and provenance | O(1) |
+/// | `SetTreeNodeKind` | the same with the old kind and provenance | O(1) |
 /// | `AddAsset` | `RemoveAsset` | O(log n) |
 /// | `RenameAsset` | `RenameAsset` with the old name and provenance | O(log n) |
 /// | `SetAssetProperties` | the same with the old set and provenance | O(log n + p) |
@@ -114,6 +115,8 @@ pub enum StepTarget {
 /// | `RemoveSharedStep` | `AddSharedStep` with the old name and provenance | O(log n) |
 /// | `UseSharedStep` | `UnuseSharedStep` with the same provenance | O(log n + log V) |
 /// | `UnuseSharedStep` | `UseSharedStep` with the same provenance | O(log n + log V) |
+/// | `UseFragment` | `UnuseFragment` with the same provenance | O(log n + log V) |
+/// | `UnuseFragment` | `UseFragment` with the same provenance | O(log n + log V) |
 /// | `NeedCondition` | `UnneedCondition` with the same provenance | O(log n) |
 /// | `UnneedCondition` | `NeedCondition` with the same provenance | O(log n) |
 /// | `NeedStepCondition` | `UnneedStepCondition` with the same provenance | O(log n) |
@@ -297,6 +300,17 @@ pub enum Op {
         /// Provenance of the change.
         provenance: Provenance,
     },
+    /// Changes a bare node between a step (`None`) and an empty gate (`Some`).
+    SetTreeNodeKind {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// A bare node of the tree.
+        id: NodeId,
+        /// `None` for a step, `Some(kind)` for an empty gate.
+        gate: Option<GateKind>,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
     /// Adds an asset. The property set must be non-empty.
     AddAsset {
         /// Unused asset ID.
@@ -450,6 +464,8 @@ pub enum Op {
     /// Adds an attack tree with optional initial step feasibility ratings.
     /// Steps not listed are unrated (`None`).
     AddAttackTree {
+        /// Immutable purpose of the tree and its visual ID prefix.
+        role: crate::TreeRole,
         /// Unused attack tree ID.
         id: TreeId,
         /// The attack tree DAG.
@@ -928,6 +944,26 @@ pub enum Op {
         /// Provenance of unlinking the shared step.
         provenance: Provenance,
     },
+    /// Links an unrated tree step to a fragment attack tree.
+    UseFragment {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// An existing step node in `tree`.
+        node: NodeId,
+        /// Existing fragment attack tree.
+        fragment: TreeId,
+        /// Provenance of linking the fragment.
+        provenance: Provenance,
+    },
+    /// Unlinks a tree step from its fragment attack tree.
+    UnuseFragment {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// A step node in `tree` that references a fragment.
+        node: NodeId,
+        /// Provenance of unlinking the fragment.
+        provenance: Provenance,
+    },
     /// Records that an element needs a condition, capped at
     /// `MAX_CONDITIONS_PER_ELEMENT` and stored sorted by public ID.
     NeedCondition {
@@ -1322,6 +1358,7 @@ impl Op {
             | Self::UnlinkTreeNode { provenance, .. }
             | Self::RenameTreeNode { provenance, .. }
             | Self::SetTreeNodeGate { provenance, .. }
+            | Self::SetTreeNodeKind { provenance, .. }
             | Self::AddAsset { provenance, .. }
             | Self::RenameAsset { provenance, .. }
             | Self::SetAssetProperties { provenance, .. }
@@ -1375,6 +1412,8 @@ impl Op {
             | Self::RenameSharedStep { provenance, .. }
             | Self::UseSharedStep { provenance, .. }
             | Self::UnuseSharedStep { provenance, .. }
+            | Self::UseFragment { provenance, .. }
+            | Self::UnuseFragment { provenance, .. }
             | Self::SetAssumptionHolds { provenance, .. }
             | Self::SetAssumptionExcludes { provenance, .. }
             | Self::NeedCondition { provenance, .. }
@@ -1462,6 +1501,7 @@ impl Op {
             | Self::UnlinkTreeNode { provenance, .. }
             | Self::RenameTreeNode { provenance, .. }
             | Self::SetTreeNodeGate { provenance, .. }
+            | Self::SetTreeNodeKind { provenance, .. }
             | Self::AddAsset { provenance, .. }
             | Self::RenameAsset { provenance, .. }
             | Self::SetAssetProperties { provenance, .. }
@@ -1515,6 +1555,8 @@ impl Op {
             | Self::RenameSharedStep { provenance, .. }
             | Self::UseSharedStep { provenance, .. }
             | Self::UnuseSharedStep { provenance, .. }
+            | Self::UseFragment { provenance, .. }
+            | Self::UnuseFragment { provenance, .. }
             | Self::SetAssumptionHolds { provenance, .. }
             | Self::SetAssumptionExcludes { provenance, .. }
             | Self::NeedCondition { provenance, .. }

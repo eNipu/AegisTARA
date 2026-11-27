@@ -71,6 +71,7 @@ fn build_fixture() -> (
     let step = NodeId::new_v7();
     let tree = AttackTree::new(step, Node::step("Flash via JTAG")).expect("tree");
     p.apply(Op::AddAttackTree {
+        role: Default::default(),
         id: tree_id,
         tree,
         step_feasibility: vec![(step, high)],

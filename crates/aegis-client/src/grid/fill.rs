@@ -122,7 +122,7 @@ pub fn fill_down(
     let Some(src_target) = rows[src_row].target else {
         return Err(GridError::NothingToFill);
     };
-    if !target_matches_table(table, src_target) || !target_exists(project, src_target) {
+    if !target_matches_table(project, table, src_target) || !target_exists(project, src_target) {
         return Err(GridError::NothingToFill);
     }
 
@@ -138,7 +138,7 @@ pub fn fill_down(
                 let input = CellInput::Text(src_name.clone());
                 for row in dst_rows {
                     let Some(dst) = row.target else { continue };
-                    if !target_matches_table(table, dst) || !target_exists(project, dst) {
+                    if !target_matches_table(project, table, dst) || !target_exists(project, dst) {
                         return Err(GridError::NotEditable);
                     }
                     if element_name(project, dst).as_deref() == Some(src_name.trim()) {
@@ -163,7 +163,7 @@ pub fn fill_down(
                 let desired = relations::related(project, rel_key, src_target);
                 for row in dst_rows {
                     let Some(dst) = row.target else { continue };
-                    if !target_matches_table(table, dst) || !target_exists(project, dst) {
+                    if !target_matches_table(project, table, dst) || !target_exists(project, dst) {
                         return Err(GridError::NotEditable);
                     }
                     if let Some(link_edits) = sync_link_edits(project, rel_key, dst, &desired) {

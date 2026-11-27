@@ -290,6 +290,7 @@ fn assumption_edits_name_action_and_target() {
                 provenance: Provenance::human("mira", 1),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree,
                 tree: at,
                 step_feasibility: vec![],

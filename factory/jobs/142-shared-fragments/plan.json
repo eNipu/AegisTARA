@@ -1,0 +1,309 @@
+{
+  "job": "142-shared-fragments",
+  "planning_notes": [
+    "Main checkout /Users/lamda/Documents/GitHub/AegisTARA on factory/142-shared-fragments; no job worktree.",
+    "142a is delivered at 7dd201c with supplied gate PASS (237/400 lines); its exact slice object, prompt, scope, commit and gate are preserved. First remaining slice is142b, only after fresh audits.",
+    "142a prompt's historical follow-up tags remain untouched: threat-role guard is now142b; public reference ops/protocol bump move to142c. This is a remaining-scope recut, not reopening142a.",
+    "Owner authorized canvas deferral to GPUI job187: no Slint features, canvas presentation/action/gesture/accessibility acceptance or new GPUI canvas here. GPUI generic Fragments TableTab and existing inspector remain included.",
+    "Owner requires documented fragment MakeShared selected-subtree extraction and value-preserving copy-on-Unshare, one exact undo step each. Root and shared-DAG selections included; no conversion of tree roles.",
+    "P1: Use/Unuse carry and validate supplied provenance, do not mutate source tree provenance, inverse carries supplied value. Default second-pass replay cannot overwrite non-default saved tree provenance. Other shape ops swap provenance normally.",
+    "P2: own/shared-only effective/residual_step_feasibility APIs stay O(leaf); reference inspector uses requested host tree cached Evaluation by mode. Cross-tree why and local ceilings do not depend on deciding_step resolving a rated reference.",
+    "Intermediate storage safety:142b prepares private slots/checks but exposes no populated-reference mutation or op. 142c introduces acceptance, complete strict snapshot/op log/workspace storage and regression together. Unsupported fragment evaluation is fail-closed until142d; no saved links are lost.",
+    "FORMAT_VERSION1 throughout; protocol/minimum2 in142c, semantics2 in142d, protocol/minimum3 in142h for root-aware node-kind op. BOTH compat.rs legacy_write_requests_succeed_on_v1_and_fail_after_bump and client engine_compatibility legacy fixture use explicit historical(version0.1.0,semantics1,protocol1,min1); headerless mapping remains historical(1,1) and current rejects separately. BOTH future-semantics fixtures use ENGINE_SEMANTICS_VERSION+1 with protocol/minimum1 and dynamic expected server values; recheck in142d/142h.",
+    "C1:142f mirrors shared-step registry with ONLY FRAGMENT_USED_IN (Tree->Step, read-only), no STEP_FRAGMENT. Explicit inspector-rev-fragment-used-in in EN/JA/pseudo labels the single step-side reverse row Fragment; existing shared_note carries target TT ID/root label. Inspector label/note wiring is allowed in142f and included in330->440 estimate, replacing dual-relation read/link/unlink work. Loaded inspector_view regressions assert exact row direction/count/labels/direct identities, note and Unuse/undo/redo;142g preserves them.",
+    "12 total slices including completed142a; 11 remaining. Estimates count added+removed production lines, comments and locale text, exclude tests/fixtures/benches/docs: b330->440,c420->560,d430->574,e420->560,f330->440,g270->360,h300->400,i450->600,j420->560,k360->480,l390->520. Root op and bounded copier are necessary seams, not omitted owner requirements. Stop for planner before exceeding a cap.",
+    "Read ranges refer to7dd201c baseline plus predecessor additions; named symbols are authoritative after shifts. New symbols explicitly introduced in the prompt owning them. Kahn read includes83-96; inspector reads include680-755.",
+    "Full persistence/equality tests are required at each accepted-reference/workflow boundary, including loaded non-default provenance, exact undo/redo and historical compatibility fixtures. Source tree descriptions are not node descriptions.",
+    "Fresh high-risk codebase-details and implementation-readiness audits follow this revision; no audit PASS or automatic build authorization claimed."
+  ],
+  "slices": [
+    {
+      "id": "142a",
+      "title": "Immutable tree roles with TT visual IDs and persistence",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/*",
+        "crates/aegis-model/src/store/*",
+        "crates/aegis-model/tests/*",
+        "crates/aegis-model/benches/*",
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/src/library.rs",
+        "crates/aegis-client/src/sample.rs",
+        "crates/aegis-client/tests/*",
+        "crates/aegis-server/tests/*",
+        "crates/aegis-workbench/tests/*"
+      ],
+      "max_lines": 400,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-model --test shared_fragments --test store --test workspace --test ops_properties"
+      ]
+    },
+    {
+      "id": "142b",
+      "title": "Prepare fragment slots and validated dependency graph without public writes",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/blocks.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/src/lib.rs",
+        "crates/aegis-model/tests/*"
+      ],
+      "max_lines": 440,
+      "estimate_lines": 330,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-model"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-model --test shared_fragments --test ops_properties"
+      ]
+    },
+    {
+      "id": "142c",
+      "title": "Accept fragment ops with complete snapshot log and workspace persistence",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/op.rs",
+        "crates/aegis-model/src/compat.rs",
+        "crates/aegis-model/src/store/op_log.rs",
+        "crates/aegis-model/src/store/wire.rs",
+        "crates/aegis-model/src/store/snapshot.rs",
+        "crates/aegis-model/tests/*",
+        "crates/aegis-client/src/undo_label.rs",
+        "crates/aegis-client/tests/*",
+        "crates/aegis-server/tests/*"
+      ],
+      "max_lines": 560,
+      "estimate_lines": 420,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-model --test shared_fragments --test ops_properties --test store --test workspace",
+        "cargo test --locked -p aegis-client --test undo_every_op --test engine_compatibility",
+        "cargo test --locked -p aegis-model --lib compat::tests"
+      ]
+    },
+    {
+      "id": "142d",
+      "title": "Evaluate fragment dependency closures and cross-tree explanations",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/compat.rs",
+        "crates/aegis-model/tests/*",
+        "crates/aegis-client/tests/engine_compatibility.rs",
+        "crates/aegis-server/tests/*"
+      ],
+      "max_lines": 574,
+      "estimate_lines": 430,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-model"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-model --test shared_fragments --test ops_properties --test store --test workspace",
+        "cargo test --locked -p aegis-client --test engine_compatibility",
+        "cargo test --locked -p aegis-model --lib compat::tests"
+      ]
+    },
+    {
+      "id": "142e",
+      "title": "Incrementally invalidate fragment users in dependency order",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/tests/*",
+        "crates/aegis-model/benches/*"
+      ],
+      "max_lines": 560,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-model"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-model --test shared_fragments --test ops_properties",
+        "cargo bench --locked -p aegis-model --bench eval -- fragment_single_edit_50"
+      ],
+      "estimate_lines": 420
+    },
+    {
+      "id": "142f",
+      "title": "Undo-safe fragment client edits removals and relations",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/src/tree_diff.rs",
+        "crates/aegis-client/src/relations.rs",
+        "crates/aegis-client/src/inspector.rs",
+        "crates/aegis-client/src/undo_label.rs",
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/*"
+      ],
+      "max_lines": 440,
+      "estimate_lines": 330,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-client --test shared_fragments --test undo_every_op --test remove_loaded --test relations --test inspector_view"
+      ]
+    },
+    {
+      "id": "142g",
+      "title": "Reference-aware inspector numbers and cross-tree deciding causes",
+      "tier": "standard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-client/src/inspector.rs",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/*"
+      ],
+      "max_lines": 360,
+      "estimate_lines": 270,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-client --test shared_fragments --test relations --test inspector_view"
+      ]
+    },
+    {
+      "id": "142h",
+      "title": "Reversible bare-node kind changes retaining root and tree identities",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/tree.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/op.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/src/compat.rs",
+        "crates/aegis-model/src/store/op_log.rs",
+        "crates/aegis-model/src/store/wire.rs",
+        "crates/aegis-model/tests/*",
+        "crates/aegis-client/src/undo_label.rs",
+        "crates/aegis-client/tests/*",
+        "crates/aegis-server/tests/*"
+      ],
+      "max_lines": 400,
+      "estimate_lines": 300,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-model --test shared_fragments --test ops_properties --test store --test workspace",
+        "cargo test --locked -p aegis-client --test undo_every_op --test engine_compatibility",
+        "cargo test --locked -p aegis-model --lib compat::tests"
+      ]
+    },
+    {
+      "id": "142i",
+      "title": "Bounded DAG copying and reference materialization helpers",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-client/src/fragments.rs",
+        "crates/aegis-client/src/lib.rs",
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/tests/*"
+      ],
+      "max_lines": 600,
+      "estimate_lines": 450,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-client --test shared_fragments"
+      ]
+    },
+    {
+      "id": "142j",
+      "title": "MakeShared selected-subtree extraction as one exact undo batch",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-client/src/fragments.rs",
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/src/tree_diff.rs",
+        "crates/aegis-client/src/undo_label.rs",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/*"
+      ],
+      "max_lines": 560,
+      "estimate_lines": 420,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-client --test shared_fragments --test undo_every_op --test remove_loaded"
+      ]
+    },
+    {
+      "id": "142k",
+      "title": "Value-preserving fragment Unshare as one exact undo batch",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-client/src/fragments.rs",
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/src/tree_diff.rs",
+        "crates/aegis-client/src/undo_label.rs",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/*"
+      ],
+      "max_lines": 480,
+      "estimate_lines": 360,
+      "new_deps": false,
+      "ci": [
+        "crates/aegis-client"
+      ],
+      "checks": [
+        "cargo test --locked -p aegis-client --test shared_fragments --test undo_every_op --test remove_loaded"
+      ]
+    },
+    {
+      "id": "142l",
+      "title": "Fragments table and project-level explorer with Used in",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-client/src/view.rs",
+        "crates/aegis-client/src/table.rs",
+        "crates/aegis-client/src/explorer.rs",
+        "crates/aegis-client/src/pages.rs",
+        "crates/aegis-client/src/session.rs",
+        "crates/aegis-client/src/grid/*",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/tests/*",
+        "crates/aegis-workbench/src/app/workbench.rs",
+        "crates/aegis-workbench/src/app/table_chrome.rs",
+        "crates/aegis-workbench/src/app/table_edit.rs",
+        "crates/aegis-workbench/tests/*"
+      ],
+      "max_lines": 520,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-client --test shared_fragments --test table_conventions --test table_features --test explorer --test grid_edit",
+        "cargo test --locked -p aegis-workbench --test table_view",
+        "cargo test --locked -p aegis-model --test shared_fragments --test ops_properties --test store --test workspace",
+        "cargo test --locked -p aegis-client --test shared_fragments --test undo_every_op --test remove_loaded --test relations --test engine_compatibility"
+      ],
+      "estimate_lines": 390
+    }
+  ]
+}

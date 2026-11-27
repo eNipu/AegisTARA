@@ -129,6 +129,7 @@ fn build_fixture() -> Fixture {
             provenance: prov(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree_id,
             tree,
             step_feasibility: vec![(step_deciding, high), (step_other, very_low)],
@@ -552,6 +553,7 @@ fn shared_step_note_renders_above_fields_for_five_distinct_trees(cx: &mut TestAp
             .expect("step");
         fx.project
             .apply(Op::AddAttackTree {
+                role: Default::default(),
                 id: tree_id,
                 tree,
                 step_feasibility: Vec::new(),

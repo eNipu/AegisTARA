@@ -115,6 +115,13 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    SetTreeNodeKind {
+        tree: Text<TreeId>,
+        id: Text<NodeId>,
+        gate: Option<GateKindWire>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     SetDescription {
         target: TargetView,
         text: &'a str,
@@ -233,6 +240,8 @@ enum OpView<'a> {
         id: Text<ThreatId>,
     },
     AddAttackTree {
+        #[serde(skip_serializing_if = "crate::TreeRole::is_threat")]
+        role: crate::TreeRole,
         id: Text<TreeId>,
         nodes: NodesView<'a>,
         step_feasibility: StepFeasibilityInOrder<'a>,
@@ -535,6 +544,19 @@ enum OpView<'a> {
         provenance: Option<ProvenanceView<'a>>,
     },
     UnuseSharedStep {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    UseFragment {
+        tree: Text<TreeId>,
+        node: Text<NodeId>,
+        fragment: Text<TreeId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
+    UnuseFragment {
         tree: Text<TreeId>,
         node: Text<NodeId>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -997,6 +1019,17 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             gate: GateKindWire::from(*gate),
             provenance: ProvenanceView::of(provenance),
         },
+        Op::SetTreeNodeKind {
+            tree,
+            id,
+            gate,
+            provenance,
+        } => OpView::SetTreeNodeKind {
+            tree: Text(*tree),
+            id: Text(*id),
+            gate: gate.map(GateKindWire::from),
+            provenance: ProvenanceView::of(provenance),
+        },
         Op::SetReviewMark {
             tree,
             node,
@@ -1178,11 +1211,13 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
         },
         Op::RemoveThreatScenario { id } => OpView::RemoveThreatScenario { id: Text(*id) },
         Op::AddAttackTree {
+            role,
             id,
             tree,
             step_feasibility,
             provenance,
         } => OpView::AddAttackTree {
+            role: *role,
             id: Text(*id),
             nodes: NodesView(tree),
             step_feasibility: StepFeasibilityInOrder {
@@ -1612,6 +1647,26 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             node,
             provenance,
         } => OpView::UnuseSharedStep {
+            tree: Text(*tree),
+            node: Text(*node),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::UseFragment {
+            tree,
+            node,
+            fragment,
+            provenance,
+        } => OpView::UseFragment {
+            tree: Text(*tree),
+            node: Text(*node),
+            fragment: Text(*fragment),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::UnuseFragment {
+            tree,
+            node,
+            provenance,
+        } => OpView::UnuseFragment {
             tree: Text(*tree),
             node: Text(*node),
             provenance: ProvenanceView::of(provenance),
@@ -2064,6 +2119,17 @@ fn op_from_wire(m: &Methodology, w: OpWire, line: u64) -> Result<Op, StoreError>
             gate: gate.into(),
             provenance: wire::unwrap_provenance(provenance),
         },
+        OpWire::SetTreeNodeKind {
+            tree,
+            id,
+            gate,
+            provenance,
+        } => Op::SetTreeNodeKind {
+            tree: tree.0,
+            id: id.0,
+            gate: gate.map(Into::into),
+            provenance: wire::unwrap_provenance(provenance),
+        },
         OpWire::SetReviewMark {
             tree,
             node,
@@ -2241,11 +2307,13 @@ fn op_from_wire(m: &Methodology, w: OpWire, line: u64) -> Result<Op, StoreError>
         },
         OpWire::RemoveThreatScenario { id } => Op::RemoveThreatScenario { id: id.0 },
         OpWire::AddAttackTree {
+            role,
             id,
             nodes,
             step_feasibility,
             provenance,
         } => Op::AddAttackTree {
+            role,
             id: id.0,
             tree: nodes.0,
             step_feasibility: step_feasibility.0,
@@ -2669,6 +2737,26 @@ fn op_from_wire(m: &Methodology, w: OpWire, line: u64) -> Result<Op, StoreError>
             node,
             provenance,
         } => Op::UnuseSharedStep {
+            tree: tree.0,
+            node: node.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UseFragment {
+            tree,
+            node,
+            fragment,
+            provenance,
+        } => Op::UseFragment {
+            tree: tree.0,
+            node: node.0,
+            fragment: fragment.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::UnuseFragment {
+            tree,
+            node,
+            provenance,
+        } => Op::UnuseFragment {
             tree: tree.0,
             node: node.0,
             provenance: wire::unwrap_provenance(provenance),

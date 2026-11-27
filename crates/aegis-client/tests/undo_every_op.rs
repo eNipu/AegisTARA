@@ -22,7 +22,7 @@ use aegis_model::{
     AssetId, AssumptionId, AttackTree, AttrValue, ClaimId, ComponentId, ConditionId, ControlId,
     DamageId, DataFlowId, ElementId, ElementKind, ElementRef, GateKind, GoalId, InterfaceId,
     LinkTarget, Methodology, Node, NodeId, Op, PartyId, PartyKind, Project, Provenance,
-    SharedStepId, StepRef, StepTarget, ThreatId, TreeId, TrustBoundaryId,
+    SharedStepId, StepRef, StepTarget, ThreatId, TreeId, TreeRole, TrustBoundaryId,
 };
 
 /// The variant names declared in `op.rs`: lines like `    AddAsset {`.
@@ -250,6 +250,7 @@ fn walk_item_definition_trees_and_descriptions(seen: &mut BTreeSet<String>) {
     // Attack tree nodes.
     let t = AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree");
     go(Op::AddAttackTree {
+        role: Default::default(),
         id: tree,
         tree: t,
         step_feasibility: vec![],
@@ -292,6 +293,18 @@ fn walk_item_definition_trees_and_descriptions(seen: &mut BTreeSet<String>) {
         tree,
         id: g2,
         gate: GateKind::Or,
+        provenance: who(),
+    });
+    go(Op::SetTreeNodeKind {
+        tree,
+        id: g2,
+        gate: None,
+        provenance: who(),
+    });
+    go(Op::SetTreeNodeKind {
+        tree,
+        id: g2,
+        gate: Some(GateKind::SeqAnd),
         provenance: who(),
     });
     go(Op::SetReviewMark {
@@ -636,6 +649,7 @@ fn walk_conditions(seen: &mut BTreeSet<String>) {
             provenance: who(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree"),
             step_feasibility: vec![],
@@ -728,6 +742,7 @@ fn walk_assumptions(seen: &mut BTreeSet<String>) {
             provenance: who(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: AttackTree::new(root, Node::gate(GateKind::Or, "Goal")).expect("tree"),
             step_feasibility: vec![],
@@ -837,6 +852,8 @@ fn walk_shared_steps(seen: &mut BTreeSet<String>) {
     let component = ComponentId::new_v7();
     let tree = TreeId::new_v7();
     let node = NodeId::new_v7();
+    let fragment = TreeId::new_v7();
+    let fragment_root = NodeId::new_v7();
     let target = StepTarget::Shared(id);
     let factor = m.feasibility_factors().next().expect("factor");
     let level = m.factor_levels(factor).next().expect("factor level");
@@ -849,6 +866,7 @@ fn walk_shared_steps(seen: &mut BTreeSet<String>) {
             provenance: who(),
         },
         Op::AddAttackTree {
+            role: Default::default(),
             id: tree,
             tree: AttackTree::new(node, Node::step("Inject frame")).expect("tree"),
             step_feasibility: Vec::new(),
@@ -917,6 +935,25 @@ fn walk_shared_steps(seen: &mut BTreeSet<String>) {
             node,
             provenance: who(),
         },
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: fragment,
+            tree: AttackTree::new(fragment_root, Node::step("Fragment")).expect("tree"),
+            step_feasibility: Vec::new(),
+            provenance: who(),
+        },
+        Op::UseFragment {
+            tree,
+            node,
+            fragment,
+            provenance: who(),
+        },
+        Op::UnuseFragment {
+            tree,
+            node,
+            provenance: who(),
+        },
+        Op::RemoveAttackTree { id: fragment },
         Op::RemoveSharedStep { id },
         Op::RemoveAttackTree { id: tree },
         Op::RemoveComponent { id: component },
@@ -1043,6 +1080,7 @@ fn removals_clear_condition_links_in_one_undo_step() {
                 provenance: who(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree,
                 tree: at,
                 step_feasibility: vec![],
@@ -1155,6 +1193,7 @@ fn assumption_edits_removals_and_tree_moves_undo_exactly() {
                 provenance: who(),
             },
             Op::AddAttackTree {
+                role: Default::default(),
                 id: tree,
                 tree: at,
                 step_feasibility: vec![],
