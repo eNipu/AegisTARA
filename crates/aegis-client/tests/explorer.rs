@@ -347,6 +347,7 @@ fn every_folder_has_the_hand_counted_number() {
             (F::Goals, Some(1)),
             (F::Claims, Some(1)),
             (F::SharedSteps, Some(3)),
+            (F::Fragments, Some(0)),
             (F::Systems, Some(2)),
         ],
     );
@@ -655,7 +656,7 @@ fn keyboard_walks_to_a_party_and_back() {
         .iter()
         .map(|r| r.key)
         .collect();
-    assert_eq!(keys.len(), 13);
+    assert_eq!(keys.len(), 14);
     assert_eq!(keys.last(), Some(&ExplorerKey::Unassigned));
     state.toggle(ExplorerKey::Root);
     assert_eq!(ix.rows(&state).len(), 1);

@@ -54,6 +54,7 @@ pub enum Folder {
     Goals,
     Claims,
     SharedSteps,
+    Fragments,
     Problems,
 }
 
@@ -165,7 +166,14 @@ fn collect(p: &Project, u: &SystemUse) -> Items {
         Claims: cybersecurity_claims, cybersecurity_claim_visual_id, Claim, claim;
         SharedSteps: shared_steps, shared_step_visual_id, SharedStep, shared_step;
     );
-    let trees = p.attack_trees().map(|(i, id, t)| Item {
+    let (trees, fragments): (Vec<_>, Vec<_>) = p
+        .attack_trees()
+        .partition(|(i, _, _)| p.attack_tree_role(*i) != Some(aegis_model::TreeRole::Fragment));
+    let tree_item = |(i, id, t): (
+        aegis_model::TreeIdx,
+        aegis_model::TreeId,
+        &aegis_model::AttackTree,
+    )| Item {
         sel: Selection::Tree(id),
         visual_id: p.attack_tree_visual_id(i).unwrap_or_default(),
         name: t
@@ -173,8 +181,12 @@ fn collect(p: &Project, u: &SystemUse) -> Items {
             .map(|n| n.label().to_owned())
             .unwrap_or_default(),
         set: u.tree(i),
-    });
-    out.insert(Folder::Trees, trees.collect());
+    };
+    out.insert(Folder::Trees, trees.into_iter().map(tree_item).collect());
+    out.insert(
+        Folder::Fragments,
+        fragments.into_iter().map(tree_item).collect(),
+    );
     let parties = p.parties().map(|(i, id, x)| Item {
         sel: Selection::Party(id),
         visual_id: p.party_visual_id(i).unwrap_or_default(),
@@ -203,7 +215,7 @@ fn none(_: SystemSet) -> bool {
 }
 
 /// The project-level folders and their parent folder (`None`: the root).
-const PROJECT_TREE: [(Folder, Option<Folder>); 10] = [
+const PROJECT_TREE: [(Folder, Option<Folder>); 11] = [
     (F::Overview, None),
     (F::ProjectDefinition, None),
     (F::Parties, Some(F::ProjectDefinition)),
@@ -213,6 +225,7 @@ const PROJECT_TREE: [(Folder, Option<Folder>); 10] = [
     (F::Goals, Some(F::SharedAnalysis)),
     (F::Claims, Some(F::SharedAnalysis)),
     (F::SharedSteps, Some(F::SharedAnalysis)),
+    (F::Fragments, Some(F::SharedAnalysis)),
     (F::Systems, None),
 ];
 
@@ -260,6 +273,7 @@ fn label(f: Folder, n: &ElementNamesDef, c: &Catalog) -> String {
         F::Goals => plural(&n.cybersecurity_goal),
         F::Claims => plural(&n.cybersecurity_claim),
         F::SharedSteps => c.tr("folder-shared-steps"),
+        F::Fragments => c.tr("folder-fragments"),
     }
 }
 
@@ -317,6 +331,7 @@ impl ExplorerIndex {
             F::Goals,
             F::Claims,
             F::SharedSteps,
+            F::Fragments,
             F::Parties,
         ];
         let unassigned = items.iter().filter(|(f, _)| !shared.contains(f));
@@ -434,6 +449,7 @@ impl ExplorerIndex {
             match found {
                 None => keys.push(K::Root),
                 Some((F::Parties, _)) => keys.push(K::Folder(Owner::Project, F::Parties)),
+                Some((F::Fragments, _)) => keys.push(K::Folder(Owner::Project, F::Fragments)),
                 Some((f, set)) => {
                     touched = usage.ids(set).map(Owner::System).collect();
                     let linked = match f {

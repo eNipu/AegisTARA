@@ -14,7 +14,7 @@ use aegis_client::view::{
     ColumnKind, ColumnLabel, Page, PageLayout, RiskView, TableId, threat_rows,
 };
 use aegis_client::workspace::{Origin, Workspace};
-use aegis_model::{ClaimId, GoalId, Methodology, SharedStepId};
+use aegis_model::{ClaimId, GoalId, Methodology, SharedStepId, TreeId, TreeRole};
 
 /// The sample project plus a goal and a claim, so every table has a row.
 fn workspace_of(m: Methodology) -> Workspace {
@@ -34,6 +34,10 @@ fn workspace_of(m: Methodology) -> Workspace {
         Edit::AddSharedStep {
             id: SharedStepId::new_v7(),
             name: "Replay a diagnostic request".into(),
+        },
+        Edit::NewFragment {
+            id: TreeId::new_v7(),
+            root: "Extract firmware key".into(),
         },
     ];
     for edit in &edits {
@@ -204,6 +208,23 @@ fn every_table_shows_what_its_page_shows_today() {
         })
         .collect();
     assert_eq!(shown(&ws, TableId::SharedSteps), filled(shared));
+
+    let fragments = ws
+        .project()
+        .attack_trees()
+        .filter(|(idx, _, _)| ws.project().attack_tree_role(*idx) == Some(TreeRole::Fragment))
+        .map(|(idx, _, tree)| {
+            vec![
+                ws.project().attack_tree_visual_id(idx).unwrap_or_default(),
+                tree.get(tree.root())
+                    .map(|n| n.label().to_owned())
+                    .unwrap_or_default(),
+                "not rated".to_owned(),
+                String::new(),
+            ]
+        })
+        .collect();
+    assert_eq!(shown(&ws, TableId::Fragments), filled(fragments));
 }
 
 /// Hidden columns have cells too, every column key is known to the cell
@@ -335,6 +356,7 @@ fn only_inputs_are_editable() {
         editable(TableId::SharedSteps),
         ["name", "feasibility", "via", "attack-type"]
     );
+    assert_eq!(editable(TableId::Fragments), ["name"]);
 }
 
 #[test]
@@ -355,7 +377,12 @@ fn every_table_belongs_to_one_page_and_layouts_agree() {
         seen.into_iter().collect::<HashSet<_>>(),
         HashSet::from(TableId::ALL)
     );
+    assert_eq!(TableId::ALL.len(), 10);
     assert_eq!(Page::Goals.tables(), [TableId::Goals, TableId::Claims]);
+    assert_eq!(
+        Page::SharedBlocks.tables(),
+        [TableId::SharedSteps, TableId::Fragments]
+    );
 }
 
 /// The Responsible column sits after the name on both tables and points at

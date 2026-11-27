@@ -304,7 +304,10 @@ fn configuration_page_metadata_and_selection() {
     assert_eq!(Page::SharedBlocks.group(), Some(PageGroup::Feasibility));
     assert_eq!(Page::SharedBlocks.key(), "shared-blocks");
     assert_eq!(Page::SharedBlocks.label(), "Shared building blocks");
-    assert_eq!(Page::SharedBlocks.tables(), [TableId::SharedSteps]);
+    assert_eq!(
+        Page::SharedBlocks.tables(),
+        [TableId::SharedSteps, TableId::Fragments]
+    );
     assert_eq!(
         Page::SharedBlocks.layout(),
         PageLayout::Table(TableId::SharedSteps.columns())

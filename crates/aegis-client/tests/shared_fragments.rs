@@ -6661,3 +6661,827 @@ fn make_shared_then_unshare_end_to_end_roundtrips_snapshot_oplog_and_workspace_f
         },
     );
 }
+
+struct FragmentsTableFixture {
+    ws: Workspace,
+    sys: aegis_model::ElementId,
+    threat_tree: TreeId,
+    threat_use_leaf: NodeId,
+    frag_outer: TreeId,
+    outer_use_leaf: NodeId,
+    frag_nested: TreeId,
+    frag_unused: TreeId,
+    shared_step: SharedStepId,
+}
+
+fn fragments_table_fixture() -> FragmentsTableFixture {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let mut ws = Workspace::empty(Arc::clone(&m));
+    let sys = aegis_model::ElementId::new_v7();
+    let comp = ComponentId::new_v7();
+    let asset = AssetId::new_v7();
+    let threat = ThreatId::new_v7();
+    let threat_tree = TreeId::new_v7();
+    let frag_outer = TreeId::new_v7();
+    let frag_nested = TreeId::new_v7();
+    let frag_unused = TreeId::new_v7();
+    let shared_step = SharedStepId::new_v7();
+
+    for edit in [
+        Edit::AddSystem {
+            id: sys,
+            name: "Telematics".into(),
+        },
+        Edit::AddComponent {
+            id: comp,
+            name: "TCU".into(),
+            parent: None,
+        },
+        Edit::MoveToSystem {
+            components: vec![comp],
+            system: Some(sys),
+        },
+        Edit::AddAssetBound {
+            id: asset,
+            name: "Cellular modem".into(),
+            properties: vec![0, 1, 2, 3],
+            component: comp,
+        },
+        Edit::AddThreat {
+            id: threat,
+            name: "Hijack modem".into(),
+            asset,
+            category: 0,
+        },
+        Edit::AddSharedStep {
+            id: shared_step,
+            name: "Replay UDS frame".into(),
+        },
+        Edit::NewTree {
+            id: threat_tree,
+            root: "Compromise telematics".into(),
+            threat: Some(threat),
+        },
+        Edit::NewFragment {
+            id: frag_outer,
+            root: "Bypass secure boot".into(),
+        },
+        Edit::NewFragment {
+            id: frag_nested,
+            root: "Extract signing key".into(),
+        },
+        Edit::NewFragment {
+            id: frag_unused,
+            root: "Unused staging fragment".into(),
+        },
+    ] {
+        apply(&mut ws, &edit);
+    }
+
+    let root_id = |ws: &Workspace, tid: TreeId| {
+        let t = ws
+            .project()
+            .attack_tree(ws.project().attack_tree_idx(&tid).expect("tree"))
+            .expect("tree");
+        t.id_of(t.root()).expect("root id")
+    };
+
+    let prov = Provenance::human("new-editor", 901);
+    let levels: Vec<FeasibilityLevel> = m.feasibility_levels().map(|(l, _, _)| l).collect();
+    let high = *levels.last().expect("high feasibility");
+    let low = levels[0];
+
+    let add_step = |ws: &mut Workspace, tree: TreeId, parent: NodeId, id: NodeId, label: &str| {
+        let t = ws
+            .project()
+            .attack_tree(ws.project().attack_tree_idx(&tree).expect("tree"))
+            .expect("tree");
+        let p_idx = t.idx_of(&parent).expect("parent");
+        let index = u32::try_from(t.len()).expect("u32");
+        let position = u32::try_from(t.children(p_idx).len()).expect("u32");
+        ws.apply(
+            vec![Op::AddTreeNode {
+                tree,
+                id,
+                parent,
+                node: Node::step(label),
+                index,
+                position,
+                provenance: prov.clone(),
+            }],
+            Origin::Edit,
+        )
+        .expect("add tree step");
+    };
+    let rate_step = |ws: &mut Workspace, tree: TreeId, node: NodeId, level: FeasibilityLevel| {
+        ws.apply(
+            vec![Op::SetStepFeasibility {
+                target: StepTarget::Step(tree, node),
+                level: Some(level),
+                provenance: prov.clone(),
+            }],
+            Origin::Edit,
+        )
+        .expect("rate tree step");
+    };
+
+    // Nested fragment (TT01): one rated leaf so its root feasibility is computed.
+    let nested_leaf = NodeId::new_v7();
+    let nested_root = root_id(&ws, frag_nested);
+    add_step(
+        &mut ws,
+        frag_nested,
+        nested_root,
+        nested_leaf,
+        "Glitch voltage rail",
+    );
+    rate_step(&mut ws, frag_nested, nested_leaf, high);
+
+    // Outer fragment (TT00): one rated leaf + one leaf referencing TT01 + tree description.
+    let outer_root = root_id(&ws, frag_outer);
+    let outer_leaf = NodeId::new_v7();
+    let outer_use_leaf = NodeId::new_v7();
+    add_step(
+        &mut ws,
+        frag_outer,
+        outer_root,
+        outer_leaf,
+        "Dump flash image",
+    );
+    rate_step(&mut ws, frag_outer, outer_leaf, low);
+    add_step(
+        &mut ws,
+        frag_outer,
+        outer_root,
+        outer_use_leaf,
+        "Key extraction step",
+    );
+    apply(
+        &mut ws,
+        &Edit::UseFragment {
+            tree: frag_outer,
+            node: outer_use_leaf,
+            fragment: frag_nested,
+        },
+    );
+    apply(
+        &mut ws,
+        &Edit::SetDescription {
+            target: ElementRef::Tree(frag_outer),
+            text: "Bootloader bypass details".into(),
+        },
+    );
+
+    // Threat tree (AT00): one leaf directly referencing TT00.
+    let threat_root = root_id(&ws, threat_tree);
+    let threat_use_leaf = NodeId::new_v7();
+    add_step(
+        &mut ws,
+        threat_tree,
+        threat_root,
+        threat_use_leaf,
+        "Use boot bypass",
+    );
+    apply(
+        &mut ws,
+        &Edit::UseFragment {
+            tree: threat_tree,
+            node: threat_use_leaf,
+            fragment: frag_outer,
+        },
+    );
+
+    FragmentsTableFixture {
+        ws,
+        sys,
+        threat_tree,
+        threat_use_leaf,
+        frag_outer,
+        outer_use_leaf,
+        frag_nested,
+        frag_unused,
+        shared_step,
+    }
+}
+
+#[test]
+fn fragments_table_rows_source_json_and_explorer() {
+    use aegis_client::explorer::{ExplorerIndex, ExplorerKey, ExplorerState, Folder, Owner};
+    use aegis_client::pages;
+    use aegis_client::table::{
+        table_for_folder, table_key, table_rows, table_rows_for_owner, table_source_json,
+    };
+    use aegis_client::view::{ColumnKind, Page, TableId};
+
+    let fx = fragments_table_fixture();
+    let project = fx.ws.project();
+    let vocab = pages::vocabulary(project.methodology());
+    let catalog = Catalog::load(Language::En);
+
+    // Conventions, keys, mutability.
+    assert_eq!(TableId::ALL.len(), 10);
+    assert_eq!(
+        Page::SharedBlocks.tables(),
+        [TableId::SharedSteps, TableId::Fragments]
+    );
+    assert_eq!(table_key(TableId::Fragments), "fragments");
+    assert_eq!(
+        table_for_folder(Folder::Fragments),
+        Some(TableId::Fragments)
+    );
+    let cols = TableId::Fragments.columns();
+    assert_eq!(
+        cols.iter()
+            .map(|c| (c.key, c.kind.editable()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("id", false),
+            ("name", true),
+            ("feasibility", false),
+            ("used-in", false),
+        ]
+    );
+    assert_eq!(
+        cols[3].kind,
+        ColumnKind::Links(RelationKey::FRAGMENT_USED_IN)
+    );
+
+    // Read-only source JSON: deterministic TT-only JSON array, no shared/fragments.json on disk.
+    let files = project.to_workspace_files().expect("workspace files");
+    assert!(!files.iter().any(|f| f.path == "shared/fragments.json"));
+    let src = table_source_json(project, TableId::Fragments);
+    let parsed: serde_json::Value = serde_json::from_str(&src).expect("valid json array");
+    let arr = parsed.as_array().expect("json array");
+    assert_eq!(arr.len(), 3);
+    assert!(!src.contains("Compromise telematics"));
+    assert!(src.contains("Bypass secure boot"));
+    assert!(src.contains("Extract signing key"));
+    assert!(src.contains("Unused staging fragment"));
+    let empty = Workspace::empty(Arc::new(Methodology::iso21434_r155().expect("builtin")));
+    assert_eq!(
+        table_source_json(empty.project(), TableId::Fragments),
+        "[]\n"
+    );
+
+    // Project rows: TT-only, computed feasibility (unrated on missing), exact direct Used in chips.
+    let rows = table_rows(&fx.ws, TableId::Fragments, &vocab, &catalog);
+    assert_eq!(rows.len(), 3);
+    let targets: Vec<Option<Selection>> = rows.iter().map(|r| r.target).collect();
+    assert_eq!(
+        targets,
+        vec![
+            Some(Selection::Tree(fx.frag_outer)),
+            Some(Selection::Tree(fx.frag_nested)),
+            Some(Selection::Tree(fx.frag_unused)),
+        ]
+    );
+    assert_eq!(rows[0].cells[0].text, "TT01");
+    assert_eq!(rows[0].cells[1].text, "Bypass secure boot");
+    assert_eq!(rows[0].cells[2].text, "High");
+    assert_eq!(
+        rows[0].cells[3]
+            .chips
+            .iter()
+            .map(|c| c.target)
+            .collect::<Vec<_>>(),
+        vec![Selection::TreeNode(fx.threat_tree, fx.threat_use_leaf)]
+    );
+
+    // Nested fragment (TT02) Used in chip points ONLY to direct user in TT01, not AT00.
+    assert_eq!(rows[1].cells[0].text, "TT02");
+    assert_eq!(rows[1].cells[1].text, "Extract signing key");
+    assert_eq!(rows[1].cells[2].text, "High");
+    assert_eq!(
+        rows[1].cells[3]
+            .chips
+            .iter()
+            .map(|c| c.target)
+            .collect::<Vec<_>>(),
+        vec![Selection::TreeNode(fx.frag_outer, fx.outer_use_leaf)]
+    );
+
+    // Unused fragment (TT03) has unrated feasibility (not an invented numeric default) and no chips.
+    assert_eq!(rows[2].cells[0].text, "TT03");
+    assert_eq!(rows[2].cells[1].text, "Unused staging fragment");
+    assert_eq!(rows[2].cells[2].text, catalog.tr("not-rated"));
+    assert!(rows[2].cells[3].chips.is_empty());
+
+    // System and Unassigned owners list NO fragment rows.
+    assert!(
+        table_rows_for_owner(
+            &fx.ws,
+            TableId::Fragments,
+            Owner::System(fx.sys),
+            &vocab,
+            &catalog
+        )
+        .is_empty()
+    );
+    assert!(
+        table_rows_for_owner(
+            &fx.ws,
+            TableId::Fragments,
+            Owner::Unassigned,
+            &vocab,
+            &catalog
+        )
+        .is_empty()
+    );
+
+    // Explorer: Project SharedAnalysis has Folder::Fragments (EN/JA); system & unassigned do not;
+    // Folder::Trees lists Threat-role trees only; unused fragment does not spawn Unassigned node.
+    let en_ix = ExplorerIndex::build(&fx.ws, &vocab.element_names, &catalog, "Proj");
+    let mut state = ExplorerState::default();
+    state
+        .expanded
+        .insert(ExplorerKey::Folder(Owner::Project, Folder::Fragments));
+    state.expanded.insert(ExplorerKey::System(fx.sys));
+    state
+        .expanded
+        .insert(ExplorerKey::Folder(Owner::System(fx.sys), Folder::Trees));
+    let all = en_ix.rows(&state);
+
+    let frag_folder = all
+        .iter()
+        .find(|r| r.key == ExplorerKey::Folder(Owner::Project, Folder::Fragments))
+        .expect("project Fragments folder");
+    assert_eq!(
+        frag_folder.parent,
+        Some(ExplorerKey::Folder(Owner::Project, Folder::SharedAnalysis))
+    );
+    assert_eq!(frag_folder.label, "Fragments");
+    assert_eq!(frag_folder.count, Some(3));
+    assert!(!all.iter().any(|r| matches!(
+        r.key,
+        ExplorerKey::Folder(Owner::System(_) | Owner::Unassigned, Folder::Fragments)
+            | ExplorerKey::Unassigned
+    )));
+
+    let tree_elems: Vec<Selection> = all
+        .iter()
+        .filter_map(|r| match r.key {
+            ExplorerKey::Element(Owner::System(s), Folder::Trees, sel) if s == fx.sys => Some(sel),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tree_elems, vec![Selection::Tree(fx.threat_tree)]);
+
+    let ja_cat = Catalog::load(Language::Ja);
+    let ja_ix = ExplorerIndex::build(&fx.ws, &vocab.element_names, &ja_cat, "Proj");
+    let ja_folder = ja_ix
+        .rows(&ExplorerState::default())
+        .into_iter()
+        .find(|r| r.key == ExplorerKey::Folder(Owner::Project, Folder::Fragments))
+        .expect("JA Fragments folder");
+    assert_eq!(ja_folder.label, "フラグメント");
+}
+
+#[test]
+fn fragments_grid_edit_paste_fill_and_guards() {
+    use aegis_client::explorer::Owner;
+    use aegis_client::grid::{
+        CellEditorKind, CellInput, GridError, GridSelection, add_row_edit, cell_editor,
+        delete_rows_edit, edit_cell, edit_cells, fill_down, paste_tsv,
+    };
+    use aegis_client::pages;
+    use aegis_client::table::table_rows;
+    use aegis_client::view::TableId;
+
+    let mut fx = fragments_table_fixture();
+    let vocab = pages::vocabulary(fx.ws.project().methodology());
+    let catalog = Catalog::load(Language::En);
+    let cols = TableId::Fragments.columns();
+    let visible: Vec<_> = cols.iter().collect();
+
+    // Create + undo.
+    let (add_edit, added_sel) = add_row_edit(
+        fx.ws.project(),
+        TableId::Fragments,
+        Owner::Project,
+        "New frag",
+    )
+    .expect("add_row_edit");
+    assert!(matches!(add_edit, Edit::NewFragment { .. }));
+    assert!(matches!(added_sel, Selection::Tree(_)));
+    exact(&mut fx.ws, &add_edit);
+    fx.ws.undo().expect("restore fixture");
+
+    // cell_editor: only `name` is editable on a real Fragment.
+    assert_eq!(
+        cell_editor(
+            fx.ws.project(),
+            TableId::Fragments,
+            Some(Selection::Tree(fx.frag_outer)),
+            &cols[0],
+            &vocab,
+            &catalog
+        ),
+        CellEditorKind::ReadOnly
+    );
+    assert_eq!(
+        cell_editor(
+            fx.ws.project(),
+            TableId::Fragments,
+            Some(Selection::Tree(fx.frag_outer)),
+            &cols[1],
+            &vocab,
+            &catalog
+        ),
+        CellEditorKind::Text {
+            current: "Bypass secure boot".into()
+        }
+    );
+    for col in [&cols[2], &cols[3]] {
+        assert_eq!(
+            cell_editor(
+                fx.ws.project(),
+                TableId::Fragments,
+                Some(Selection::Tree(fx.frag_outer)),
+                col,
+                &vocab,
+                &catalog
+            ),
+            CellEditorKind::ReadOnly
+        );
+        assert_eq!(
+            edit_cell(
+                fx.ws.project(),
+                TableId::Fragments,
+                Selection::Tree(fx.frag_outer),
+                col,
+                &CellInput::Text("High".into())
+            ),
+            Err(GridError::ReadOnlyColumn)
+        );
+    }
+
+    // Rename root + undo.
+    let rename = edit_cell(
+        fx.ws.project(),
+        TableId::Fragments,
+        Selection::Tree(fx.frag_outer),
+        &cols[1],
+        &CellInput::Text("Bypass verified boot".into()),
+    )
+    .expect("rename");
+    assert_eq!(
+        rename,
+        Edit::RenameFragment {
+            tree: fx.frag_outer,
+            name: "Bypass verified boot".into()
+        }
+    );
+    exact(&mut fx.ws, &rename);
+
+    // Delete unused fragment + undo.
+    let del = delete_rows_edit(&[Selection::Tree(fx.frag_unused)]).expect("delete");
+    assert_eq!(
+        del,
+        Edit::RemoveTree {
+            tree: fx.frag_unused
+        }
+    );
+    exact(&mut fx.ws, &del);
+    fx.ws.undo().expect("restore unused fragment");
+
+    // Guard: Threat tree Selection::Tree is rejected as a Fragments table target everywhere.
+    let threat_sel = Selection::Tree(fx.threat_tree);
+    assert_eq!(
+        cell_editor(
+            fx.ws.project(),
+            TableId::Fragments,
+            Some(threat_sel),
+            &cols[1],
+            &vocab,
+            &catalog
+        ),
+        CellEditorKind::ReadOnly
+    );
+    assert_eq!(
+        edit_cell(
+            fx.ws.project(),
+            TableId::Fragments,
+            threat_sel,
+            &cols[1],
+            &CellInput::Text("Hijacked".into())
+        ),
+        Err(GridError::NotEditable)
+    );
+    assert_eq!(
+        edit_cells(
+            fx.ws.project(),
+            TableId::Fragments,
+            &[threat_sel],
+            &cols[1],
+            &CellInput::Text("Hijacked".into())
+        ),
+        Err(GridError::NotEditable)
+    );
+    let mut rows = table_rows(&fx.ws, TableId::Fragments, &vocab, &catalog);
+    let mut poisoned = rows.clone();
+    poisoned[1].target = Some(threat_sel);
+    let range = |r0, c0, r1, c1| {
+        let mut s = GridSelection::single(r0, c0);
+        s.extend_to(r1, c1);
+        s
+    };
+    assert_eq!(
+        fill_down(
+            fx.ws.project(),
+            TableId::Fragments,
+            &poisoned,
+            &visible,
+            range(0, 1, 1, 1)
+        ),
+        Err(GridError::NotEditable)
+    );
+    assert_eq!(
+        paste_tsv(
+            fx.ws.project(),
+            TableId::Fragments,
+            Owner::Project,
+            &poisoned,
+            &visible,
+            1,
+            1,
+            "Renamed",
+            &vocab,
+            &catalog
+        ),
+        Err(GridError::NotEditable)
+    );
+
+    // fill_down: works on `name`, refuses `feasibility` and `used-in`.
+    let fill = fill_down(
+        fx.ws.project(),
+        TableId::Fragments,
+        &rows,
+        &visible,
+        range(0, 1, 1, 1),
+    )
+    .expect("fill_down name");
+    exact(&mut fx.ws, &fill);
+    fx.ws.undo().expect("restore names");
+    rows = table_rows(&fx.ws, TableId::Fragments, &vocab, &catalog);
+    for col_ix in [2, 3] {
+        assert_eq!(
+            fill_down(
+                fx.ws.project(),
+                TableId::Fragments,
+                &rows,
+                &visible,
+                range(0, col_ix, 1, col_ix)
+            ),
+            Err(GridError::NothingToFill)
+        );
+    }
+
+    // paste_tsv: appends fragments atomically, fails atomically on bad row, refuses read-only cols.
+    for col_ix in [2, 3] {
+        assert_eq!(
+            paste_tsv(
+                fx.ws.project(),
+                TableId::Fragments,
+                Owner::Project,
+                &rows,
+                &visible,
+                0,
+                col_ix,
+                "High",
+                &vocab,
+                &catalog
+            ),
+            Err(GridError::EmptyPaste)
+        );
+    }
+    assert_eq!(
+        paste_tsv(
+            fx.ws.project(),
+            TableId::Fragments,
+            Owner::Project,
+            &rows,
+            &visible,
+            rows.len(),
+            0,
+            "TT98\tValid frag\nTT99\t   ",
+            &vocab,
+            &catalog
+        ),
+        Err(GridError::EmptyName { row: 2 })
+    );
+    let pasted = paste_tsv(
+        fx.ws.project(),
+        TableId::Fragments,
+        Owner::Project,
+        &rows,
+        &visible,
+        rows.len(),
+        1,
+        "Pasted frag A\nPasted frag B",
+        &vocab,
+        &catalog,
+    )
+    .expect("paste append");
+    exact(&mut fx.ws, &pasted);
+}
+
+#[tokio::test]
+async fn fragments_page_counts_find_and_descriptions() {
+    use std::time::{Duration, Instant};
+
+    use aegis_client::commands::Command;
+    use aegis_client::connection::DevLogin;
+    use aegis_client::session::{Session, SessionConfig};
+    use aegis_client::state::{ConnectionView, Mode, ViewModel};
+    use aegis_client::view::{Page, UiState, page_descriptions};
+    use aegis_server::auth_layer::{AuthLayer, DevAuthn};
+    use aegis_server::config::ServerConfig;
+    use aegis_server::methodologies::Methodologies;
+    use aegis_server::{AegisService, MemoryStore, Registry, server};
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+    use tokio_stream::wrappers::TcpListenerStream;
+
+    let fx = fragments_table_fixture();
+
+    // page_descriptions: SharedBlocks shows selected shared step AND selected Fragment tree,
+    // without confusing selected_shared_step, and omits Threat-role trees.
+    let mut ui = UiState {
+        page: Page::SharedBlocks,
+        selected_shared_step: Some(fx.shared_step),
+        selected_tree: Some(fx.frag_outer),
+        ..UiState::default()
+    };
+    let descs = page_descriptions(&fx.ws, &ui);
+    assert_eq!(
+        descs.iter().map(|d| (d.kind, d.target)).collect::<Vec<_>>(),
+        vec![
+            ("shared-step", ElementRef::SharedStep(fx.shared_step)),
+            ("fragment", ElementRef::Tree(fx.frag_outer)),
+        ]
+    );
+    ui.selected_tree = Some(fx.threat_tree);
+    let descs_threat = page_descriptions(&fx.ws, &ui);
+    assert_eq!(
+        descs_threat
+            .iter()
+            .map(|d| (d.kind, d.target))
+            .collect::<Vec<_>>(),
+        vec![("shared-step", ElementRef::SharedStep(fx.shared_step))]
+    );
+
+    // Headless Session nav_counts + Find on Page::SharedBlocks.
+    let registry = Arc::new(Registry::new(
+        Arc::new(MemoryStore::new()),
+        Arc::new(Methodologies::builtin().expect("builtin")),
+        Arc::new(ServerConfig {
+            lease: Duration::from_secs(30),
+            ..ServerConfig::default()
+        }),
+    ));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let url = format!("http://{}", listener.local_addr().expect("addr"));
+    let (stop_tx, stop_rx) = oneshot::channel::<()>();
+    let service = AegisService::new(Arc::clone(&registry)).into_server();
+    let layer = AuthLayer::new(Arc::new(DevAuthn), &url);
+    let done = tokio::spawn(async move {
+        server::builder()
+            .layer(layer)
+            .add_service(service)
+            .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+                let _ = stop_rx.await;
+                registry.shutdown().await;
+            })
+            .await
+            .expect("serve");
+    });
+
+    let mut cfg = SessionConfig::new("alice");
+    cfg.retry_delay = Duration::from_millis(50);
+    let (alice, _task) = Session::start(&url, Arc::new(DevLogin::new("alice", false)), cfg);
+
+    async fn wait_until(session: &Session, pred: impl Fn(&ViewModel) -> bool) -> Arc<ViewModel> {
+        let mut rx = session.subscribe();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            {
+                let view = rx.borrow_and_update().clone();
+                if pred(&view) {
+                    return view;
+                }
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(!left.is_zero(), "timed out waiting for view");
+            let _ = tokio::time::timeout(left, rx.changed()).await;
+        }
+    }
+
+    wait_until(&alice, |vm| {
+        matches!(vm.connection, ConnectionView::Online { .. })
+    })
+    .await;
+    alice
+        .send(Command::CreateProject {
+            name: "Fragments".into(),
+            methodology_key: "iso21434-r155".into(),
+        })
+        .expect("create");
+    wait_until(&alice, |vm| vm.project.is_some()).await;
+    alice.send(Command::BeginEdit).expect("begin edit");
+    wait_until(&alice, |vm| {
+        vm.project.as_ref().is_some_and(|p| p.mode == Mode::Editing)
+    })
+    .await;
+
+    let asset = AssetId::new_v7();
+    let threat = ThreatId::new_v7();
+    let threat_tree = TreeId::new_v7();
+    let frag0 = TreeId::new_v7();
+    let frag1 = TreeId::new_v7();
+    let shared_step = SharedStepId::new_v7();
+    for edit in [
+        Edit::AddAsset {
+            id: asset,
+            name: "Modem".into(),
+            properties: vec![0, 1, 2, 3],
+        },
+        Edit::AddThreat {
+            id: threat,
+            name: "Hijack modem".into(),
+            asset,
+            category: 0,
+        },
+        Edit::NewTree {
+            id: threat_tree,
+            root: "Compromise telematics".into(),
+            threat: Some(threat),
+        },
+        Edit::AddSharedStep {
+            id: shared_step,
+            name: "Replay UDS frame".into(),
+        },
+        Edit::NewFragment {
+            id: frag0,
+            root: "Bypass secure boot".into(),
+        },
+        Edit::NewFragment {
+            id: frag1,
+            root: "Extract signing key".into(),
+        },
+        Edit::SetDescription {
+            target: ElementRef::Tree(frag0),
+            text: "Bootloader bypass details".into(),
+        },
+    ] {
+        alice.send(Command::Edit(edit)).expect("edit");
+    }
+
+    alice
+        .send(Command::ShowPage(Page::SharedBlocks))
+        .expect("show shared blocks");
+    let vm = wait_until(&alice, |vm| {
+        vm.project.as_ref().is_some_and(|p| {
+            p.page == Page::SharedBlocks && p.nav_counts[Page::SharedBlocks.index()] == Some(3)
+        })
+    })
+    .await;
+    assert_eq!(
+        vm.project.as_ref().expect("project").nav_counts[Page::SharedBlocks.index()],
+        Some(3)
+    );
+
+    for (query, expected) in [
+        ("TT01", (1, 3)),
+        ("Extract signing key", (1, 3)),
+        ("Bootloader bypass details", (1, 3)),
+        ("Replay UDS frame", (1, 3)),
+        ("Compromise telematics", (0, 3)),
+        ("AT00", (0, 3)),
+    ] {
+        alice
+            .send(Command::SetFind {
+                text: query.into(),
+                regex: false,
+            })
+            .expect("set find");
+        let vm = wait_until(&alice, |vm| {
+            vm.project
+                .as_ref()
+                .and_then(|p| p.find.as_ref())
+                .is_some_and(|f| f.text == query && (f.shown, f.total) == expected)
+        })
+        .await;
+        let find = vm
+            .project
+            .as_ref()
+            .expect("project")
+            .find
+            .as_ref()
+            .expect("find");
+        assert_eq!((find.shown, find.total), expected, "query={query:?}");
+    }
+
+    let _ = alice.send(Command::Shutdown);
+    let _ = stop_tx.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(5), done).await;
+}

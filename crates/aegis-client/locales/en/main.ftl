@@ -258,6 +258,7 @@ explorer-parties = Responsible parties
 explorer-shared-analysis = Shared analysis
 page-shared-blocks = Shared building blocks
 folder-shared-steps = Shared steps
+folder-fragments = Fragments
 explorer-systems = Systems
 explorer-not-in-system = Not in a system
 explorer-item-definition = Item definition

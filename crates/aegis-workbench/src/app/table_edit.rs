@@ -32,6 +32,7 @@ fn folder_for(table: TableId) -> Folder {
         TableId::Claims => Folder::Claims,
         TableId::Problems => Folder::Problems,
         TableId::SharedSteps => Folder::SharedSteps,
+        TableId::Fragments => Folder::Fragments,
     }
 }
 
@@ -274,7 +275,8 @@ impl TableTab {
             return Err(GridError::NotEditable);
         }
         let n = project.methodology().element_names();
-        let singular = match self.table {
+        let fragment_noun = self.catalog.tr("fragment");
+        let singular: &str = match self.table {
             TableId::Assets => &n.asset.singular,
             TableId::Damage => &n.damage_scenario.singular,
             TableId::Threats | TableId::Risks => &n.threat_scenario.singular,
@@ -282,6 +284,7 @@ impl TableTab {
             TableId::Goals => &n.cybersecurity_goal.singular,
             TableId::Claims => &n.cybersecurity_claim.singular,
             TableId::SharedSteps => "shared step",
+            TableId::Fragments => &fragment_noun,
             TableId::Problems => return Err(GridError::NotEditable),
         };
         grid::add_row_edit(project, self.table, self.owner, format!("New {singular}"))

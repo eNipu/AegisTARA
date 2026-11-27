@@ -249,6 +249,7 @@ explorer-parties = 責任当事者
 explorer-shared-analysis = 共有分析
 page-shared-blocks = 共通構成要素
 folder-shared-steps = 共通ステップ
+folder-fragments = フラグメント
 explorer-systems = システム
 explorer-not-in-system = システム未割り当て
 explorer-item-definition = アイテム定義

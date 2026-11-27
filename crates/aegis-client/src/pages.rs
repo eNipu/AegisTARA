@@ -3315,7 +3315,14 @@ pub(crate) fn page_count(p: &Project, page: Page, baselines: usize, lint: usize)
         Page::Assets => p.asset_count(),
         Page::Threats | Page::Risks => p.threat_scenario_count(),
         Page::Trees => p.attack_tree_count(),
-        Page::SharedBlocks => p.shared_step_count(),
+        Page::SharedBlocks => {
+            p.shared_step_count()
+                + p.attack_trees()
+                    .filter(|(idx, _, _)| {
+                        p.attack_tree_role(*idx) == Some(aegis_model::TreeRole::Fragment)
+                    })
+                    .count()
+        }
         Page::AttackerProfile => 0,
         Page::Controls => p.security_control_count(),
         Page::Goals => p.cybersecurity_goal_count() + p.cybersecurity_claim_count(),

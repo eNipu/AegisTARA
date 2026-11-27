@@ -250,6 +250,7 @@ explorer-parties = ⟦Réspônsîblé pârtîés␣⟧
 explorer-shared-analysis = ⟦Shâréd ânâlýsîs␣⟧
 page-shared-blocks = ⟦Shâréd bûîldîng blôcks␣⟧
 folder-shared-steps = ⟦Shâréd stéps␣⟧
+folder-fragments = ⟦Frâgménts␣⟧
 explorer-systems = ⟦Sýstéms␣⟧
 explorer-not-in-system = ⟦Nôt în â sýstém␣⟧
 explorer-item-definition = ⟦Itém défînîtîôn␣⟧
