@@ -103,6 +103,7 @@ pub struct Workbench {
     palette: Option<Palette>,
     appearance: Appearance,
     pub(super) picked: Option<(ExplorerKey, String)>,
+    pub(super) last_tree_selection: Option<Selection>,
     pub(super) note: Option<String>,
     /// The open project folder; `None` for the in-memory sample.
     pub(super) folder: Option<WorkspaceFolder>,
@@ -294,6 +295,7 @@ impl Workbench {
             palette: None,
             appearance,
             picked: None,
+            last_tree_selection: None,
             note: None,
             folder: None,
             saved_seq,
@@ -466,11 +468,51 @@ impl Workbench {
         skip: Option<gpui::EntityId>,
         cx: &mut Context<Self>,
     ) {
+        if let Some(s @ (Selection::Tree(_) | Selection::TreeNode(_, _))) = sel {
+            self.last_tree_selection = Some(s);
+        }
         if Some(self.inspector.entity_id()) != skip {
             self.inspector.update(cx, |i, cx| {
                 i.set_selection(sel, &self.workspace, skip, cx);
             });
         }
+    }
+
+    /// The most recently selected live attack tree or tree node, if it still exists.
+    #[must_use]
+    pub fn last_tree_selection(&self) -> Option<Selection> {
+        let project = self.workspace.project();
+        match self.last_tree_selection {
+            Some(Selection::Tree(t)) => project.attack_tree_idx(&t).map(|_| Selection::Tree(t)),
+            Some(Selection::TreeNode(t, n)) => project
+                .attack_tree_idx(&t)
+                .and_then(|i| project.attack_tree(i))
+                .and_then(|tree| tree.idx_of(&n))
+                .map(|_| Selection::TreeNode(t, n)),
+            _ => None,
+        }
+    }
+
+    /// Creates a bypass fragment tree for `control` from [`Self::last_tree_selection`],
+    /// skipping any child entity whose id matches `skip`.
+    pub fn create_bypass_from_selection_skipping(
+        &mut self,
+        control: aegis_model::ControlId,
+        skip: Option<gpui::EntityId>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.refuse_read_only(cx) {
+            return false;
+        }
+        let Some(source) = self.last_tree_selection() else {
+            return false;
+        };
+        let edit = aegis_client::commands::Edit::CreateBypassFromSelection {
+            control,
+            source,
+            id: aegis_model::TreeId::new_v7(),
+        };
+        self.apply_edit_skipping(&edit, skip, cx)
     }
 
     /// Updates the inspector selection.
