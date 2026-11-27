@@ -1,0 +1,13 @@
+VERDICT: PASS
+## For the owner
+What changed: Steps can now link to fragment trees with UseFragment/UnuseFragment. The inverses are exact and the source tree's provenance is never changed.
+Links persist in snapshots, workspaces and the op log (`step_fragments`, sorted by NodeId, omitted when empty, at most 256 entries) and are replayed after all trees load, with the same guards as live ops.
+Protocol and minimum protocol are now 2; headerless legacy writes are refused. Steps that reference a fragment evaluate as unrated until 142d.
+Look at: crates/aegis-model/src/store/snapshot.rs:1677-1711 (links are collected per tree with a duplicate check, then replayed as UseFragment with default provenance after every tree exists, so forward targets work and nothing is dropped); crates/aegis-model/src/project.rs:4185 and :15408 (evaluation fails closed by returning None for linked steps, and Use/Unuse rebuild the whole cache); crates/aegis-model/src/compat.rs:29-33 (setting the minimum protocol to 2 refuses every headerless or v1 client).
+Risk: Any deployed client that sends no compatibility headers, or sends protocol 1, can no longer write. This is intended by the prompt. The real client sends EngineContract::current() headers (crates/aegis-client/src/connection.rs:145), and both compat suites check historical v1 success, current headerless rejection, protocol-2-only rejection and a computed future-semantics rejection. A saved file could fail to reload if a linked step could later be rated, because the loader applies ratings before links. That cannot happen: every rating setter uses unshared_step_slot, which refuses fragment-linked steps. Removing a leaf node, a source tree or a referenced fragment is also refused while a link exists, so no inverse ever has to restore a link. Checked by reading the guards and by the tests in crates/aegis-model/tests/shared_fragments.rs. The random op generator (ops 89/90) now produces both new ops, and ops_properties asserts that each one succeeds at least once.
+View: git -C /Users/lamda/Documents/GitHub/AegisTARA diff 40fe73d97a91132f07a951cd2f6753b74cf40d8a..4ea7108
+## Findings
+- none (non-blocking notes: crates/aegis-model/src/store/wire.rs:346 reuses Limit::AttackTreeNodes for the 256-link cap, so the error says "attack tree nodes" when the fragment-link limit is exceeded. A dedicated Limit variant would give clearer text when store/mod.rs is in scope. crates/aegis-model/src/project.rs:12998 reports UnknownAttackTree(tree) for a missing fragment, which should name the fragment, but no path can reach it.)
+## Lesson
+none
+NEXT: human

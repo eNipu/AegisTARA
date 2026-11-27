@@ -3098,13 +3098,13 @@
       "id": "142-shared-fragments",
       "title": "Shared fragments (BLK-02, BLK-03)",
       "branch": "factory/142-shared-fragments",
-      "stage": "review",
-      "slice": "142a",
-      "base": "a5877d6dd907e4c67c77a3bcc9834b6410c3d429",
+      "stage": "build",
+      "slice": "142h",
+      "base": "3ad1ee7b0355aae51f8f08b06a8aa48f2e306b51",
       "reviews": {
-        "slice": "142a",
-        "gate": "PASS",
-        "review": "PASS",
+        "slice": "142h",
+        "gate": "pending",
+        "review": "pending",
         "owner": "auto"
       },
       "history": [
@@ -3117,10 +3117,70 @@
           "gate_tries": 1,
           "review_tries": 1,
           "lines": 237
+        },
+        {
+          "slice": "142b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "inherit",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 320
+        },
+        {
+          "slice": "142c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "inherit",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 301
+        },
+        {
+          "slice": "142d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "inherit",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 287
+        },
+        {
+          "slice": "142e",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "inherit",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 280
+        },
+        {
+          "slice": "142f",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "inherit",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 192
+        },
+        {
+          "slice": "142g",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "inherit",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 294
         }
       ],
-      "decision": "Owner approved: defer canvas UI to GPUI 187; include selected-subtree MakeShared and value-preserving Unshare. Planner correcting audited blockers before build resumes.",
-      "updated": "2026-11-25T23:35:42Z"
+      "decision": "142b-142g passed gates and reviews. 142h worker stopped: model_usage_exhausted; no 142h code changes. Resume at 142h.",
+      "updated": "2026-11-27T11:02:16Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
