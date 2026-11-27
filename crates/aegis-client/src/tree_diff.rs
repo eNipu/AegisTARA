@@ -171,12 +171,21 @@ pub(crate) fn clear_step_ops(
         return Vec::new();
     };
     let shared = project.step_shared_id(t_idx, idx);
+    let fragment = project.step_fragment_id(t_idx, idx);
+    let own = shared.is_none() && fragment.is_none();
     let mut ops = Vec::new();
     if project.review_marked(tree, node) {
         ops.push(Op::SetReviewMark {
             tree,
             node,
             marked: false,
+            provenance: p.clone(),
+        });
+    }
+    if fragment.is_some() {
+        ops.push(Op::UnuseFragment {
+            tree,
+            node,
             provenance: p.clone(),
         });
     }
@@ -187,14 +196,14 @@ pub(crate) fn clear_step_ops(
             provenance: p.clone(),
         });
     }
-    if shared.is_none() && project.step_feasibility(t_idx, idx).is_some() {
+    if own && project.step_feasibility(t_idx, idx).is_some() {
         ops.push(Op::SetStepFeasibility {
             target: StepTarget::Step(tree, node),
             level: None,
             provenance: p.clone(),
         });
     }
-    for factor in m.feasibility_factors().filter(|_| shared.is_none()) {
+    for factor in m.feasibility_factors().filter(|_| own) {
         if project.step_factor(t_idx, idx, factor).is_some() {
             ops.push(Op::SetStepFactor {
                 target: StepTarget::Step(tree, node),
@@ -215,14 +224,14 @@ pub(crate) fn clear_step_ops(
             });
         }
     }
-    if shared.is_none() && project.step_via(t_idx, idx).is_some() {
+    if own && project.step_via(t_idx, idx).is_some() {
         ops.push(Op::SetStepVia {
             target: StepTarget::Step(tree, node),
             via: None,
             provenance: p.clone(),
         });
     }
-    if shared.is_none() && project.step_attack_type(t_idx, idx).is_some() {
+    if own && project.step_attack_type(t_idx, idx).is_some() {
         ops.push(Op::SetStepAttackType {
             target: StepTarget::Step(tree, node),
             attack_type: None,
@@ -257,7 +266,17 @@ pub(crate) fn transfer_step_ops(
         return Vec::new();
     };
     let shared = project.step_shared_id(t_idx, idx);
+    let fragment = project.step_fragment_id(t_idx, idx);
+    let own = shared.is_none() && fragment.is_none();
     let mut ops = Vec::new();
+    if let Some(fragment) = fragment {
+        ops.push(Op::UseFragment {
+            tree,
+            node: to_node,
+            fragment,
+            provenance: p.clone(),
+        });
+    }
     if let Some(shared) = shared {
         ops.push(Op::UseSharedStep {
             tree,
@@ -266,16 +285,14 @@ pub(crate) fn transfer_step_ops(
             provenance: p.clone(),
         });
     }
-    if shared.is_none()
-        && let Some(level) = project.step_feasibility(t_idx, idx)
-    {
+    if own && let Some(level) = project.step_feasibility(t_idx, idx) {
         ops.push(Op::SetStepFeasibility {
             target: StepTarget::Step(tree, to_node),
             level: Some(level),
             provenance: p.clone(),
         });
     }
-    for factor in m.feasibility_factors().filter(|_| shared.is_none()) {
+    for factor in m.feasibility_factors().filter(|_| own) {
         if let Some(level) = project.step_factor(t_idx, idx, factor) {
             ops.push(Op::SetStepFactor {
                 target: StepTarget::Step(tree, to_node),
@@ -296,23 +313,31 @@ pub(crate) fn transfer_step_ops(
             });
         }
     }
-    if shared.is_none()
-        && let Some(via) = project.step_via(t_idx, idx)
-    {
+    if own && let Some(via) = project.step_via(t_idx, idx) {
         ops.push(Op::SetStepVia {
             target: StepTarget::Step(tree, to_node),
             via: Some(via),
             provenance: p.clone(),
         });
     }
-    if shared.is_none()
-        && let Some(attack_type) = project.step_attack_type(t_idx, idx)
-    {
+    if own && let Some(attack_type) = project.step_attack_type(t_idx, idx) {
         ops.push(Op::SetStepAttackType {
             target: StepTarget::Step(tree, to_node),
             attack_type: Some(attack_type),
             provenance: p.clone(),
         });
+    }
+    // Removal cleanup handles source conditions separately; restore them at
+    // the destination just like mitigations, even when the leaf is a reference.
+    for condition in project.step_condition_link_ids(tree, from_node) {
+        if let Some(condition) = project.condition_id(*condition) {
+            ops.push(Op::NeedStepCondition {
+                tree,
+                node: to_node,
+                condition,
+                provenance: p.clone(),
+            });
+        }
     }
     if project.review_marked(tree, from_node) {
         ops.push(Op::SetReviewMark {

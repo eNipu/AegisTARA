@@ -2,7 +2,7 @@
 //! link that exists in the model. `Links` columns, the inspector, traceability
 //! views and reports all read the same table. Data level only.
 
-use aegis_model::{ItemRef, NodeIdx, Project, ThreatScenario, TreeIdx};
+use aegis_model::{ItemRef, NodeIdx, Project, ThreatScenario, TreeIdx, TreeRole};
 
 use crate::commands::Edit;
 use crate::view::Selection;
@@ -43,6 +43,7 @@ impl RelationKey {
     pub const CONTROL_TARGETS: Self = Self("control-targets");
     pub const STEP_VIA: Self = Self("step-via");
     pub const SHARED_STEP_VIA: Self = Self("shared-step-via");
+    pub const FRAGMENT_USED_IN: Self = Self("fragment-used-in");
     pub const SHARED_STEP_USED_IN: Self = Self("shared-step-used-in");
     pub const STEP_MITIGATIONS: Self = Self("step-mitigations");
     pub const DATAFLOW_FROM: Self = Self("dataflow-from");
@@ -169,6 +170,7 @@ pub static RELATIONS: &[Relation] = &[
     rel(RelationKey::STEP_VIA, ElementKind::Step, ITEM, "relation-step-via", false, read_step_via, Some(link_step_via), Some(unlink_step_via)),
     rel(RelationKey::SHARED_STEP_VIA, ElementKind::SharedStep, ITEM, "relation-step-via", false, read_shared_step_via, Some(link_shared_step_via), Some(unlink_shared_step_via)),
     rel(RelationKey::SHARED_STEP_USED_IN, ElementKind::SharedStep, &[ElementKind::Step], "inspector-used-in", true, read_shared_step_used_in, None, None),
+    rel(RelationKey::FRAGMENT_USED_IN, ElementKind::Tree, &[ElementKind::Step], "inspector-used-in", true, read_fragment_used_in, None, None),
     rel(RelationKey::STEP_MITIGATIONS, ElementKind::Step, &[ElementKind::Control], "relation-step-mitigations", true, read_step_mitigations, None, None),
     rel(RelationKey::DATAFLOW_FROM, ElementKind::DataFlow, &[ElementKind::Component], "relation-dataflow-from", false, read_dataflow_from, None, None),
     rel(RelationKey::DATAFLOW_TO, ElementKind::DataFlow, &[ElementKind::Component], "relation-dataflow-to", false, read_dataflow_to, None, None),
@@ -249,6 +251,13 @@ pub fn reverse_related(project: &Project, key: RelationKey, to: Selection) -> Ve
 /// for an unknown key. O(elements).
 #[must_use]
 pub fn candidates(project: &Project, key: RelationKey) -> Vec<Selection> {
+    if key == RelationKey::THREAT_TREE {
+        return project
+            .attack_trees()
+            .filter(|(idx, _, _)| project.attack_tree_role(*idx) == Some(TreeRole::Threat))
+            .map(|(_, id, _)| Selection::Tree(id))
+            .collect();
+    }
     match relation(key) {
         Some(row) => row
             .to
@@ -397,6 +406,23 @@ fn read_shared_step_via(project: &Project, from: Selection) -> Vec<Selection> {
         .and_then(|idx| project.shared_step_via(idx))
         .and_then(item_selection)
         .into_iter()
+        .collect()
+}
+
+fn read_fragment_used_in(project: &Project, from: Selection) -> Vec<Selection> {
+    let Selection::Tree(id) = from else {
+        return Vec::new();
+    };
+    let Some(idx) = project.attack_tree_idx(&id) else {
+        return Vec::new();
+    };
+    if project.attack_tree_role(idx) != Some(TreeRole::Fragment) {
+        return Vec::new();
+    }
+    project
+        .fragment_users(idx)
+        .into_iter()
+        .map(|s| Selection::TreeNode(s.tree, s.node))
         .collect()
 }
 

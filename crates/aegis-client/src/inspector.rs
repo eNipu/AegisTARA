@@ -113,6 +113,7 @@ pub fn reverse_relation_label(key: RelationKey, catalog: &Catalog) -> String {
         RelationKey::CLAIM_RESPONSIBLE => "inspector-rev-claim-responsible",
         RelationKey::CONTROL_TARGETS => "inspector-rev-control-targets",
         RelationKey::STEP_VIA | RelationKey::SHARED_STEP_VIA => "inspector-rev-step-via",
+        RelationKey::FRAGMENT_USED_IN => "inspector-rev-fragment-used-in",
         RelationKey::SHARED_STEP_USED_IN => "inspector-rev-shared-step-used-in",
         RelationKey::STEP_MITIGATIONS => "inspector-rev-step-mitigations",
         RelationKey::DATAFLOW_FROM => "inspector-rev-dataflow-from",
@@ -908,7 +909,19 @@ pub fn inspector_view(ws: &Workspace, sel: Selection, catalog: &Catalog) -> Opti
             StepTarget::Shared(id) => project
                 .shared_step_idx(&id)
                 .and_then(|shared| format_shared_step_line(project, shared, catalog)),
-            _ => None,
+            _ => (|| {
+                let t = project.attack_tree_idx(&tree)?;
+                let n = project.attack_tree(t)?.idx_of(&node)?;
+                let fragment = project.step_fragment_id(t, n)?;
+                let f = project.attack_tree_idx(&fragment)?;
+                let target = project.attack_tree(f)?;
+                Some(format!(
+                    "{} {}: {}",
+                    catalog.tr("fragment"),
+                    selection_visual_id(project, Selection::Tree(fragment)),
+                    target.get(target.root())?.label(),
+                ))
+            })(),
         },
         _ => None,
     };

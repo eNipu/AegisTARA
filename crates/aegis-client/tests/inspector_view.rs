@@ -1,6 +1,9 @@
 //! Inspector core types, Fluent keys, explain-why causes, and `primary_cause`
 //! resolution (WBX-06, WBX-11).
 
+#[path = "common/fragments.rs"]
+mod fragments;
+
 use std::sync::Arc;
 
 use aegis_client::commands::Edit;
@@ -26,6 +29,8 @@ const NEW_KEYS: &[&str] = &[
     "inspector-explain-why",
     "inspector-used-by",
     "inspector-used-in",
+    "fragment",
+    "inspector-rev-fragment-used-in",
     "inspector-shared-step-line-one",
     "inspector-shared-step-line",
     "inspector-rev-shared-step-used-in",
@@ -79,6 +84,31 @@ fn all_inspector_fluent_keys_and_reverse_labels_resolve() {
                 rel.key
             );
         }
+        for key in ["fragment", "inspector-rev-fragment-used-in"] {
+            let value = catalog.tr(key);
+            assert_ne!(value, key, "{language:?} fallback key");
+            assert_ne!(value, format!("[{key}]"), "{language:?} missing key");
+            if language == Language::Pseudo {
+                assert!(value.starts_with('⟦'), "pseudo must be visibly localized");
+            } else {
+                assert_eq!(
+                    value,
+                    if language == Language::En {
+                        "Fragment"
+                    } else {
+                        "フラグメント"
+                    }
+                );
+            }
+        }
+        assert_eq!(
+            reverse_relation_label(RelationKey::FRAGMENT_USED_IN, &catalog),
+            catalog.tr("inspector-rev-fragment-used-in"),
+        );
+        assert_ne!(
+            reverse_relation_label(RelationKey::FRAGMENT_USED_IN, &catalog),
+            catalog.tr("inspector-rev-conditions"),
+        );
         let cond_label = reverse_relation_label(RelationKey::STEP_CONDITIONS, &catalog);
         assert_eq!(cond_label, catalog.tr("inspector-rev-conditions"));
         assert_eq!(
@@ -1108,4 +1138,157 @@ fn shared_step_selection_has_visual_id_ratings_and_forward_relations() {
         .expect("used-in row");
     assert_eq!(used.chips[0].target, Selection::TreeNode(tree_id, step));
     assert!(inspector_view(&ws, Selection::SharedStep(SharedStepId::new_v7()), &catalog).is_none());
+}
+
+fn fragment_rows(
+    view: &aegis_client::inspector::InspectorView,
+) -> Vec<&aegis_client::inspector::InspectorRelationRow> {
+    view.relations
+        .iter()
+        .chain(&view.reverse_relations)
+        .filter(|r| r.key == RelationKey::FRAGMENT_USED_IN)
+        .collect()
+}
+
+fn assert_fragment_user(ws: &Workspace, catalog: &Catalog, tree: TreeId, node: NodeId, a: TreeId) {
+    let view = inspector_view(ws, Selection::TreeNode(tree, node), catalog).expect("user view");
+    let rows = fragment_rows(&view);
+    assert_eq!(
+        rows.len(),
+        1,
+        "exactly one fragment row across both directions"
+    );
+    assert!(
+        !view
+            .relations
+            .iter()
+            .any(|r| r.key == RelationKey::FRAGMENT_USED_IN)
+    );
+    assert_eq!(rows[0].label, catalog.tr("inspector-rev-fragment-used-in"));
+    assert!(!rows[0].editable);
+    assert_eq!(
+        rows[0].chips.iter().map(|c| c.target).collect::<Vec<_>>(),
+        vec![Selection::Tree(a)]
+    );
+    let a_view = inspector_view(ws, Selection::Tree(a), catalog).expect("fragment");
+    let note = view.shared_note.expect("fragment note");
+    assert!(note.contains(&catalog.tr("fragment")));
+    assert!(note.contains(&a_view.visual_id));
+    assert!(note.contains("Fragment A"));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn loaded_fragments_have_one_read_only_relation_and_localized_notes() {
+    assert_eq!(
+        RELATIONS
+            .iter()
+            .filter(|r| r.key.as_str() == "fragment-used-in")
+            .count(),
+        1
+    );
+    assert!(!RELATIONS.iter().any(|r| r.key.as_str() == "step-fragment"));
+    let registry = RELATIONS
+        .iter()
+        .find(|r| r.key == RelationKey::FRAGMENT_USED_IN)
+        .expect("row");
+    assert_eq!(registry.from, aegis_client::relations::ElementKind::Tree);
+    assert_eq!(registry.to, &[aegis_client::relations::ElementKind::Step]);
+    assert!(registry.many);
+    assert!(registry.link.is_none());
+    assert!(registry.unlink.is_none());
+
+    for language in [Language::En, Language::Ja, Language::Pseudo] {
+        let catalog = Catalog::load(language);
+        let (mut ws, i) = fragments::loaded();
+        let mut expected = [(i.first, i.user_a), (i.second, i.user_b), (i.b, i.user_c)];
+        expected.sort();
+        let expected: Vec<_> = expected
+            .into_iter()
+            .map(|(t, n)| Selection::TreeNode(t, n))
+            .collect();
+        let check_a = |ws: &Workspace, targets: &[Selection]| {
+            let view = inspector_view(ws, Selection::Tree(i.a), &catalog).expect("A");
+            let rows = fragment_rows(&view);
+            assert_eq!(rows.len(), 1);
+            assert!(
+                !view
+                    .reverse_relations
+                    .iter()
+                    .any(|r| r.key == RelationKey::FRAGMENT_USED_IN)
+            );
+            assert_eq!(rows[0].label, catalog.tr("inspector-used-in"));
+            assert!(!rows[0].editable);
+            assert_eq!(
+                rows[0].chips.iter().map(|c| c.target).collect::<Vec<_>>(),
+                targets
+            );
+        };
+        check_a(&ws, &expected);
+        for (tree, node) in [(i.first, i.user_a), (i.second, i.user_b), (i.b, i.user_c)] {
+            assert_fragment_user(&ws, &catalog, tree, node, i.a);
+        }
+        for tree in [i.unused, i.first] {
+            let view = inspector_view(&ws, Selection::Tree(tree), &catalog).expect("tree");
+            assert!(fragment_rows(&view).iter().all(|r| r.chips.is_empty()));
+        }
+        let ordinary = inspector_view(&ws, Selection::TreeNode(i.first, i.ordinary), &catalog)
+            .expect("ordinary");
+        assert!(fragment_rows(&ordinary).is_empty());
+        assert!(ordinary.shared_note.is_none());
+        let shared =
+            inspector_view(&ws, Selection::TreeNode(i.first, i.shared), &catalog).expect("shared");
+        assert!(fragment_rows(&shared).is_empty());
+        let note = shared.shared_note.as_ref().expect("shared note");
+        assert_eq!(
+            note,
+            match language {
+                Language::En => "Shared step L00, used in 1 tree",
+                Language::Ja => "共通ステップ L00、1 件のツリーで使用",
+                Language::Pseudo => "⟦Shâréd stép L00, ûséd în 1 tréé␣⟧",
+            }
+        );
+        assert_eq!(
+            shared
+                .reverse_relations
+                .iter()
+                .find(|r| r.key == RelationKey::SHARED_STEP_USED_IN)
+                .expect("shared reverse")
+                .label,
+            catalog.tr("inspector-rev-shared-step-used-in")
+        );
+
+        let ops = Edit::UnuseFragment {
+            tree: i.first,
+            node: i.user_a,
+        }
+        .to_ops(ws.project(), "inspector-editor", 900)
+        .expect("unuse ops");
+        assert_eq!(ops.len(), 1, "Unuse is detach, never Unshare");
+        ws.apply(ops, Origin::Edit).expect("detach");
+        let detached: Vec<_> = expected
+            .iter()
+            .copied()
+            .filter(|s| *s != Selection::TreeNode(i.first, i.user_a))
+            .collect();
+        check_a(&ws, &detached);
+        let check_detached = |ws: &Workspace| {
+            let view = inspector_view(ws, Selection::TreeNode(i.first, i.user_a), &catalog)
+                .expect("detached");
+            assert!(fragment_rows(&view).is_empty());
+            assert!(view.shared_note.is_none());
+        };
+        check_detached(&ws);
+        ws.undo().expect("undo detach");
+        check_a(&ws, &expected);
+        assert_fragment_user(&ws, &catalog, i.first, i.user_a, i.a);
+        ws.redo().expect("redo detach");
+        check_a(&ws, &detached);
+        check_detached(&ws);
+        assert_eq!(
+            shared,
+            inspector_view(&ws, Selection::TreeNode(i.first, i.shared), &catalog)
+                .expect("unchanged shared")
+        );
+    }
 }

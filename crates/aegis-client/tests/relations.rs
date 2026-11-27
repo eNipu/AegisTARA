@@ -17,7 +17,7 @@ use aegis_model::{
     AssetId, AssumptionId, AttackTree, ClaimId, ComponentId, ConditionId, ControlId, DamageId,
     DataFlowId, GateKind, GoalId, InterfaceId, ItemRef, Methodology, Node, NodeId, Op, PartyId,
     PartyIdx, PartyKind, Project, Provenance, SharedStepId, StepRef, StepTarget, ThreatId, TreeId,
-    TrustBoundaryId,
+    TreeRole, TrustBoundaryId,
 };
 
 /// `Selection` has no `Ord`, and the orphan rule forbids adding one here. This
@@ -93,6 +93,8 @@ fn project() -> Project {
     let (tree_id, root, step) = (TreeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
     let (shared_step, shared_user_a, shared_user_b) =
         (SharedStepId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    let fragment = TreeId::new_v7();
+    let fragment_users = [NodeId::new_v7(), NodeId::new_v7()];
     let (control1, control2, goal, goal2, claim) = (
         ControlId::new_v7(),
         ControlId::new_v7(),
@@ -109,6 +111,11 @@ fn project() -> Project {
         .expect("shared a");
     tree.add_child(tree.root(), shared_user_b, Node::step("shared b"))
         .expect("shared b");
+
+    for user in fragment_users {
+        tree.add_child(tree.root(), user, Node::step("fragment user"))
+            .expect("user");
+    }
 
     let ops = vec![
         Op::AddComponent {
@@ -323,6 +330,22 @@ fn project() -> Project {
     // the step, so every condition row is `many` with one owning source.
     let conditions = [ConditionId::new_v7(), ConditionId::new_v7()];
     let mut ops = ops;
+    ops.push(Op::AddAttackTree {
+        role: TreeRole::Fragment,
+        id: fragment,
+        tree: AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "Fragment"))
+            .expect("fragment"),
+        step_feasibility: Vec::new(),
+        provenance: provenance.clone(),
+    });
+    for node in fragment_users {
+        ops.push(Op::UseFragment {
+            tree: tree_id,
+            node,
+            fragment,
+            provenance: provenance.clone(),
+        });
+    }
     for (i, id) in conditions.iter().enumerate() {
         ops.push(Op::AddCondition {
             id: *id,
@@ -479,6 +502,12 @@ fn model_links(project: &Project) -> BTreeSet<(Sel, Sel)> {
     }
     for (t_idx, tree_id, tree) in project.attack_trees() {
         for (n_idx, node_id, _) in tree.iter() {
+            if let Some(fragment) = project.step_fragment_id(t_idx, n_idx) {
+                out.insert((
+                    Sel(Selection::Tree(fragment)),
+                    Sel(Selection::TreeNode(tree_id, node_id)),
+                ));
+            }
             if let Some(shared) = project
                 .step_shared_id(t_idx, n_idx)
                 .map(Selection::SharedStep)
@@ -732,6 +761,7 @@ fn keys_and_labels_are_valid() {
         (RelationKey::STEP_VIA, "step-via"),
         (RelationKey::SHARED_STEP_VIA, "shared-step-via"),
         (RelationKey::SHARED_STEP_USED_IN, "shared-step-used-in"),
+        (RelationKey::FRAGMENT_USED_IN, "fragment-used-in"),
         (RelationKey::STEP_MITIGATIONS, "step-mitigations"),
         (RelationKey::DATAFLOW_FROM, "dataflow-from"),
         (RelationKey::DATAFLOW_TO, "dataflow-to"),
