@@ -1156,6 +1156,14 @@ pub enum EditError {
     /// The pack preset is not meant for this kind of element.
     #[error("{0}")]
     PresetDoesNotFit(String),
+    /// Copying or materializing a fragment subtree exceeded a model bound.
+    #[error("copied subtree exceeds {resource} limit ({max})")]
+    FragmentCopyLimit {
+        /// The bounded resource that overflowed.
+        resource: &'static str,
+        /// The model bound on that resource.
+        max: usize,
+    },
 }
 
 /// The refusal for a preset that does not fit `target`.
