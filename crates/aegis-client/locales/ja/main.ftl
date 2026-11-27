@@ -407,3 +407,7 @@ report-attacker-profile-excluded = 除外
 report-attacker-profile-scalability = スケーラビリティ
 report-attacker-profile-all-allowed = すべて許可
 report-attacker-profile-none-excluded = なし
+relation-control-bypass = バイパスツリー
+inspector-rev-control-bypass = バイパス対象の対策
+inspector-bypass-tree = バイパスツリー
+create-bypass-from-selection = 選択項目から作成

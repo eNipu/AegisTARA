@@ -19,6 +19,7 @@ fn scene() -> Scene {
         via: None,
         capped: None,
         excluded: None,
+        excluded_label: None,
     })
 }
 
@@ -170,4 +171,38 @@ fn an_excluded_node_carries_its_reasons_in_describe_and_sentence() {
     assert_eq!(included.excluded, None);
     let included_spoken = sentence(&included, false);
     assert!(!included_spoken.contains("Excluded:"), "{included_spoken}");
+}
+
+#[test]
+fn a_control_off_node_carries_control_off_in_describe_and_sentence() {
+    let tree = common::sample();
+    let s = Scene::from_tree(&tree, LayoutConfig::default(), |i| match i.index() {
+        3 => NodeStyle {
+            excluded: Some("control off".into()),
+            excluded_label: Some("control off".into()),
+            ..NodeStyle::default()
+        },
+        4 => NodeStyle {
+            excluded: Some("Needs CF00 Ethernet (off)".into()),
+            excluded_label: Some("control off".into()),
+            ..NodeStyle::default()
+        },
+        _ => NodeStyle::default(),
+    });
+
+    let off = describe(&s, 3).expect("control off step");
+    assert_eq!(off.excluded.as_deref(), Some("control off"));
+    let spoken = sentence(&off, false);
+    assert!(spoken.contains("control off"), "{spoken}");
+
+    let both = describe(&s, 4).expect("both reasons step");
+    assert_eq!(
+        both.excluded.as_deref(),
+        Some("control off: Needs CF00 Ethernet (off)")
+    );
+    let both_spoken = sentence(&both, false);
+    assert!(
+        both_spoken.contains(" Excluded: control off: Needs CF00 Ethernet (off)."),
+        "{both_spoken}"
+    );
 }

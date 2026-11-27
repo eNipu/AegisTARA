@@ -408,3 +408,7 @@ report-attacker-profile-excluded = ⟦Éxclûdéd␣⟧
 report-attacker-profile-scalability = ⟦Scâlâbîlîtý␣⟧
 report-attacker-profile-all-allowed = ⟦Âll âllôwéd␣⟧
 report-attacker-profile-none-excluded = ⟦Nôné␣⟧
+relation-control-bypass = ⟦Býpâss tréé␣⟧
+inspector-rev-control-bypass = ⟦Býpâss tréé fôr␣⟧
+inspector-bypass-tree = ⟦Býpâss tréé␣⟧
+create-bypass-from-selection = ⟦Créâté frôm séléctîôn␣⟧

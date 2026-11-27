@@ -358,7 +358,8 @@ fn target_of(op: &Op) -> Option<Selection> {
         | Op::RemoveSecurityControl { id } => Selection::Control(*id),
         Op::SetControlRule { control, .. }
         | Op::SetControlKind { control, .. }
-        | Op::SetControlStatus { control, .. } => Selection::Control(*control),
+        | Op::SetControlStatus { control, .. }
+        | Op::SetControlBypass { control, .. } => Selection::Control(*control),
         Op::ApplyControl { target, .. } | Op::UnapplyControl { target, .. } => match target {
             aegis_model::ItemRef::Component(id) => Selection::Component(*id),
             aegis_model::ItemRef::Interface(id) => Selection::Interface(*id),
@@ -572,6 +573,9 @@ fn parts(op: &Op, p: &Project) -> Parts {
         }
         Op::SetControlStatus { control: c, .. } => {
             ("change", "status of security control", control(c))
+        }
+        Op::SetControlBypass { control: c, .. } => {
+            ("change", "bypass tree of security control", control(c))
         }
         Op::RemoveSecurityControl { id } => ("remove", "security control", control(id)),
         Op::AddCybersecurityGoal { name, .. } => ("add", "cybersecurity goal", some(name)),

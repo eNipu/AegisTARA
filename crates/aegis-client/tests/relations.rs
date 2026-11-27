@@ -338,6 +338,11 @@ fn project() -> Project {
         step_feasibility: Vec::new(),
         provenance: provenance.clone(),
     });
+    ops.push(Op::SetControlBypass {
+        control: control1,
+        tree: Some(fragment),
+        provenance: provenance.clone(),
+    });
     for node in fragment_users {
         ops.push(Op::UseFragment {
             tree: tree_id,
@@ -517,13 +522,16 @@ fn model_links(project: &Project) -> BTreeSet<(Sel, Sel)> {
         }
     }
 
-    for (_, id, _) in project.security_controls() {
+    for (_, id, ctrl) in project.security_controls() {
         if let Some(idx) = project.security_control_idx(&id) {
             for item in project.control_targets(idx) {
                 if let Some(target) = item_selection(item) {
                     out.insert((Sel(Selection::Control(id)), Sel(target)));
                 }
             }
+        }
+        if let Some(bypass) = ctrl.bypass().and_then(|t| project.attack_tree_id(t)) {
+            out.insert((Sel(Selection::Control(id)), Sel(Selection::Tree(bypass))));
         }
     }
 
@@ -758,6 +766,7 @@ fn keys_and_labels_are_valid() {
         (RelationKey::GOAL_RESPONSIBLE, "goal-responsible"),
         (RelationKey::CLAIM_RESPONSIBLE, "claim-responsible"),
         (RelationKey::CONTROL_TARGETS, "control-targets"),
+        (RelationKey::CONTROL_BYPASS, "control-bypass"),
         (RelationKey::STEP_VIA, "step-via"),
         (RelationKey::SHARED_STEP_VIA, "shared-step-via"),
         (RelationKey::SHARED_STEP_USED_IN, "shared-step-used-in"),
@@ -855,6 +864,10 @@ fn new_keys_resolve_in_every_language() {
         "relation-assumption-excludes",
         "inspector-rev-claim-assumptions",
         "inspector-rev-assumption-excludes",
+        "relation-control-bypass",
+        "inspector-rev-control-bypass",
+        "inspector-bypass-tree",
+        "create-bypass-from-selection",
     ];
     for language in [Language::En, Language::Ja, Language::Pseudo] {
         let catalog = Catalog::load(language);

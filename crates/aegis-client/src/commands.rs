@@ -802,6 +802,23 @@ pub enum Edit {
         /// New lifecycle status (`Implemented`, `Planned`, or `Off`).
         status: aegis_model::ControlStatus,
     },
+    /// Sets or clears a security control's bypass fragment tree.
+    SetControlBypass {
+        /// The control.
+        control: ControlId,
+        /// Fragment tree ID, or `None` to clear.
+        tree: Option<TreeId>,
+    },
+    /// Copies a selected tree or subtree into a new fragment and links it as
+    /// `control`'s bypass tree in one undo step.
+    CreateBypassFromSelection {
+        /// The control.
+        control: ControlId,
+        /// Selected tree or node whose reachable subtree is copied.
+        source: Selection,
+        /// New fragment tree ID.
+        id: TreeId,
+    },
     /// Applies a security control to a component or an interface (CFG-03).
     ApplyControl {
         /// The control.
@@ -3161,6 +3178,44 @@ impl Edit {
                 status: *status,
                 provenance: p,
             }],
+            Edit::SetControlBypass { control, tree } => vec![Op::SetControlBypass {
+                control: *control,
+                tree: *tree,
+                provenance: p,
+            }],
+            Edit::CreateBypassFromSelection {
+                control,
+                source,
+                id,
+            } => {
+                project
+                    .security_control_idx(control)
+                    .ok_or(EditError::Missing)?;
+                let (src_tree, src_node) = match source {
+                    Selection::TreeNode(t, n) => (*t, *n),
+                    Selection::Tree(t) => {
+                        let tree = project
+                            .attack_tree_idx(t)
+                            .and_then(|i| project.attack_tree(i))
+                            .ok_or(EditError::Missing)?;
+                        (*t, tree.id_of(tree.root()).ok_or(EditError::Missing)?)
+                    }
+                    _ => return Err(EditError::Missing),
+                };
+                let plan = crate::fragments::copy_subtree(
+                    project,
+                    src_tree,
+                    src_node,
+                    crate::fragments::CopyMode::PreserveReferences,
+                )?;
+                let mut ops = plan.new_tree_ops(*id, TreeRole::Fragment, &p)?;
+                ops.push(Op::SetControlBypass {
+                    control: *control,
+                    tree: Some(*id),
+                    provenance: p,
+                });
+                ops
+            }
             Edit::ApplyControl { control, target } => {
                 let kind = project
                     .security_control_idx(control)
@@ -3365,6 +3420,13 @@ impl Edit {
                     ops.push(Op::SetControlStatus {
                         control: *control,
                         status: aegis_model::ControlStatus::Planned,
+                        provenance: p.clone(),
+                    });
+                }
+                if ctrl.bypass().is_some() {
+                    ops.push(Op::SetControlBypass {
+                        control: *control,
+                        tree: None,
                         provenance: p.clone(),
                     });
                 }
@@ -4047,6 +4109,11 @@ impl Edit {
                 .and_then(|t| t.get(t.root()))
                 .is_some_and(|n| n.label() == name.trim()),
             Edit::SetAttackFilter { filter } => project.attack_filter() == filter,
+            Edit::SetControlBypass { control, tree } => project
+                .security_control_idx(control)
+                .and_then(|i| project.security_control(i))
+                .is_some_and(|c| c.bypass().and_then(|t| project.attack_tree_id(t)) == *tree),
+            Edit::CreateBypassFromSelection { .. } => false,
             _ => false,
         }
     }
@@ -4128,7 +4195,9 @@ impl Edit {
                 mode: crate::library::InsertMode::NewTree { id, .. },
                 ..
             } => Some(Selection::Tree(*id)),
-            Edit::AddControl { id, .. } => Some(Selection::Control(*id)),
+            Edit::AddControl { id, .. } | Edit::CreateBypassFromSelection { control: id, .. } => {
+                Some(Selection::Control(*id))
+            }
             Edit::AddGoal { id, .. } | Edit::AddGoalFor { id, .. } => Some(Selection::Goal(*id)),
             Edit::AddCondition { id, .. } => Some(Selection::Condition(*id)),
             Edit::AddAssumption { id, .. } => Some(Selection::Assumption(*id)),

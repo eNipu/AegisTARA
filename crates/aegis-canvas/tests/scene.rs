@@ -18,6 +18,7 @@ fn styled(tree: &aegis_model::AttackTree) -> Scene {
         via: None,
         capped: None,
         excluded: None,
+        excluded_label: None,
     })
 }
 
@@ -310,6 +311,7 @@ fn ghost_nodes_render_with_dashed_accent_edges_and_boxes() {
         via: None,
         capped: None,
         excluded: None,
+        excluded_label: None,
     });
     let view = Viewport::new(Size::new(1600.0, 700.0));
     let list = render(&scene, &view, &RenderOptions::default());
@@ -480,5 +482,86 @@ fn an_excluded_node_draws_diagonal_hatch_lines_and_excluded_label() {
     );
 
     let svg = scene_to_svg(&scene, &SvgOptions::light(), &RenderOptions::default());
+    assert!(svg.contains("excluded"), "SVG must contain 'excluded'");
+}
+
+#[test]
+fn excluded_label_overrides_hatch_text_without_changing_default() {
+    let tree = common::sample();
+    let scene = Scene::from_tree(&tree, LayoutConfig::default(), |i| match i.index() {
+        3 => NodeStyle {
+            excluded: Some("control off".into()),
+            excluded_label: Some("control off".into()),
+            ..NodeStyle::default()
+        },
+        4 => NodeStyle {
+            excluded: Some("Needs CF00 Ethernet (off)".into()),
+            ..NodeStyle::default()
+        },
+        _ => NodeStyle::default(),
+    });
+    let view = Viewport::new(Size::new(1600.0, 700.0));
+    let list = render(&scene, &view, &RenderOptions::default());
+
+    let rect_of = |v: u32| {
+        let world = scene
+            .node_rect(scene.node_idx(v).expect("idx"))
+            .expect("rect");
+        let tl = view.to_screen(world.origin);
+        aegis_canvas::Rect::new(
+            tl.x,
+            tl.y,
+            world.size.w * view.zoom,
+            world.size.h * view.zoom,
+        )
+    };
+    let in_rect = |p: aegis_canvas::Point, r: aegis_canvas::Rect| {
+        let eps = 1e-2;
+        p.x >= r.origin.x - eps
+            && p.x <= r.right() + eps
+            && p.y >= r.origin.y - eps
+            && p.y <= r.bottom() + eps
+    };
+
+    let off_rect = rect_of(3);
+    let default_rect = rect_of(4);
+    let off_hatches = list
+        .items
+        .iter()
+        .filter(|it| match it {
+            Item::Polyline { points, .. } if points.len() == 2 => {
+                in_rect(points[0], off_rect) && in_rect(points[1], off_rect)
+            }
+            _ => false,
+        })
+        .count();
+    assert!(off_hatches >= 2, "expected hatch lines, got {off_hatches}");
+
+    assert!(list.items.iter().any(|it| matches!(
+        it,
+        Item::Text {
+            at,
+            text,
+            paint: Paint::Graphite,
+            bold: true,
+            ..
+        } if text == "control off" && in_rect(*at, off_rect)
+    )));
+    assert!(list.items.iter().any(|it| matches!(
+        it,
+        Item::Text {
+            at,
+            text,
+            paint: Paint::Graphite,
+            bold: true,
+            ..
+        } if text == "excluded" && in_rect(*at, default_rect)
+    )));
+
+    let svg = scene_to_svg(&scene, &SvgOptions::light(), &RenderOptions::default());
+    assert!(
+        svg.contains("control off"),
+        "SVG must contain 'control off'"
+    );
     assert!(svg.contains("excluded"), "SVG must contain 'excluded'");
 }
