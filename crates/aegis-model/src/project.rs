@@ -1538,6 +1538,36 @@ impl Project {
         self.has_fragment_references() || self.controls.iter().any(|(_, _, c)| c.bypass.is_some())
     }
 
+    fn entry_bypass_trees<'a>(
+        &'a self,
+        entry: &'a TreeEntry,
+        residual: Option<bool>,
+    ) -> impl Iterator<Item = TreeIdx> + 'a {
+        entry
+            .step_mitigations
+            .iter()
+            .flatten()
+            .filter_map(move |m| {
+                let c = self.controls.get(m.control)?;
+                residual
+                    .is_none_or(|r| c.status.counts_for(r))
+                    .then_some(c.bypass)
+                    .flatten()
+            })
+    }
+
+    fn bypass_root_value(
+        &self,
+        b_idx: TreeIdx,
+        residual: bool,
+    ) -> Option<(TreeId, FeasibilityLevel)> {
+        let b_id = self.attack_tree_id(b_idx)?;
+        let eval = self
+            .evaluate_tree_with(&self.applicability(), b_id, residual)
+            .ok()?;
+        Some((b_id, *eval.root_value()))
+    }
+
     /// The deciding path from `node` of `tree` in one mode (residual when
     /// `residual`), as stable tree/node IDs. Where the path ends at a step
     /// that references a fragment, it continues from that fragment's root,
@@ -3966,9 +3996,8 @@ impl Project {
 
     /// Returns the residual feasibility of `node` in `tree` — the minimum of
     /// its inherent [`effective_step_feasibility`](Self::effective_step_feasibility),
-    /// all attached [`step_mitigations`](Self::step_mitigations) (using any
-    /// counting control's bypass tree residual root when configured, returning
-    /// `None` if that bypass tree is inapplicable or fails evaluation), and every
+    /// all attached [`step_mitigations`](Self::step_mitigations) (using a
+    /// counting control's bypass tree when present), and every
     /// matching [`ControlRule`] of every [`SecurityControl`] applied to the
     /// step's [`step_via`](Self::step_via) item or (when `via` is an
     /// interface) to its owning component (CFG-05, D26) — or `None` if `tree`
@@ -3978,7 +4007,7 @@ impl Project {
     /// Time O(F + m + C) where `F <= 16` is the number of attack potential
     /// factors, `m <= 16` is the number of mitigations on `node`, and `C` is
     /// the number of live controls when the step's `via` (or its component)
-    /// has applied controls (O(F + m) otherwise). Space O(1) without bypasses.
+    /// has applied controls (O(F + m) otherwise). Space O(1).
     ///
     /// ```
     /// # use std::sync::Arc;
@@ -4118,15 +4147,10 @@ impl Project {
                     let (feasibility, bypass) = match ctrl.bypass {
                         None => (m.feasibility, None),
                         Some(b_idx) => {
-                            let Some(b_id) = self.attack_tree_id(b_idx) else {
+                            let Some((b_id, bv)) = self.bypass_root_value(b_idx, true) else {
                                 continue;
                             };
-                            let Ok(eval) =
-                                self.evaluate_tree_with(&self.applicability(), b_id, true)
-                            else {
-                                continue;
-                            };
-                            (*eval.root_value(), Some(b_id))
+                            (bv, Some(b_id))
                         }
                     };
                     out.push(StepCeiling {
@@ -4376,42 +4400,6 @@ impl Project {
         }
     }
 
-    fn fold_mitigations(
-        &self,
-        entry: &TreeEntry,
-        idx: NodeIdx,
-        residual: bool,
-        mut res: FeasibilityLevel,
-        mut resolve: impl FnMut(TreeIdx) -> Option<Lifted<FeasibilityLevel>>,
-    ) -> Option<Lifted<FeasibilityLevel>> {
-        let mut excluded = false;
-        for m in entry
-            .step_mitigations
-            .get(idx.index())
-            .into_iter()
-            .flatten()
-        {
-            let Some(ctrl) = self.controls.get(m.control) else {
-                continue;
-            };
-            if !ctrl.status.counts_for(residual) {
-                continue;
-            }
-            match ctrl.bypass {
-                None => res = res.min(m.feasibility),
-                Some(b_idx) => match resolve(b_idx)? {
-                    Lifted::Value(bv) => res = res.min(bv),
-                    Lifted::Excluded => excluded = true,
-                },
-            }
-        }
-        Some(if excluded {
-            Lifted::Excluded
-        } else {
-            Lifted::Value(res)
-        })
-    }
-
     fn entry_step_feasibility_for(
         &self,
         entry: &TreeEntry,
@@ -4419,26 +4407,47 @@ impl Project {
         residual: bool,
     ) -> Option<FeasibilityLevel> {
         let own = self.entry_effective_step_feasibility(entry, idx)?;
-        let Lifted::Value(res) = self.fold_mitigations(entry, idx, residual, own, |b_idx| {
-            let b_id = self.attack_tree_id(b_idx)?;
-            let eval = self
-                .evaluate_tree_with(&self.applicability(), b_id, residual)
-                .ok()?;
-            Some(Lifted::Value(*eval.root_value()))
-        })?
-        else {
-            return None;
-        };
-        Some(self.entry_rule_ceiling(entry, idx, residual, res))
+        match self.entry_local_ceiling(entry, idx, residual, own, None)? {
+            Lifted::Value(v) => Some(v),
+            Lifted::Excluded => None,
+        }
     }
 
-    fn entry_rule_ceiling(
+    /// `res` lowered by every mitigation and control rule of step `idx` that
+    /// counts in the mode (`ControlStatus::counts_for`). Time O(m + C).
+    fn entry_local_ceiling(
         &self,
         entry: &TreeEntry,
         idx: NodeIdx,
         residual: bool,
         mut res: FeasibilityLevel,
-    ) -> FeasibilityLevel {
+        roots: Option<&FragmentRoots>,
+    ) -> Option<Lifted<FeasibilityLevel>> {
+        let mut excluded = false;
+        if let Some(mitigations) = entry.step_mitigations.get(idx.index()) {
+            for m in mitigations {
+                if let Some(ctrl) = self.controls.get(m.control)
+                    && ctrl.status.counts_for(residual)
+                {
+                    match ctrl.bypass {
+                        None => res = res.min(m.feasibility),
+                        Some(b_idx) => {
+                            let lifted = match roots {
+                                Some(r) => (*r.get(&b_idx)?)?,
+                                None => Lifted::Value(self.bypass_root_value(b_idx, residual)?.1),
+                            };
+                            match lifted {
+                                Lifted::Value(bv) => res = res.min(bv),
+                                Lifted::Excluded => excluded = true,
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if excluded {
+            return Some(Lifted::Excluded);
+        }
         if let (Some(via), Some(attack_type)) = (
             self.entry_step_via_idx(entry, idx.index()),
             self.entry_step_attack_type(entry, idx.index()),
@@ -4458,25 +4467,7 @@ impl Project {
                 }
             }
         }
-        res
-    }
-
-    /// `res` lowered by every mitigation and control rule of step `idx` that
-    /// counts in the mode (`ControlStatus::counts_for`). Time O(m + C).
-    fn entry_local_ceiling(
-        &self,
-        entry: &TreeEntry,
-        idx: NodeIdx,
-        residual: bool,
-        res: FeasibilityLevel,
-        roots: &FragmentRoots,
-    ) -> Option<Lifted<FeasibilityLevel>> {
-        match self.fold_mitigations(entry, idx, residual, res, |b| *roots.get(&b)?)? {
-            Lifted::Excluded => Some(Lifted::Excluded),
-            Lifted::Value(r) => Some(Lifted::Value(
-                self.entry_rule_ceiling(entry, idx, residual, r),
-            )),
-        }
+        Some(Lifted::Value(res))
     }
 
     fn entry_residual_step_feasibility(
@@ -4555,7 +4546,7 @@ impl Project {
         } else {
             self.entry_effective_step_feasibility(entry, idx)?
         };
-        self.entry_local_ceiling(entry, idx, residual, base, roots)
+        self.entry_local_ceiling(entry, idx, residual, base, Some(roots))
     }
 
     /// Evaluates live tree `idx` under `app` with its references reading
@@ -4601,18 +4592,12 @@ impl Project {
             let Some(entry) = self.trees.get(t) else {
                 continue;
             };
-            for target in entry.fragments() {
+            for target in entry
+                .fragments()
+                .chain(self.entry_bypass_trees(entry, Some(residual)))
+            {
                 if need.insert(target) {
                     stack.push(target);
-                }
-            }
-            for m in entry.step_mitigations.iter().flat_map(|ms| ms.iter()) {
-                if let Some(ctrl) = self.controls.get(m.control)
-                    && ctrl.status.counts_for(residual)
-                    && let Some(b_idx) = ctrl.bypass
-                    && need.insert(b_idx)
-                {
-                    stack.push(b_idx);
                 }
             }
         }
@@ -7359,22 +7344,24 @@ impl Project {
                         let Some((_, _, t_b)) = curr_iter.next() else {
                             break;
                         };
-                        if self.is_threat_affected(
-                            other,
-                            &app_a,
-                            &app_b,
-                            id_a,
-                            t_a,
-                            t_b,
-                            assets,
-                            damages,
-                            threats,
-                            trees,
-                            controls,
-                            goals,
-                            claims,
-                            shared_steps,
-                        ) {
+                        if !app_a.same_for_threat(&app_b, id_a, None)
+                            || self.is_threat_affected(
+                                other,
+                                &app_a,
+                                &app_b,
+                                id_a,
+                                t_a,
+                                t_b,
+                                assets,
+                                damages,
+                                threats,
+                                trees,
+                                controls,
+                                goals,
+                                claims,
+                                shared_steps,
+                            )
+                        {
                             let (inh_a, res_a) = self.threat_risk_snapshots(id_a);
                             let (inh_b, res_b) = other.threat_risk_snapshots(id_a);
                             deltas.push(ThreatRiskDelta::new(
@@ -7409,28 +7396,55 @@ impl Project {
         deltas.into_boxed_slice()
     }
 
-    fn tree_dependency_closure(&self, root: TreeIdx) -> Vec<(TreeIdx, TreeId)> {
-        let mut out = Vec::new();
-        let mut visited = BTreeSet::from([root]);
-        let mut stack = vec![root];
-        while let Some(idx) = stack.pop() {
-            let (Some(id), Some(entry)) = (self.trees.id(idx), self.trees.get(idx)) else {
-                continue;
-            };
-            out.push((idx, id));
-            for target in entry.fragments().chain(
-                entry
-                    .step_mitigations
-                    .iter()
-                    .flatten()
-                    .filter_map(|m| self.controls.get(m.control).and_then(|c| c.bypass)),
-            ) {
-                if visited.insert(target) {
-                    stack.push(target);
+    #[allow(clippy::too_many_arguments)]
+    fn tree_closure_affected(
+        &self,
+        other: &Self,
+        app_a: &Applicability,
+        app_b: &Applicability,
+        id: ThreatId,
+        root_a: Option<TreeIdx>,
+        root_b: Option<TreeIdx>,
+        trees: &EntityDiff<TreeId>,
+        controls: &EntityDiff<ControlId>,
+        shared_steps: &EntityDiff<SharedStepId>,
+    ) -> bool {
+        for (proj, peer, root_opt, from_other) in
+            [(self, other, root_a, false), (other, self, root_b, true)]
+        {
+            let Some(root) = root_opt else { continue };
+            let mut visited = BTreeSet::from([root]);
+            let mut stack = vec![root];
+            while let Some(dep_idx) = stack.pop() {
+                let (Some(dep_id), Some(entry)) = (proj.trees.id(dep_idx), proj.trees.get(dep_idx))
+                else {
+                    continue;
+                };
+                if !app_a.same_for_threat(app_b, id, Some(dep_id))
+                    || trees.modified().binary_search(&dep_id).is_ok()
+                    || (!controls.is_empty()
+                        && proj.tree_affected_by_controls(peer, dep_idx, controls, from_other))
+                    || (!shared_steps.modified().is_empty()
+                        && entry.tree.iter().any(|(node, _, _)| {
+                            entry
+                                .shared_at(node.index())
+                                .and_then(|s| proj.shared_step_id(s))
+                                .is_some_and(|s| shared_steps.modified().binary_search(&s).is_ok())
+                        }))
+                {
+                    return true;
+                }
+                for target in entry
+                    .fragments()
+                    .chain(proj.entry_bypass_trees(entry, None))
+                {
+                    if visited.insert(target) {
+                        stack.push(target);
+                    }
                 }
             }
         }
-        out
+        false
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -7451,8 +7465,7 @@ impl Project {
         claims: &EntityDiff<ClaimId>,
         shared_steps: &EntityDiff<SharedStepId>,
     ) -> bool {
-        if !app_a.same_for_threat(app_b, id, None) || threats.modified().binary_search(&id).is_ok()
-        {
+        if threats.modified().binary_search(&id).is_ok() {
             return true;
         }
         if self
@@ -7469,31 +7482,18 @@ impl Project {
         {
             return true;
         }
-        for (proj, peer, root_opt, from_other) in [
-            (self, other, t.attack_tree, false),
-            (other, self, t_b.attack_tree, true),
-        ] {
-            let Some(root) = root_opt else { continue };
-            for (dep_idx, dep_id) in proj.tree_dependency_closure(root) {
-                if !app_a.same_for_threat(app_b, id, Some(dep_id))
-                    || trees.modified().binary_search(&dep_id).is_ok()
-                    || (!controls.is_empty()
-                        && proj.tree_affected_by_controls(peer, dep_idx, controls, from_other))
-                    || (!shared_steps.modified().is_empty()
-                        && proj.trees.get(dep_idx).is_some_and(|entry| {
-                            entry.tree.iter().any(|(node, _, _)| {
-                                entry
-                                    .shared_at(node.index())
-                                    .and_then(|s| proj.shared_step_id(s))
-                                    .is_some_and(|s| {
-                                        shared_steps.modified().binary_search(&s).is_ok()
-                                    })
-                            })
-                        }))
-                {
-                    return true;
-                }
-            }
+        if self.tree_closure_affected(
+            other,
+            app_a,
+            app_b,
+            id,
+            t.attack_tree,
+            t_b.attack_tree,
+            trees,
+            controls,
+            shared_steps,
+        ) {
+            return true;
         }
         for &goal_idx in &t.goals {
             if self
@@ -16569,21 +16569,11 @@ impl ProjectEvalCache {
     /// The cached root, in one mode, of every fragment and active bypass tree
     /// `entry` depends on. Time O(references + mitigations).
     fn cached_roots(&self, project: &Project, entry: &TreeEntry, residual: bool) -> FragmentRoots {
-        let mut roots: FragmentRoots = entry
+        entry
             .fragments()
+            .chain(project.entry_bypass_trees(entry, Some(residual)))
             .map(|t| (t, self.fragment_root(t, residual)))
-            .collect();
-        for m in entry.step_mitigations.iter().flat_map(|ms| ms.iter()) {
-            if let Some(ctrl) = project.controls.get(m.control)
-                && ctrl.status.counts_for(residual)
-                && let Some(b_idx) = ctrl.bypass
-            {
-                roots
-                    .entry(b_idx)
-                    .or_insert_with(|| self.fragment_root(b_idx, residual));
-            }
-        }
-        roots
+            .collect()
     }
 
     /// What a step referencing `tree` reads from its cached evaluation in
@@ -16633,6 +16623,23 @@ impl ProjectEvalCache {
         queue.entry((rank, tree)).or_default().extend(nodes);
     }
 
+    fn enqueue_mitigated_by(
+        &self,
+        project: &Project,
+        queue: &mut DirtyTrees,
+        mut matches: impl FnMut(ControlIdx) -> bool,
+    ) {
+        for (tree_idx, _, entry) in project.trees.iter() {
+            for (i, ms) in entry.step_mitigations.iter().enumerate() {
+                if ms.iter().any(|m| matches(m.control))
+                    && let Some(node_idx) = NodeIdx::try_from_usize(i)
+                {
+                    self.enqueue(queue, tree_idx, [node_idx]);
+                }
+            }
+        }
+    }
+
     /// Adds every step that references `fragment` or uses it via a counting
     /// control's bypass to the dirty set, resolved through its stable node ID,
     /// so a moved index cannot be missed.
@@ -16653,27 +16660,16 @@ impl ProjectEvalCache {
                 self.enqueue(queue, tree, [node_idx]);
             }
         }
-        let bypass_ctrls: Vec<ControlIdx> = project
+        if project
             .controls
             .iter()
-            .filter_map(|(ctrl_idx, _, ctrl)| {
-                (ctrl.bypass == Some(fragment) && ctrl.status.counts_for(residual))
-                    .then_some(ctrl_idx)
-            })
-            .collect();
-        if bypass_ctrls.is_empty() {
-            return;
-        }
-        for (tree_idx, _, entry) in project.trees.iter() {
-            for (i, mitigations) in entry.step_mitigations.iter().enumerate() {
-                if mitigations
-                    .iter()
-                    .any(|m| bypass_ctrls.contains(&m.control))
-                    && let Some(node_idx) = NodeIdx::try_from_usize(i)
-                {
-                    self.enqueue(queue, tree_idx, [node_idx]);
-                }
-            }
+            .any(|(_, _, c)| c.bypass == Some(fragment) && c.status.counts_for(residual))
+        {
+            self.enqueue_mitigated_by(project, queue, |c| {
+                project.controls.get(c).is_some_and(|ctrl| {
+                    ctrl.bypass == Some(fragment) && ctrl.status.counts_for(residual)
+                })
+            });
         }
     }
 
@@ -17078,18 +17074,7 @@ impl ProjectEvalCache {
             return;
         }
         let mut seeds = DirtyTrees::new();
-        for (tree_idx, _, entry) in project.trees.iter() {
-            let dirty: Vec<NodeIdx> = entry
-                .step_mitigations
-                .iter()
-                .enumerate()
-                .filter(|(_, ms)| ms.iter().any(|m| m.control == ctrl_idx))
-                .filter_map(|(i, _)| NodeIdx::try_from_usize(i))
-                .collect();
-            if !dirty.is_empty() {
-                self.enqueue(&mut seeds, tree_idx, dirty);
-            }
-        }
+        self.enqueue_mitigated_by(project, &mut seeds, |c| c == ctrl_idx);
         self.update_dirty(project, &seeds, ctrl.status.counts_for_initial());
     }
 
