@@ -1243,6 +1243,13 @@ pub enum ModelError {
         /// The security control.
         control: ControlId,
     },
+    /// The security control cannot be removed while it still has a bypass tree;
+    /// clear the bypass first.
+    #[error("security control {control} has a bypass tree; clear it before removing the control")]
+    SecurityControlHasBypass {
+        /// The security control.
+        control: ControlId,
+    },
     /// The security control is already applied to this target, or a snapshot
     /// lists it twice.
     #[error("security control {control} is already applied to {target}")]

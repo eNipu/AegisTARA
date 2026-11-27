@@ -360,6 +360,12 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    SetControlBypass {
+        control: Text<ControlId>,
+        tree: Option<Text<TreeId>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     SetStepMitigation {
         tree: Text<TreeId>,
         node: Text<NodeId>,
@@ -1376,6 +1382,15 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
         } => OpView::SetControlStatus {
             control: Text(*control),
             status: status.as_str(),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetControlBypass {
+            control,
+            tree,
+            provenance,
+        } => OpView::SetControlBypass {
+            control: Text(*control),
+            tree: tree.map(Text),
             provenance: ProvenanceView::of(provenance),
         },
         Op::SetStepMitigation {
@@ -2460,6 +2475,15 @@ fn op_from_wire(m: &Methodology, w: OpWire, line: u64) -> Result<Op, StoreError>
         } => Op::SetControlStatus {
             control: control.0,
             status: status.0,
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetControlBypass {
+            control,
+            tree,
+            provenance,
+        } => Op::SetControlBypass {
+            control: control.0,
+            tree: tree.map(|t| t.0),
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::SetStepMitigation {

@@ -188,6 +188,24 @@ impl<Id: Copy + Ord, Idx: ArenaIndex, T> Arena<Id, Idx, T> {
 // Derived reference counts.
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GraphCandidate {
+    Fragment {
+        tree: TreeIdx,
+        node: NodeIdx,
+        target: TreeIdx,
+    },
+    ControlBypass {
+        control: ControlIdx,
+        bypass: Option<TreeIdx>,
+    },
+    StepMitigation {
+        tree: TreeIdx,
+        node: NodeIdx,
+        control: ControlIdx,
+    },
+}
+
 /// One attack tree in a [`Project`], paired with its per-node step
 /// feasibility ratings, per-node attack potential factor ratings, per-node
 /// step mitigations, and provenance. Gate slots are always `None` and empty.
@@ -1579,29 +1597,74 @@ impl Project {
         })
     }
 
-    fn check_fragment_graph(
+    fn fragment_target_id(&self, source: TreeId, target: TreeIdx) -> Result<TreeId, ModelError> {
+        let target_id = self
+            .attack_tree_id(target)
+            .ok_or(ModelError::FragmentRole(source))?;
+        if self.attack_tree_role(target) != Some(TreeRole::Fragment) {
+            return Err(ModelError::FragmentRole(target_id));
+        }
+        Ok(target_id)
+    }
+
+    fn collect_fragment_deps(
         &self,
-        candidate: Option<(TreeIdx, NodeIdx, TreeIdx)>,
-    ) -> Result<Vec<TreeIdx>, ModelError> {
+        candidate: Option<GraphCandidate>,
+    ) -> Result<BTreeMap<TreeId, BTreeSet<TreeId>>, ModelError> {
         let mut deps = BTreeMap::<TreeId, BTreeSet<TreeId>>::new();
         for (idx, id, entry) in self.trees.iter() {
             let targets = deps.entry(id).or_default();
             for (node, _, _) in entry.tree.iter() {
                 let target = match candidate {
-                    Some((source, at, target)) if source == idx && at == node => Some(target),
+                    Some(GraphCandidate::Fragment {
+                        tree: source,
+                        node: at,
+                        target,
+                    }) if source == idx && at == node => Some(target),
                     _ => entry.fragment_at(node.index()),
                 };
                 if let Some(target) = target {
-                    let target_id = self
-                        .attack_tree_id(target)
-                        .ok_or(ModelError::FragmentRole(id))?;
-                    if self.attack_tree_role(target) != Some(TreeRole::Fragment) {
-                        return Err(ModelError::FragmentRole(target_id));
+                    targets.insert(self.fragment_target_id(id, target)?);
+                }
+                let extra = match candidate {
+                    Some(GraphCandidate::StepMitigation {
+                        tree,
+                        node: at,
+                        control,
+                    }) if tree == idx && at == node => Some(control),
+                    _ => None,
+                };
+                for m_ctrl in entry
+                    .step_mitigations
+                    .get(node.index())
+                    .into_iter()
+                    .flat_map(|ms| ms.iter().map(|m| m.control))
+                    .chain(extra)
+                {
+                    let bypass = if let Some(GraphCandidate::ControlBypass {
+                        control: cand_ctrl,
+                        bypass,
+                    }) = candidate
+                        && cand_ctrl == m_ctrl
+                    {
+                        bypass
+                    } else {
+                        self.controls.get(m_ctrl).and_then(|c| c.bypass)
+                    };
+                    if let Some(target) = bypass {
+                        targets.insert(self.fragment_target_id(id, target)?);
                     }
-                    targets.insert(target_id);
                 }
             }
         }
+        Ok(deps)
+    }
+
+    fn check_fragment_graph(
+        &self,
+        candidate: Option<GraphCandidate>,
+    ) -> Result<Vec<TreeIdx>, ModelError> {
+        let deps = self.collect_fragment_deps(candidate)?;
         let mut users = BTreeMap::<TreeId, Vec<TreeId>>::new();
         let mut remaining: BTreeMap<_, _> = deps.iter().map(|(&id, d)| (id, d.len())).collect();
         for (&source, targets) in &deps {
@@ -7773,6 +7836,9 @@ impl Project {
             Op::SetControlStatus { control, .. } => {
                 self.live_control(*control)?;
             }
+            Op::SetControlBypass { control, tree, .. } => {
+                self.check_set_control_bypass(*control, *tree)?;
+            }
             Op::SetStepMitigation {
                 tree,
                 node,
@@ -8452,6 +8518,11 @@ impl Project {
                 status,
                 provenance,
             } => self.commit_set_control_status(control, status, provenance),
+            Op::SetControlBypass {
+                control,
+                tree,
+                provenance,
+            } => self.commit_set_control_bypass(control, tree, provenance),
             Op::SetStepMitigation {
                 tree,
                 node,
@@ -10337,8 +10408,12 @@ impl Project {
                 max: MAX_FRAGMENT_REFERENCES,
             });
         }
-        self.check_fragment_graph(Some((source, at, target)))
-            .map(|_| ())
+        self.check_fragment_graph(Some(GraphCandidate::Fragment {
+            tree: source,
+            node: at,
+            target,
+        }))
+        .map(|_| ())
     }
 
     fn check_unuse_fragment(
@@ -10525,7 +10600,12 @@ impl Project {
         self.require_no_description(ElementRef::Tree(id), EntityKind::AttackTree)?;
         self.require_no_conditions(ElementRef::Tree(id))?;
         let (idx, entry) = self.live_tree(id)?;
-        let users = self.fragment_users(idx).len();
+        let bypass_users = self
+            .controls
+            .iter()
+            .filter(|(_, _, c)| c.bypass == Some(idx))
+            .count();
+        let users = self.fragment_users(idx).len() + bypass_users;
         if users > 0 {
             return Err(ModelError::FragmentInUse {
                 fragment: id,
@@ -10675,6 +10755,25 @@ impl Project {
         Ok(())
     }
 
+    fn check_set_control_bypass(
+        &self,
+        control: ControlId,
+        tree: Option<TreeId>,
+    ) -> Result<(), ModelError> {
+        let ctrl_idx = self.live_control(control)?;
+        if let Some(tid) = tree {
+            let (tid_idx, entry) = self.live_tree(tid)?;
+            if entry.role != TreeRole::Fragment {
+                return Err(ModelError::FragmentRole(tid));
+            }
+            self.check_fragment_graph(Some(GraphCandidate::ControlBypass {
+                control: ctrl_idx,
+                bypass: Some(tid_idx),
+            }))?;
+        }
+        Ok(())
+    }
+
     fn check_remove_control(&self, id: ControlId) -> Result<(), ModelError> {
         self.require_no_description(ElementRef::Control(id), EntityKind::SecurityControl)?;
         let idx = self.live_control(id)?;
@@ -10709,6 +10808,9 @@ impl Project {
         }
         if c.kind.is_some() {
             return Err(ModelError::SecurityControlHasKind { control: id });
+        }
+        if c.bypass.is_some() {
+            return Err(ModelError::SecurityControlHasBypass { control: id });
         }
         Ok(())
     }
@@ -11638,7 +11740,7 @@ impl Project {
         control: ControlId,
         feasibility: Option<FeasibilityLevel>,
     ) -> Result<(), ModelError> {
-        let (_, entry) = self.live_tree(tree)?;
+        let (tree_idx, entry) = self.live_tree(tree)?;
         let node_idx = entry
             .tree
             .idx_of(&node)
@@ -11646,7 +11748,7 @@ impl Project {
         if !matches!(entry.tree.get(node_idx), Some(Node::Step { .. })) {
             return Err(ModelError::NotAStep { tree, node });
         }
-        self.live_control(control)?;
+        let ctrl_idx = self.live_control(control)?;
         if let Some(level) = feasibility {
             self.methodology.check_feasibility_level(level)?;
             let row = entry
@@ -11659,6 +11761,17 @@ impl Project {
                     node,
                     max: MAX_STEP_MITIGATIONS,
                 });
+            }
+            if self
+                .controls
+                .get(ctrl_idx)
+                .is_some_and(|c| c.bypass.is_some())
+            {
+                self.check_fragment_graph(Some(GraphCandidate::StepMitigation {
+                    tree: tree_idx,
+                    node: node_idx,
+                    control: ctrl_idx,
+                }))?;
             }
         }
         Ok(())
@@ -12335,6 +12448,7 @@ impl Project {
             rules: Vec::new(),
             kind: None,
             status: ControlStatus::default(),
+            bypass: None,
             provenance,
         };
         self.controls.push(id, control, self.slot_limit).ok_or(
@@ -12468,6 +12582,26 @@ impl Project {
         Ok(Op::SetControlStatus {
             control,
             status: old,
+            provenance,
+        })
+    }
+
+    fn commit_set_control_bypass(
+        &mut self,
+        control: ControlId,
+        tree: Option<TreeId>,
+        provenance: Provenance,
+    ) -> Result<Op, ModelError> {
+        let new_idx = tree
+            .map(|tid| self.live_tree(tid).map(|(idx, _)| idx))
+            .transpose()?;
+        let c = self.control_mut(control)?;
+        let old = std::mem::replace(&mut c.bypass, new_idx);
+        let provenance = std::mem::replace(&mut c.provenance, provenance);
+        let old_id = old.and_then(|t| self.attack_tree_id(t));
+        Ok(Op::SetControlBypass {
+            control,
+            tree: old_id,
             provenance,
         })
     }
@@ -14151,6 +14285,8 @@ impl Project {
             && x.rules == y.rules
             && x.kind == y.kind
             && x.status == y.status
+            && x.bypass.and_then(|t| self.attack_tree_id(t))
+                == y.bypass.and_then(|t| other.attack_tree_id(t))
             && x.provenance == y.provenance
             && x.targets.len() == y.targets.len()
             && x.targets
@@ -14645,6 +14781,16 @@ impl Project {
                 .map_err(|e| format!("control {id}: {e}"))?;
             m.check_feasibility_level(r.ceiling)
                 .map_err(|e| format!("control {id}: {e}"))?;
+        }
+        if let Some(b) = c.bypass
+            && !self
+                .trees
+                .get(b)
+                .is_some_and(|e| e.role == TreeRole::Fragment)
+        {
+            return Err(format!(
+                "control {id} bypass names missing or non-fragment tree"
+            ));
         }
         Ok(())
     }
@@ -15179,6 +15325,7 @@ const fn may_change_applicability(op: &Op, filter: &AttackFilter) -> bool {
         | Op::SetControlRule { .. }
         | Op::SetControlKind { .. }
         | Op::SetControlStatus { .. }
+        | Op::SetControlBypass { .. }
         | Op::SetStepMitigation { .. }
         | Op::AddCybersecurityGoal { .. }
         | Op::RenameCybersecurityGoal { .. }
@@ -15622,6 +15769,7 @@ impl ProjectEvalCache {
             | Op::AddSecurityControl { .. }
             | Op::RenameSecurityControl { .. }
             | Op::SetControlKind { .. }
+            | Op::SetControlBypass { .. }
             | Op::RemoveSecurityControl { .. }
             | Op::AddCybersecurityGoal { .. }
             | Op::RenameCybersecurityGoal { .. }

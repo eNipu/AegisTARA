@@ -533,6 +533,8 @@ struct ControlView<'a> {
     kind: Option<Required<&'a str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bypass: Option<Text<TreeId>>,
     #[serde(skip_serializing_if = "ControlTargetsByItem::is_empty")]
     targets: ControlTargetsByItem<'a>,
     #[serde(skip_serializing_if = "ControlRulesByKey::is_empty")]
@@ -861,6 +863,7 @@ impl Serialize for Controls<'_> {
                     kind: c.kind().map(|k| Required(m.control_kind_key(k))),
                     status: (c.status() != crate::ControlStatus::Planned)
                         .then_some(c.status().as_str()),
+                    bypass: c.bypass().and_then(|t| p.attack_tree_id(t)).map(Text),
                     targets: ControlTargetsByItem {
                         project: p,
                         control: c,
@@ -1502,6 +1505,7 @@ impl Project {
             }
             project.set_damage_loaded_visual(&id, vis, next_vis);
         }
+        let mut pending_bypasses = Vec::new();
         let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);
         for (pos, c) in snapshot.security_controls.into_iter().enumerate() {
             let vis = claim_visual(c.visual_id, pos, &mut used, &mut next_vis)?;
@@ -1528,6 +1532,9 @@ impl Project {
                     status: status.0,
                     provenance: provenance.clone(),
                 })?;
+            }
+            if let Some(tree) = c.bypass {
+                pending_bypasses.push((id, tree.0, provenance.clone()));
             }
             for target in c.targets.0 {
                 project.apply(Op::ApplyControl {
@@ -1706,6 +1713,15 @@ impl Project {
                 node,
                 fragment,
                 provenance: crate::provenance::Provenance::default(),
+            })?;
+        }
+        // Control bypasses replay only after all trees and fragments exist,
+        // restoring each control's provenance verbatim.
+        for (control, tree, provenance) in pending_bypasses {
+            project.apply(Op::SetControlBypass {
+                control,
+                tree: Some(tree),
+                provenance,
             })?;
         }
         let (mut used, mut next_vis) = (std::collections::BTreeSet::new(), 0u32);

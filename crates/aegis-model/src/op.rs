@@ -89,6 +89,7 @@ pub enum StepTarget {
 /// | `SetControlRule` | the same with the old ceiling and control provenance | O(log n + r) |
 /// | `SetControlKind` | the same with the old kind and control provenance | O(log n) |
 /// | `SetControlStatus` | the same with the old status and control provenance | O(log n) |
+/// | `SetControlBypass` | the same with the old tree and control provenance | O(log n + V + E) |
 /// | `SetStepMitigation` | the same with the old feasibility and provenance | O(log n + log V + m) |
 /// | `AddCybersecurityGoal` | `RemoveCybersecurityGoal` | O(m log n + m log m) |
 /// | `RenameCybersecurityGoal` | the same with the old name and provenance | O(log n) |
@@ -646,6 +647,17 @@ pub enum Op {
         control: ControlId,
         /// New lifecycle status (`Implemented`, `Planned`, or `Off`).
         status: crate::control::ControlStatus,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Sets or clears (`None`) a [`SecurityControl`](crate::SecurityControl)'s
+    /// fragment bypass tree. The inverse carries the old `tree` and the
+    /// control's prior provenance.
+    SetControlBypass {
+        /// Existing security control.
+        control: ControlId,
+        /// Existing fragment attack tree, or `None` to clear.
+        tree: Option<TreeId>,
         /// Provenance of the change.
         provenance: Provenance,
     },
@@ -1387,6 +1399,7 @@ impl Op {
             | Self::SetControlRule { provenance, .. }
             | Self::SetControlKind { provenance, .. }
             | Self::SetControlStatus { provenance, .. }
+            | Self::SetControlBypass { provenance, .. }
             | Self::SetStepMitigation { provenance, .. }
             | Self::AddCybersecurityGoal { provenance, .. }
             | Self::RenameCybersecurityGoal { provenance, .. }
@@ -1530,6 +1543,7 @@ impl Op {
             | Self::SetControlRule { provenance, .. }
             | Self::SetControlKind { provenance, .. }
             | Self::SetControlStatus { provenance, .. }
+            | Self::SetControlBypass { provenance, .. }
             | Self::SetStepMitigation { provenance, .. }
             | Self::AddCybersecurityGoal { provenance, .. }
             | Self::RenameCybersecurityGoal { provenance, .. }

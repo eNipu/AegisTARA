@@ -463,6 +463,7 @@ pub struct SecurityControl {
     pub(crate) rules: Vec<ControlRule>,
     pub(crate) kind: Option<ControlKind>,
     pub(crate) status: ControlStatus,
+    pub(crate) bypass: Option<TreeIdx>,
     pub(crate) provenance: Provenance,
 }
 
@@ -530,6 +531,13 @@ impl SecurityControl {
     #[must_use]
     pub const fn status(&self) -> ControlStatus {
         self.status
+    }
+
+    /// Returns the fragment attack tree modeling a bypass of this control, if
+    /// any. Time O(1).
+    #[must_use]
+    pub const fn bypass(&self) -> Option<TreeIdx> {
+        self.bypass
     }
 
     /// Returns the control's [`ControlRule`]s, sorted by [`AttackType`]. Time O(1).
