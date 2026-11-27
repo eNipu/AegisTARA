@@ -119,6 +119,7 @@ impl Label {
             "rate" => "rated",
             "reset" => "reset",
             "share" => "shared",
+            "unshare" => "unshared",
             _ => "changed",
         };
         if self.count > 0 {
@@ -207,6 +208,41 @@ pub fn describe(ops: &[Op], project: &Project) -> Label {
             unlinked: 0,
             lost_via: 0,
             target: Some(Selection::Tree(id)),
+            count: 0,
+            no_system: 0,
+        };
+    }
+    if let Some((tree, node)) = ops.iter().find_map(|op| match op {
+        Op::UnuseFragment { tree, node, .. }
+            if ops.len() > 1
+                && !ops.iter().any(|o| {
+                    matches!(
+                        o,
+                        Op::RemoveTreeNode { .. }
+                            | Op::RemoveAttackTree { .. }
+                            | Op::UseFragment { .. }
+                    )
+                }) =>
+        {
+            Some((*tree, *node))
+        }
+        _ => None,
+    }) {
+        let name = project.attack_tree_idx(&tree).and_then(|t_idx| {
+            let t = project.attack_tree(t_idx)?;
+            let n_idx = t.idx_of(&node)?;
+            let frag_idx = project.step_fragment(t_idx, n_idx)?;
+            let frag = project.attack_tree(frag_idx)?;
+            frag.get(frag.root()).map(|n| n.label().to_owned())
+        });
+        return Label {
+            verb: "unshare",
+            noun: "fragment",
+            name,
+            others: 0,
+            unlinked: 0,
+            lost_via: 0,
+            target: Some(Selection::TreeNode(tree, node)),
             count: 0,
             no_system: 0,
         };

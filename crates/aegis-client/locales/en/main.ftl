@@ -389,6 +389,7 @@ inspector-rev-control-targets = Security controls
 inspector-rev-step-via = Attack steps through this
 fragment = Fragment
 make-shared-fragment = Make shared fragment
+unshare-fragment = Unshare fragment
 inspector-fragment-reference = Fragment reference
 inspector-rev-fragment-used-in = Fragment
 inspector-rev-shared-step-used-in = Shared step

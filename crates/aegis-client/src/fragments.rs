@@ -1,13 +1,13 @@
 //! Bounded attack-tree subtree copying and fragment reference materialization.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use aegis_model::{
-    AttackTree, AttackType, ConditionId, ConditionIdx, ControlId, ElementRef, FactorLevel,
-    FeasibilityFactor, FeasibilityLevel, GateKind, ItemRef, MAX_ATTACK_TREE_NODES,
+    AssumptionId, AttackTree, AttackType, ConditionId, ConditionIdx, ControlId, ElementRef,
+    FactorLevel, FeasibilityFactor, FeasibilityLevel, GateKind, ItemRef, MAX_ATTACK_TREE_NODES,
     MAX_CONDITIONS_PER_ELEMENT, MAX_FRAGMENT_DEPTH, MAX_FRAGMENT_REFERENCES, MAX_STEP_MITIGATIONS,
-    Node, NodeId, NodeIdx, Op, Project, Provenance, SharedStepId, StepTarget, TreeId, TreeIdx,
-    TreeRole,
+    Node, NodeId, NodeIdx, Op, Project, Provenance, SharedStepId, StepRef, StepTarget, TreeId,
+    TreeIdx, TreeRole,
 };
 
 use crate::commands::EditError;
@@ -32,6 +32,7 @@ struct NodeMeta {
     attack_type: Option<AttackType>,
     conditions: Vec<ConditionId>,
     mitigations: Vec<(ControlId, FeasibilityLevel)>,
+    assumptions: Vec<AssumptionId>,
     review_marked: bool,
     shared_step: Option<SharedStepId>,
     fragment: Option<TreeId>,
@@ -158,6 +159,27 @@ impl CopyPlan {
             }
         }
         Ok(ops)
+    }
+
+    /// Maps each assumption excluding any materialized source fragment or leaf
+    /// to the destination leaf node IDs (substituting `root` when the root is
+    /// a single step).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn materialized_assumptions(&self, root: NodeId) -> BTreeMap<AssumptionId, Vec<NodeId>> {
+        let mut out: BTreeMap<AssumptionId, Vec<NodeId>> = BTreeMap::new();
+        for (idx, id, node) in self.tree.iter() {
+            if node.gate_kind().is_some() {
+                continue;
+            }
+            let dest = if idx == self.tree.root() { root } else { id };
+            if let Some(meta) = self.meta.get(idx.index()) {
+                for &aid in &meta.assumptions {
+                    out.entry(aid).or_default().push(dest);
+                }
+            }
+        }
+        out
     }
 }
 
@@ -436,6 +458,13 @@ fn resolve_node<'a>(
                 project.condition_link_ids(ElementRef::Tree(frag_id)),
                 &mut meta.conditions,
             );
+            push_assumptions(
+                project,
+                tree_id,
+                n_id,
+                Some(frag_idx),
+                &mut meta.assumptions,
+            );
             t_idx = frag_idx;
             n_idx = project
                 .attack_tree(frag_idx)
@@ -444,6 +473,8 @@ fn resolve_node<'a>(
         }
         meta.conditions.sort_unstable();
         meta.conditions.dedup();
+        meta.assumptions.sort_unstable();
+        meta.assumptions.dedup();
     }
 
     let (tree_id, tree) = tree_pair(project, t_idx)?;
@@ -468,6 +499,11 @@ fn resolve_node<'a>(
         meta.attack_type = project.step_attack_type(t_idx, n_idx);
     }
     apply_step_overlay(project, t_idx, tree_id, n_idx, n_id, &mut meta);
+    if mode == CopyMode::Materialize {
+        push_assumptions(project, tree_id, n_id, None, &mut meta.assumptions);
+        meta.assumptions.sort_unstable();
+        meta.assumptions.dedup();
+    }
     meta.conditions.sort_unstable();
     meta.conditions.dedup();
     if meta.conditions.len() > MAX_CONDITIONS_PER_ELEMENT {
@@ -481,6 +517,23 @@ fn resolve_node<'a>(
 
 fn push_conds(project: &Project, links: &[ConditionIdx], out: &mut Vec<ConditionId>) {
     out.extend(links.iter().filter_map(|&i| project.condition_id(i)));
+}
+
+fn push_assumptions(
+    project: &Project,
+    tree: TreeId,
+    node: NodeId,
+    frag_idx: Option<TreeIdx>,
+    out: &mut Vec<AssumptionId>,
+) {
+    let sr = StepRef { tree, node };
+    for (_, aid, a) in project.assumptions() {
+        if a.excludes_steps().contains(&sr)
+            || frag_idx.is_some_and(|fi| a.excludes_trees().contains(&fi))
+        {
+            out.push(aid);
+        }
+    }
 }
 
 fn apply_step_overlay(

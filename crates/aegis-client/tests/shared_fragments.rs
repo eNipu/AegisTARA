@@ -14,9 +14,10 @@ use aegis_client::workspace::{MAX_SUBMIT_OPS, Origin, Workspace, WorkspaceError}
 use aegis_model::{
     AssetId, AssumptionId, AttackFilter, AttackTree, ComponentId, ConditionId, ControlId,
     ControlStatus, ElementRef, FeasibilityLevel, GateKind, InterfaceId, ItemRef,
-    MAX_ATTACK_TREE_NODES, MAX_CONDITIONS_PER_ELEMENT, MAX_FRAGMENT_DEPTH, MAX_FRAGMENT_REFERENCES,
-    MAX_STEP_MITIGATIONS, Methodology, ModelError, Node, NodeId, NodeIdx, Op, Project, Provenance,
-    SharedStepId, StepRef, StepTarget, ThreatId, TreeId, TreeIdx, TreeRole,
+    MAX_ASSUMPTION_EXCLUDES, MAX_ATTACK_TREE_NODES, MAX_CONDITIONS_PER_ELEMENT, MAX_FRAGMENT_DEPTH,
+    MAX_FRAGMENT_REFERENCES, MAX_STEP_MITIGATIONS, Methodology, ModelError, Node, NodeId, NodeIdx,
+    Op, OpLogReader, OpLogWriter, Project, Provenance, SharedStepId, StepRef, StepTarget, ThreatId,
+    TreeId, TreeIdx, TreeRole,
 };
 use fragments::{loaded, saved};
 
@@ -4046,4 +4047,2390 @@ fn make_shared_fragment_guards_and_prospective_limits_fail_atomically() {
         .idx_of(&ps)
         .unwrap();
     assert_eq!(ws.project().step_shared_id(p_idx, ps_idx), Some(new_shared));
+}
+
+#[test]
+fn unshare_fragment_fluent_labels_resolve_in_en_ja_pseudo() {
+    for lang in [Language::En, Language::Ja, Language::Pseudo] {
+        let cat = Catalog::load(lang);
+        let label = cat.tr("unshare-fragment");
+        assert!(!label.is_empty());
+        assert_ne!(label, "unshare-fragment");
+        assert_ne!(label, "[unshare-fragment]");
+        match lang {
+            Language::En => assert_eq!(label, "Unshare fragment"),
+            Language::Ja => assert_eq!(label, "フラグメントの共有を解除"),
+            Language::Pseudo => {
+                assert!(label.starts_with('⟦') && label.ends_with('⟧'), "{label}");
+            }
+        }
+    }
+}
+
+fn verify_unshare_fragment(ws: &mut Workspace, host_tree: TreeId, selected_node: NodeId) {
+    assert!(
+        ws.can_undo(),
+        "tests must start with a pre-existing undo entry"
+    );
+    let before_project = ws.project().clone();
+    let before_snapshot = saved(&before_project);
+    let before_ws_files = before_project
+        .to_workspace_files()
+        .expect("ws files before");
+    let before_undo_count = ws.edits().count();
+    let before_prior_label = ws.undo_label().expect("prior undo label").clone();
+    let before_cache_eval = eval_outcome_pair(ws, host_tree);
+    let before_oracle = {
+        let mut oracle = IndependentFold::new(&before_project);
+        (
+            oracle.fold_tree(host_tree, false),
+            oracle.fold_tree(host_tree, true),
+        )
+    };
+    assert_eq!(before_cache_eval, before_oracle);
+
+    let host_idx = before_project.attack_tree_idx(&host_tree).expect("host");
+    let host_t = before_project.attack_tree(host_idx).expect("host tree");
+    let host_root_id = host_t.id_of(host_t.root()).expect("root id");
+    let host_role = before_project.attack_tree_role(host_idx).expect("role");
+    let host_vis = before_project.attack_tree_visual_id(host_idx).expect("vis");
+    let host_desc = before_project
+        .description(ElementRef::Tree(host_tree))
+        .map(str::to_owned);
+    let host_trans: Vec<(String, String)> = before_project
+        .description_translations(ElementRef::Tree(host_tree))
+        .map(|(l, t)| (l.to_owned(), t.to_owned()))
+        .collect();
+    let host_conds = before_project
+        .condition_link_ids(ElementRef::Tree(host_tree))
+        .to_vec();
+    let host_threats: Vec<_> = before_project
+        .threat_scenarios()
+        .filter(|(_, _, t)| t.attack_tree() == Some(host_idx))
+        .map(|(_, id, _)| id)
+        .collect();
+
+    let sel_idx = host_t.idx_of(&selected_node).expect("selected node");
+    let sel_label = host_t.get(sel_idx).expect("sel").label().to_owned();
+    let sel_parents = parent_positions(&before_project, host_tree, selected_node);
+    let frag_id = before_project
+        .step_fragment_id(host_idx, sel_idx)
+        .expect("selected node must reference a fragment");
+    let frag_idx = before_project.attack_tree_idx(&frag_id).expect("frag");
+    let frag_tree = before_project.attack_tree(frag_idx).expect("frag tree");
+    let frag_root_label = frag_tree
+        .get(frag_tree.root())
+        .expect("frag root")
+        .label()
+        .to_owned();
+    let mut resolved_idx = frag_idx;
+    let frag_root_kind = loop {
+        let rt = before_project.attack_tree(resolved_idx).expect("resolved");
+        if let Some(next_frag) = before_project.step_fragment(resolved_idx, rt.root()) {
+            resolved_idx = next_frag;
+            continue;
+        }
+        break rt.get(rt.root()).expect("resolved root").gate_kind();
+    };
+
+    let before_reusable_trees: Vec<(TreeId, AttackTree)> = before_project
+        .attack_trees()
+        .filter(|(ti, _, _)| {
+            before_project.attack_tree_role(*ti) == Some(TreeRole::Fragment) && *ti != host_idx
+        })
+        .map(|(_, tid, t)| (tid, t.clone()))
+        .collect();
+    let before_shared_ids: Vec<SharedStepId> = before_project
+        .shared_steps()
+        .map(|(_, sid, _)| sid)
+        .collect();
+
+    let ops = Edit::Unshare {
+        tree: host_tree,
+        node: selected_node,
+    }
+    .to_ops(ws.project(), "unshare-author", 1_700_000_001_111)
+    .expect("Unshare to_ops");
+    assert!(!ops.is_empty());
+    let multi_op = ops.len() > 1;
+    ws.apply(ops, Origin::Edit)
+        .unwrap_or_else(|e| panic!("apply Unshare ({sel_label}): {e}"));
+
+    let after_project = ws.project().clone();
+    let after_snapshot = saved(&after_project);
+    let after_ws_files = after_project.to_workspace_files().expect("ws files after");
+    assert_ne!(after_snapshot, before_snapshot);
+    assert_eq!(ws.edits().count(), before_undo_count + 1);
+
+    if multi_op {
+        let lbl = ws.undo_label().expect("undo label");
+        assert!(!lbl.is_removal());
+        assert!(lbl.imperative().contains("unshare fragment"));
+        assert!(lbl.imperative().contains(&frag_root_label));
+        assert!(lbl.past().contains("unshared"));
+        assert_eq!(
+            lbl.selection(&after_project),
+            Some(Selection::TreeNode(host_tree, selected_node))
+        );
+    }
+
+    // Source fragments and shared steps remain completely untouched (even if last user).
+    for (tid, old_tree) in &before_reusable_trees {
+        let cur_idx = after_project
+            .attack_tree_idx(tid)
+            .expect("source frag kept");
+        assert_eq!(
+            after_project.attack_tree_role(cur_idx),
+            Some(TreeRole::Fragment)
+        );
+        assert_eq!(after_project.attack_tree(cur_idx), Some(old_tree));
+        assert_eq!(
+            after_project.condition_link_ids(ElementRef::Tree(*tid)),
+            before_project.condition_link_ids(ElementRef::Tree(*tid))
+        );
+    }
+    let after_shared_ids: Vec<SharedStepId> = after_project
+        .shared_steps()
+        .map(|(_, sid, _)| sid)
+        .collect();
+    assert_eq!(after_shared_ids, before_shared_ids);
+
+    // Host identity, metadata, threat links, root, and incoming edges preserved.
+    let after_host_idx = after_project.attack_tree_idx(&host_tree).expect("host");
+    assert_eq!(
+        after_project.attack_tree_role(after_host_idx),
+        Some(host_role)
+    );
+    assert_eq!(
+        after_project.attack_tree_visual_id(after_host_idx),
+        Some(host_vis)
+    );
+    assert_eq!(
+        after_project
+            .description(ElementRef::Tree(host_tree))
+            .map(str::to_owned),
+        host_desc
+    );
+    let after_trans: Vec<(String, String)> = after_project
+        .description_translations(ElementRef::Tree(host_tree))
+        .map(|(l, t)| (l.to_owned(), t.to_owned()))
+        .collect();
+    assert_eq!(after_trans, host_trans);
+    assert_eq!(
+        after_project.condition_link_ids(ElementRef::Tree(host_tree)),
+        host_conds.as_slice()
+    );
+    let after_threats: Vec<_> = after_project
+        .threat_scenarios()
+        .filter(|(_, _, t)| t.attack_tree() == Some(after_host_idx))
+        .map(|(_, id, _)| id)
+        .collect();
+    assert_eq!(after_threats, host_threats);
+
+    let after_host_tree = after_project
+        .attack_tree(after_host_idx)
+        .expect("host tree");
+    assert_eq!(
+        after_host_tree.id_of(after_host_tree.root()),
+        Some(host_root_id)
+    );
+    let after_sel_idx = after_host_tree
+        .idx_of(&selected_node)
+        .expect("selected kept");
+    let after_sel_node = after_host_tree.get(after_sel_idx).expect("sel node");
+    assert_eq!(after_sel_node.label(), sel_label);
+    assert_eq!(after_sel_node.gate_kind(), frag_root_kind);
+    assert_eq!(
+        parent_positions(&after_project, host_tree, selected_node),
+        sel_parents
+    );
+
+    // No node inside the materialized subtree retains a fragment or shared slot.
+    let mut stack = vec![after_sel_idx];
+    let mut seen_sub = HashSet::new();
+    while let Some(ni) = stack.pop() {
+        if !seen_sub.insert(ni) {
+            continue;
+        }
+        assert!(
+            after_project.step_fragment(after_host_idx, ni).is_none(),
+            "copied node must not retain fragment slot"
+        );
+        assert!(
+            after_project.step_shared(after_host_idx, ni).is_none(),
+            "copied node must not retain shared step slot"
+        );
+        for &ch in after_host_tree.children(ni) {
+            stack.push(ch);
+        }
+    }
+    let copied_node_ids: Vec<NodeId> = after_host_tree.iter().map(|(_, id, _)| id).collect();
+
+    // Independent oracle & cached eval prove identical host values in both modes.
+    let after_cache_eval = eval_outcome_pair(ws, host_tree);
+    let after_oracle = {
+        let mut oracle = IndependentFold::new(&after_project);
+        (
+            oracle.fold_tree(host_tree, false),
+            oracle.fold_tree(host_tree, true),
+        )
+    };
+    assert_eq!(after_cache_eval, before_oracle);
+    assert_eq!(after_oracle, before_oracle);
+
+    // Exactly one undo restores complete Project, snapshot/workspace bytes, prior undo entry, and cache.
+    ws.undo().expect("one undo");
+    assert!(ws.project() == &before_project);
+    assert_eq!(saved(ws.project()), before_snapshot);
+    assert_eq!(
+        ws.project().to_workspace_files().expect("ws files undo"),
+        before_ws_files
+    );
+    assert_eq!(ws.edits().count(), before_undo_count);
+    assert_eq!(ws.undo_label(), Some(&before_prior_label));
+    assert_eq!(eval_outcome_pair(ws, host_tree), before_cache_eval);
+
+    // One redo restores identical copied IDs and post-Unshare bytes.
+    ws.redo().expect("one redo");
+    assert!(ws.project() == &after_project);
+    assert_eq!(saved(ws.project()), after_snapshot);
+    assert_eq!(
+        ws.project().to_workspace_files().expect("ws files redo"),
+        after_ws_files
+    );
+    let redo_host_idx = ws.project().attack_tree_idx(&host_tree).expect("redo host");
+    let redo_node_ids: Vec<NodeId> = ws
+        .project()
+        .attack_tree(redo_host_idx)
+        .expect("redo host tree")
+        .iter()
+        .map(|(_, id, _)| id)
+        .collect();
+    assert_eq!(redo_node_ids, copied_node_ids);
+    assert_eq!(eval_outcome_pair(ws, host_tree), after_cache_eval);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn unshare_fragment_workflows_preserve_values_overlays_and_live_refs() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let mut setup_ws = Workspace::empty(Arc::clone(&m));
+    let p = Provenance::human("unshare-fixture", 1420);
+    let low = m.feasibility_level("low").expect("low");
+    let med = m.feasibility_level("medium").expect("medium");
+    let high = m.feasibility_level("high").expect("high");
+    let factor = m.feasibility_factors().next().expect("factor");
+    let flevel_excl = m
+        .factor_levels(factor)
+        .next()
+        .expect("excluded factor level");
+    let flevel_ok = m
+        .factor_levels(factor)
+        .last()
+        .expect("allowed factor level");
+    let atk_type = m.attack_types().next().expect("attack type");
+    let iface_kind = m.interface_kinds().next().expect("iface kind");
+
+    let comp_id = ComponentId::new_v7();
+    let iface_id = InterfaceId::new_v7();
+    let comp_off_id = ComponentId::new_v7();
+    let asset_id = AssetId::new_v7();
+    let threat_main_id = ThreatId::new_v7();
+    let threat_root_id = ThreatId::new_v7();
+
+    let cond_host_tree = ConditionId::new_v7();
+    let cond_host_local = ConditionId::new_v7();
+    let cond_outer_tree = ConditionId::new_v7();
+    let cond_bnd_a = ConditionId::new_v7();
+    let cond_bnd_b = ConditionId::new_v7();
+    let cond_frag_tree = ConditionId::new_v7();
+    let cond_leaf_on = ConditionId::new_v7();
+    let cond_off = ConditionId::new_v7();
+    let cond_assump = ConditionId::new_v7();
+
+    let ctrl_same = ControlId::new_v7();
+    let ctrl_host_plan = ControlId::new_v7();
+    let ctrl_inner_plan = ControlId::new_v7();
+    let ctrl_off = ControlId::new_v7();
+    let ctrl_via = ControlId::new_v7();
+
+    let assump_host = AssumptionId::new_v7();
+    let assump_frag_tree = AssumptionId::new_v7();
+    let shared_rich_id = SharedStepId::new_v7();
+    let shared_plain_id = SharedStepId::new_v7();
+
+    // Inner diamond fragment `frag_diam`:
+    // DiamRoot(OR) -> [Left(AND), Right(SEQ)]
+    // Left owns `SharedLeaf`, Right links `SharedLeaf` then owns `SeqTail` (uses `shared_rich_id`).
+    let frag_diam_id = TreeId::new_v7();
+    let (fd_root, fd_left, fd_right, fd_shared_leaf, fd_seq_tail) = (
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+    );
+    let mut frag_diam = AttackTree::new(fd_root, Node::gate(GateKind::Or, "DiamRoot")).unwrap();
+    let fdr = frag_diam.root();
+    let fdl = frag_diam
+        .add_child(fdr, fd_left, Node::gate(GateKind::And, "LeftBranch"))
+        .unwrap();
+    let fdrg = frag_diam
+        .add_child(fdr, fd_right, Node::gate(GateKind::SeqAnd, "RightSeq"))
+        .unwrap();
+    let fd_sl = frag_diam
+        .add_child(fdl, fd_shared_leaf, Node::step("SharedLeaf"))
+        .unwrap();
+    frag_diam.link(fdrg, fd_sl).unwrap();
+    frag_diam
+        .add_child(fdrg, fd_seq_tail, Node::step("SeqTail"))
+        .unwrap();
+
+    // Outer fragment `frag_outer`:
+    // OuterSeq(SEQ) -> [BoundaryA (uses frag_diam), BoundaryB (uses frag_diam)]
+    let frag_outer_id = TreeId::new_v7();
+    let (fo_root, fo_bnd_a, fo_bnd_b) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    let mut frag_outer =
+        AttackTree::new(fo_root, Node::gate(GateKind::SeqAnd, "OuterSeq")).unwrap();
+    frag_outer
+        .add_child(frag_outer.root(), fo_bnd_a, Node::step("BoundaryA"))
+        .unwrap();
+    frag_outer
+        .add_child(frag_outer.root(), fo_bnd_b, Node::step("BoundaryB"))
+        .unwrap();
+
+    // Host Threat tree `host_id` with multi-parent ref `h_ref` + sibling consumer `sib_consumer_id`.
+    let host_id = TreeId::new_v7();
+    let (h_root, h_sib_l, h_ref, h_sib_r, h_extra, h_es0, h_es1) = (
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+    );
+    let mut host = AttackTree::new(h_root, Node::gate(GateKind::Or, "HostRoot")).unwrap();
+    let hr = host.root();
+    host.add_child(hr, h_sib_l, Node::step("SibLeft")).unwrap();
+    let h_ref_idx = host.add_child(hr, h_ref, Node::step("HostRef")).unwrap();
+    host.add_child(hr, h_sib_r, Node::step("SibRight")).unwrap();
+    let he_idx = host
+        .add_child(hr, h_extra, Node::gate(GateKind::And, "ExtraParent"))
+        .unwrap();
+    host.add_child(he_idx, h_es0, Node::step("ExtraSib0"))
+        .unwrap();
+    host.link(he_idx, h_ref_idx).unwrap();
+    host.add_child(he_idx, h_es1, Node::step("ExtraSib1"))
+        .unwrap();
+
+    let sib_consumer_id = TreeId::new_v7();
+    let (sc_sib_l, sc_sib_r, sc_es0, sc_es1) = (
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+    );
+    // Keep same child order as `host` so evaluation is directly comparable.
+    let (sc_root2, sc_ref2, sc_extra2) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    let mut sib_con2 = AttackTree::new(sc_root2, Node::gate(GateKind::Or, "SibCon2")).unwrap();
+    let sr2 = sib_con2.root();
+    sib_con2
+        .add_child(sr2, sc_sib_l, Node::step("SibLeft"))
+        .unwrap();
+    let sr2_ref = sib_con2
+        .add_child(sr2, sc_ref2, Node::step("ConRef"))
+        .unwrap();
+    sib_con2
+        .add_child(sr2, sc_sib_r, Node::step("SibRight"))
+        .unwrap();
+    let sr2_ex = sib_con2
+        .add_child(sr2, sc_extra2, Node::gate(GateKind::And, "ConExtra"))
+        .unwrap();
+    sib_con2
+        .add_child(sr2_ex, sc_es0, Node::step("ExtraSib0"))
+        .unwrap();
+    sib_con2.link(sr2_ex, sr2_ref).unwrap();
+    sib_con2
+        .add_child(sr2_ex, sc_es1, Node::step("ExtraSib1"))
+        .unwrap();
+
+    // Host root reference trees (Threat root ref + Fragment root ref with consumer).
+    let root_threat_id = TreeId::new_v7();
+    let rt_node = NodeId::new_v7();
+    let root_threat = AttackTree::new(rt_node, Node::step("RootHostRef")).unwrap();
+
+    let frag_host_id = TreeId::new_v7();
+    let fh_node = NodeId::new_v7();
+    let frag_host = AttackTree::new(fh_node, Node::step("FragRootRef")).unwrap();
+
+    let frag_con_id = TreeId::new_v7();
+    let (fc_root, fc_ref) = (NodeId::new_v7(), NodeId::new_v7());
+    let mut frag_con = AttackTree::new(fc_root, Node::gate(GateKind::Or, "FragCon")).unwrap();
+    frag_con
+        .add_child(frag_con.root(), fc_ref, Node::step("UsesFragHost"))
+        .unwrap();
+
+    // Single-step root target fragments: plain rated step AND SharedStep with factors/via/type.
+    let frag_single_step_id = TreeId::new_v7();
+    let fss_node = NodeId::new_v7();
+    let frag_single_step = AttackTree::new(fss_node, Node::step("SingleStepTarget")).unwrap();
+
+    let frag_single_shared_id = TreeId::new_v7();
+    let fssh_node = NodeId::new_v7();
+    let frag_single_shared = AttackTree::new(fssh_node, Node::step("SingleSharedTarget")).unwrap();
+
+    let single_host_id = TreeId::new_v7();
+    let (sh_root, sh_plain, sh_shared, sh_unrated) = (
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+    );
+    let mut single_host = AttackTree::new(sh_root, Node::gate(GateKind::Or, "SingleHost")).unwrap();
+    single_host
+        .add_child(single_host.root(), sh_plain, Node::step("PlainHostSlot"))
+        .unwrap();
+    single_host
+        .add_child(single_host.root(), sh_shared, Node::step("SharedHostSlot"))
+        .unwrap();
+    single_host
+        .add_child(
+            single_host.root(),
+            sh_unrated,
+            Node::step("UnratedHostSlot"),
+        )
+        .unwrap();
+
+    // Unrated single-step fragment & excluded/unrated multi-leaf fragment.
+    let frag_unrated_id = TreeId::new_v7();
+    let fur_node = NodeId::new_v7();
+    let frag_unrated = AttackTree::new(fur_node, Node::step("UnratedSingle")).unwrap();
+
+    let frag_excl_id = TreeId::new_v7();
+    let (fe_root, fe_unrated, fe_cond, fe_via, fe_factor, fe_assump, fe_ok) = (
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+    );
+    let mut frag_excl = AttackTree::new(fe_root, Node::gate(GateKind::Or, "ExclRoot")).unwrap();
+    let fer = frag_excl.root();
+    for (nid, lbl) in [
+        (fe_unrated, "ExUnrated"),
+        (fe_cond, "ExCond"),
+        (fe_via, "ExVia"),
+        (fe_factor, "ExFactor"),
+        (fe_assump, "ExAssump"),
+        (fe_ok, "ExOk"),
+    ] {
+        frag_excl.add_child(fer, nid, Node::step(lbl)).unwrap();
+    }
+    let excl_host_id = TreeId::new_v7();
+    let (eh_root, eh_ref) = (NodeId::new_v7(), NodeId::new_v7());
+    let mut excl_host = AttackTree::new(eh_root, Node::gate(GateKind::Or, "ExclHost")).unwrap();
+    excl_host
+        .add_child(excl_host.root(), eh_ref, Node::step("ExclSlot"))
+        .unwrap();
+
+    // >32-node target fragment (40 nodes) and depth-8 chain fragment.
+    let big_frag_id = TreeId::new_v7();
+    let (bf_root, bf_gate) = (NodeId::new_v7(), NodeId::new_v7());
+    let mut big_frag = AttackTree::new(bf_root, Node::gate(GateKind::Or, "BigFrag")).unwrap();
+    let bfg = big_frag
+        .add_child(
+            big_frag.root(),
+            bf_gate,
+            Node::gate(GateKind::SeqAnd, "BigSeq"),
+        )
+        .unwrap();
+    let mut bf_leaves = Vec::new();
+    for idx in 0..38 {
+        let lid = NodeId::new_v7();
+        big_frag
+            .add_child(bfg, lid, Node::step(format!("BFLeaf {idx}")))
+            .unwrap();
+        bf_leaves.push(lid);
+    }
+    let big_host_id = TreeId::new_v7();
+    let (bh_root, bh_ref) = (NodeId::new_v7(), NodeId::new_v7());
+    let mut big_host = AttackTree::new(bh_root, Node::gate(GateKind::Or, "BigHost")).unwrap();
+    big_host
+        .add_child(big_host.root(), bh_ref, Node::step("BigRef"))
+        .unwrap();
+
+    // Standalone shared step + plain detach comparison tree.
+    let plain_shared_host_id = TreeId::new_v7();
+    let (psh_root, psh_shared, psh_detach) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    let mut plain_shared_host =
+        AttackTree::new(psh_root, Node::gate(GateKind::Or, "SharedHost")).unwrap();
+    plain_shared_host
+        .add_child(
+            plain_shared_host.root(),
+            psh_shared,
+            Node::step("UsesShared"),
+        )
+        .unwrap();
+    plain_shared_host
+        .add_child(
+            plain_shared_host.root(),
+            psh_detach,
+            Node::step("UsesDetach"),
+        )
+        .unwrap();
+
+    let mut setup = vec![
+        Op::AddComponent {
+            id: comp_id,
+            name: "ECU".into(),
+            parent: None,
+            provenance: p.clone(),
+        },
+        Op::AddInterface {
+            id: iface_id,
+            component: comp_id,
+            kind: iface_kind,
+            name: "CAN".into(),
+            provenance: p.clone(),
+        },
+        Op::AddComponent {
+            id: comp_off_id,
+            name: "OffECU".into(),
+            parent: None,
+            provenance: p.clone(),
+        },
+        Op::AddAsset {
+            id: asset_id,
+            name: "Asset".into(),
+            properties: m.all_properties(),
+            provenance: p.clone(),
+        },
+        Op::AddThreatScenario {
+            id: threat_main_id,
+            name: "MainThreat".into(),
+            asset: asset_id,
+            category: m.threat_categories().next().unwrap(),
+            catalog_refs: vec![],
+            damages: vec![],
+            provenance: p.clone(),
+        },
+        Op::AddThreatScenario {
+            id: threat_root_id,
+            name: "RootThreat".into(),
+            asset: asset_id,
+            category: m.threat_categories().next().unwrap(),
+            catalog_refs: vec![],
+            damages: vec![],
+            provenance: p.clone(),
+        },
+        Op::AddCondition {
+            id: cond_host_tree,
+            name: "HostTreeCond".into(),
+            description: "".into(),
+            present: true,
+            provenance: p.clone(),
+        },
+        Op::AddCondition {
+            id: cond_host_local,
+            name: "HostLocalCond".into(),
+            description: "".into(),
+            present: true,
+            provenance: p.clone(),
+        },
+        Op::AddCondition {
+            id: cond_outer_tree,
+            name: "OuterTreeCond".into(),
+            description: "".into(),
+            present: true,
+            provenance: p.clone(),
+        },
+        Op::AddCondition {
+            id: cond_bnd_a,
+            name: "BndACond".into(),
+            description: "".into(),
+            present: true,
+            provenance: p.clone(),
+        },
+        Op::AddCondition {
+            id: cond_bnd_b,
+            name: "BndBCond".into(),
+            description: "".into(),
+            present: true,
+            provenance: p.clone(),
+        },
+        Op::AddCondition {
+            id: cond_frag_tree,
+            name: "FragTreeCond".into(),
+            description: "".into(),
+            present: true,
+            provenance: p.clone(),
+        },
+        Op::AddCondition {
+            id: cond_leaf_on,
+            name: "LeafCond".into(),
+            description: "".into(),
+            present: true,
+            provenance: p.clone(),
+        },
+        Op::AddCondition {
+            id: cond_off,
+            name: "CondOff".into(),
+            description: "".into(),
+            present: false,
+            provenance: p.clone(),
+        },
+        Op::AddCondition {
+            id: cond_assump,
+            name: "AssumpCond".into(),
+            description: "".into(),
+            present: true,
+            provenance: p.clone(),
+        },
+        Op::NeedCondition {
+            element: ElementRef::Component(comp_off_id),
+            condition: cond_off,
+            provenance: p.clone(),
+        },
+        Op::AddSecurityControl {
+            id: ctrl_same,
+            name: "CtrlSame".into(),
+            provenance: p.clone(),
+        },
+        Op::SetControlStatus {
+            control: ctrl_same,
+            status: ControlStatus::Implemented,
+            provenance: p.clone(),
+        },
+        Op::AddSecurityControl {
+            id: ctrl_host_plan,
+            name: "CtrlHostPlan".into(),
+            provenance: p.clone(),
+        },
+        Op::SetControlStatus {
+            control: ctrl_host_plan,
+            status: ControlStatus::Planned,
+            provenance: p.clone(),
+        },
+        Op::AddSecurityControl {
+            id: ctrl_inner_plan,
+            name: "CtrlInnerPlan".into(),
+            provenance: p.clone(),
+        },
+        Op::SetControlStatus {
+            control: ctrl_inner_plan,
+            status: ControlStatus::Planned,
+            provenance: p.clone(),
+        },
+        Op::AddSecurityControl {
+            id: ctrl_off,
+            name: "CtrlOff".into(),
+            provenance: p.clone(),
+        },
+        Op::SetControlStatus {
+            control: ctrl_off,
+            status: ControlStatus::Off,
+            provenance: p.clone(),
+        },
+        Op::AddSecurityControl {
+            id: ctrl_via,
+            name: "CtrlVia".into(),
+            provenance: p.clone(),
+        },
+        Op::SetControlStatus {
+            control: ctrl_via,
+            status: ControlStatus::Planned,
+            provenance: p.clone(),
+        },
+        Op::SetControlRule {
+            control: ctrl_via,
+            attack_type: atk_type,
+            ceiling: Some(low),
+            provenance: p.clone(),
+        },
+        Op::ApplyControl {
+            control: ctrl_via,
+            target: ItemRef::Component(comp_id),
+            provenance: p.clone(),
+        },
+        Op::AddAssumption {
+            id: assump_host,
+            name: "AssumpHost".into(),
+            holds: false,
+            provenance: p.clone(),
+        },
+        Op::NeedCondition {
+            element: ElementRef::Assumption(assump_host),
+            condition: cond_assump,
+            provenance: p.clone(),
+        },
+        Op::AddAssumption {
+            id: assump_frag_tree,
+            name: "AssumpFragTree".into(),
+            holds: true,
+            provenance: p.clone(),
+        },
+        Op::SetAttackFilter {
+            filter: AttackFilter::default().without(factor, flevel_excl),
+            provenance: p.clone(),
+        },
+        Op::AddSharedStep {
+            id: shared_rich_id,
+            name: "SharedRich".into(),
+            provenance: p.clone(),
+        },
+        Op::SetStepFactor {
+            target: StepTarget::Shared(shared_rich_id),
+            factor,
+            level: Some(flevel_ok),
+            provenance: p.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Shared(shared_rich_id),
+            level: Some(high),
+            provenance: p.clone(),
+        },
+        Op::SetStepVia {
+            target: StepTarget::Shared(shared_rich_id),
+            via: Some(ItemRef::Interface(iface_id)),
+            provenance: p.clone(),
+        },
+        Op::SetStepAttackType {
+            target: StepTarget::Shared(shared_rich_id),
+            attack_type: Some(atk_type),
+            provenance: p.clone(),
+        },
+        Op::AddSharedStep {
+            id: shared_plain_id,
+            name: "SharedPlain".into(),
+            provenance: p.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Shared(shared_plain_id),
+            level: Some(med),
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag_diam_id,
+            tree: frag_diam,
+            step_feasibility: vec![(fd_shared_leaf, high)],
+            provenance: p.clone(),
+        },
+        Op::UseSharedStep {
+            tree: frag_diam_id,
+            node: fd_seq_tail,
+            step: shared_rich_id,
+            provenance: p.clone(),
+        },
+        Op::NeedCondition {
+            element: ElementRef::Tree(frag_diam_id),
+            condition: cond_frag_tree,
+            provenance: p.clone(),
+        },
+        Op::SetStepMitigation {
+            tree: frag_diam_id,
+            node: fd_shared_leaf,
+            control: ctrl_same,
+            feasibility: Some(high),
+            provenance: p.clone(),
+        },
+        Op::SetStepMitigation {
+            tree: frag_diam_id,
+            node: fd_shared_leaf,
+            control: ctrl_inner_plan,
+            feasibility: Some(med),
+            provenance: p.clone(),
+        },
+        Op::NeedStepCondition {
+            tree: frag_diam_id,
+            node: fd_seq_tail,
+            condition: cond_leaf_on,
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag_outer_id,
+            tree: frag_outer,
+            step_feasibility: vec![],
+            provenance: p.clone(),
+        },
+        Op::NeedCondition {
+            element: ElementRef::Tree(frag_outer_id),
+            condition: cond_outer_tree,
+            provenance: p.clone(),
+        },
+        Op::UseFragment {
+            tree: frag_outer_id,
+            node: fo_bnd_a,
+            fragment: frag_diam_id,
+            provenance: p.clone(),
+        },
+        Op::UseFragment {
+            tree: frag_outer_id,
+            node: fo_bnd_b,
+            fragment: frag_diam_id,
+            provenance: p.clone(),
+        },
+        Op::SetStepMitigation {
+            tree: frag_outer_id,
+            node: fo_bnd_a,
+            control: ctrl_same,
+            feasibility: Some(low),
+            provenance: p.clone(),
+        },
+        Op::SetStepMitigation {
+            tree: frag_outer_id,
+            node: fo_bnd_a,
+            control: ctrl_off,
+            feasibility: Some(low),
+            provenance: p.clone(),
+        },
+        Op::NeedStepCondition {
+            tree: frag_outer_id,
+            node: fo_bnd_a,
+            condition: cond_bnd_a,
+            provenance: p.clone(),
+        },
+        Op::SetReviewMark {
+            tree: frag_outer_id,
+            node: fo_bnd_a,
+            marked: true,
+            provenance: p.clone(),
+        },
+        Op::SetStepMitigation {
+            tree: frag_outer_id,
+            node: fo_bnd_b,
+            control: ctrl_same,
+            feasibility: Some(med),
+            provenance: p.clone(),
+        },
+        Op::NeedStepCondition {
+            tree: frag_outer_id,
+            node: fo_bnd_b,
+            condition: cond_bnd_b,
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Threat,
+            id: host_id,
+            tree: host,
+            step_feasibility: vec![(h_sib_l, low), (h_sib_r, low), (h_es0, high), (h_es1, high)],
+            provenance: p.clone(),
+        },
+        Op::SetThreatAttackTree {
+            threat: threat_main_id,
+            tree: Some(host_id),
+            provenance: p.clone(),
+        },
+        Op::SetDescription {
+            target: ElementRef::Tree(host_id),
+            text: "Host desc".into(),
+            provenance: p.clone(),
+        },
+        Op::SetDescriptionTranslation {
+            target: ElementRef::Tree(host_id),
+            lang: "ja".into(),
+            text: "ホスト".into(),
+            provenance: p.clone(),
+        },
+        Op::NeedCondition {
+            element: ElementRef::Tree(host_id),
+            condition: cond_host_tree,
+            provenance: p.clone(),
+        },
+        Op::UseFragment {
+            tree: host_id,
+            node: h_ref,
+            fragment: frag_outer_id,
+            provenance: p.clone(),
+        },
+        Op::NeedStepCondition {
+            tree: host_id,
+            node: h_ref,
+            condition: cond_host_local,
+            provenance: p.clone(),
+        },
+        Op::SetStepMitigation {
+            tree: host_id,
+            node: h_ref,
+            control: ctrl_same,
+            feasibility: Some(med),
+            provenance: p.clone(),
+        },
+        Op::SetStepMitigation {
+            tree: host_id,
+            node: h_ref,
+            control: ctrl_host_plan,
+            feasibility: Some(low),
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Threat,
+            id: sib_consumer_id,
+            tree: sib_con2,
+            step_feasibility: vec![
+                (sc_sib_l, low),
+                (sc_sib_r, low),
+                (sc_es0, high),
+                (sc_es1, high),
+            ],
+            provenance: p.clone(),
+        },
+        Op::UseFragment {
+            tree: sib_consumer_id,
+            node: sc_ref2,
+            fragment: frag_outer_id,
+            provenance: p.clone(),
+        },
+        Op::NeedStepCondition {
+            tree: sib_consumer_id,
+            node: sc_ref2,
+            condition: cond_host_local,
+            provenance: p.clone(),
+        },
+        Op::SetStepMitigation {
+            tree: sib_consumer_id,
+            node: sc_ref2,
+            control: ctrl_same,
+            feasibility: Some(med),
+            provenance: p.clone(),
+        },
+        Op::SetStepMitigation {
+            tree: sib_consumer_id,
+            node: sc_ref2,
+            control: ctrl_host_plan,
+            feasibility: Some(low),
+            provenance: p.clone(),
+        },
+        Op::SetAssumptionExcludes {
+            id: assump_host,
+            trees: vec![],
+            steps: vec![
+                StepRef {
+                    tree: host_id,
+                    node: h_ref,
+                },
+                StepRef {
+                    tree: sib_consumer_id,
+                    node: sc_ref2,
+                },
+            ],
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Threat,
+            id: root_threat_id,
+            tree: root_threat,
+            step_feasibility: vec![],
+            provenance: p.clone(),
+        },
+        Op::SetThreatAttackTree {
+            threat: threat_root_id,
+            tree: Some(root_threat_id),
+            provenance: p.clone(),
+        },
+        Op::SetDescription {
+            target: ElementRef::Tree(root_threat_id),
+            text: "Root threat desc".into(),
+            provenance: p.clone(),
+        },
+        Op::NeedCondition {
+            element: ElementRef::Tree(root_threat_id),
+            condition: cond_host_tree,
+            provenance: p.clone(),
+        },
+        Op::UseFragment {
+            tree: root_threat_id,
+            node: rt_node,
+            fragment: frag_outer_id,
+            provenance: p.clone(),
+        },
+        Op::SetReviewMark {
+            tree: root_threat_id,
+            node: rt_node,
+            marked: true,
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag_host_id,
+            tree: frag_host,
+            step_feasibility: vec![],
+            provenance: p.clone(),
+        },
+        Op::UseFragment {
+            tree: frag_host_id,
+            node: fh_node,
+            fragment: frag_diam_id,
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Threat,
+            id: frag_con_id,
+            tree: frag_con,
+            step_feasibility: vec![],
+            provenance: p.clone(),
+        },
+        Op::UseFragment {
+            tree: frag_con_id,
+            node: fc_ref,
+            fragment: frag_host_id,
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag_single_step_id,
+            tree: frag_single_step,
+            step_feasibility: vec![(fss_node, high)],
+            provenance: p.clone(),
+        },
+        Op::SetStepFactor {
+            target: StepTarget::Step(frag_single_step_id, fss_node),
+            factor,
+            level: Some(flevel_ok),
+            provenance: p.clone(),
+        },
+        Op::SetStepVia {
+            target: StepTarget::Step(frag_single_step_id, fss_node),
+            via: Some(ItemRef::Interface(iface_id)),
+            provenance: p.clone(),
+        },
+        Op::SetStepAttackType {
+            target: StepTarget::Step(frag_single_step_id, fss_node),
+            attack_type: Some(atk_type),
+            provenance: p.clone(),
+        },
+        Op::NeedCondition {
+            element: ElementRef::Tree(frag_single_step_id),
+            condition: cond_frag_tree,
+            provenance: p.clone(),
+        },
+        Op::SetStepMitigation {
+            tree: frag_single_step_id,
+            node: fss_node,
+            control: ctrl_same,
+            feasibility: Some(high),
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag_single_shared_id,
+            tree: frag_single_shared,
+            step_feasibility: vec![],
+            provenance: p.clone(),
+        },
+        Op::UseSharedStep {
+            tree: frag_single_shared_id,
+            node: fssh_node,
+            step: shared_rich_id,
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag_unrated_id,
+            tree: frag_unrated,
+            step_feasibility: vec![],
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Threat,
+            id: single_host_id,
+            tree: single_host,
+            step_feasibility: vec![],
+            provenance: p.clone(),
+        },
+        Op::UseFragment {
+            tree: single_host_id,
+            node: sh_plain,
+            fragment: frag_single_step_id,
+            provenance: p.clone(),
+        },
+        Op::NeedStepCondition {
+            tree: single_host_id,
+            node: sh_plain,
+            condition: cond_host_local,
+            provenance: p.clone(),
+        },
+        Op::SetStepMitigation {
+            tree: single_host_id,
+            node: sh_plain,
+            control: ctrl_same,
+            feasibility: Some(low),
+            provenance: p.clone(),
+        },
+        Op::SetReviewMark {
+            tree: single_host_id,
+            node: sh_plain,
+            marked: true,
+            provenance: p.clone(),
+        },
+        Op::UseFragment {
+            tree: single_host_id,
+            node: sh_shared,
+            fragment: frag_single_shared_id,
+            provenance: p.clone(),
+        },
+        Op::UseFragment {
+            tree: single_host_id,
+            node: sh_unrated,
+            fragment: frag_unrated_id,
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag_excl_id,
+            tree: frag_excl,
+            step_feasibility: vec![
+                (fe_cond, high),
+                (fe_via, high),
+                (fe_factor, high),
+                (fe_assump, med),
+                (fe_ok, low),
+            ],
+            provenance: p.clone(),
+        },
+        Op::NeedStepCondition {
+            tree: frag_excl_id,
+            node: fe_cond,
+            condition: cond_off,
+            provenance: p.clone(),
+        },
+        Op::SetStepVia {
+            target: StepTarget::Step(frag_excl_id, fe_via),
+            via: Some(ItemRef::Component(comp_off_id)),
+            provenance: p.clone(),
+        },
+        Op::SetStepFactor {
+            target: StepTarget::Step(frag_excl_id, fe_factor),
+            factor,
+            level: Some(flevel_excl),
+            provenance: p.clone(),
+        },
+        Op::SetAssumptionExcludes {
+            id: assump_frag_tree,
+            trees: vec![],
+            steps: vec![StepRef {
+                tree: frag_excl_id,
+                node: fe_assump,
+            }],
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Threat,
+            id: excl_host_id,
+            tree: excl_host,
+            step_feasibility: vec![],
+            provenance: p.clone(),
+        },
+        Op::UseFragment {
+            tree: excl_host_id,
+            node: eh_ref,
+            fragment: frag_excl_id,
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Threat,
+            id: big_host_id,
+            tree: big_host,
+            step_feasibility: vec![],
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Threat,
+            id: plain_shared_host_id,
+            tree: plain_shared_host,
+            step_feasibility: vec![],
+            provenance: p.clone(),
+        },
+        Op::UseSharedStep {
+            tree: plain_shared_host_id,
+            node: psh_shared,
+            step: shared_plain_id,
+            provenance: p.clone(),
+        },
+        Op::UseFragment {
+            tree: plain_shared_host_id,
+            node: psh_detach,
+            fragment: frag_single_step_id,
+            provenance: p.clone(),
+        },
+    ];
+    // Add big_frag (40 nodes) + depth-8 chain fragment.
+    setup.extend(add_tree_skeleton_ops(
+        TreeRole::Fragment,
+        big_frag_id,
+        &big_frag,
+        &p,
+    ));
+    for (idx, lid) in bf_leaves.iter().enumerate() {
+        setup.push(Op::SetStepFeasibility {
+            target: StepTarget::Step(big_frag_id, *lid),
+            level: Some(if idx % 2 == 0 { low } else { high }),
+            provenance: p.clone(),
+        });
+    }
+    setup.push(Op::UseFragment {
+        tree: big_host_id,
+        node: bh_ref,
+        fragment: big_frag_id,
+        provenance: p.clone(),
+    });
+    let mut chain = vec![frag_single_step_id];
+    for d in 2..=MAX_FRAGMENT_DEPTH {
+        let tid = TreeId::new_v7();
+        let rn = NodeId::new_v7();
+        let mut ft = AttackTree::new(rn, Node::gate(GateKind::Or, format!("D{d}"))).unwrap();
+        let ch = NodeId::new_v7();
+        ft.add_child(ft.root(), ch, Node::step(format!("D{d}Child")))
+            .unwrap();
+        setup.push(Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: tid,
+            tree: ft,
+            step_feasibility: vec![],
+            provenance: p.clone(),
+        });
+        setup.push(Op::UseFragment {
+            tree: tid,
+            node: ch,
+            fragment: *chain.last().unwrap(),
+            provenance: p.clone(),
+        });
+        chain.push(tid);
+    }
+    let d8_host_id = TreeId::new_v7();
+    let d8_node = NodeId::new_v7();
+    setup.push(Op::AddAttackTree {
+        role: TreeRole::Threat,
+        id: d8_host_id,
+        tree: AttackTree::new(d8_node, Node::step("D8HostRef")).unwrap(),
+        step_feasibility: vec![],
+        provenance: p.clone(),
+    });
+    setup.push(Op::UseFragment {
+        tree: d8_host_id,
+        node: d8_node,
+        fragment: *chain.last().unwrap(),
+        provenance: p.clone(),
+    });
+
+    for batch in setup.chunks(400) {
+        setup_ws.apply(batch.to_vec(), Origin::Edit).expect("setup");
+    }
+    let snap = saved(setup_ws.project());
+    let loaded_snap = Project::load(snap.as_slice(), Arc::clone(&m)).expect("snap load");
+    let ws_files = loaded_snap.to_workspace_files().expect("to_ws");
+    let loaded_proj = Project::from_workspace_files(
+        ws_files
+            .iter()
+            .map(|f| (f.path.as_str(), f.bytes.as_slice())),
+        Arc::clone(&m),
+    )
+    .expect("from_ws");
+
+    let make_ws = || {
+        let mut ws = Workspace::new(loaded_proj.clone(), 0);
+        let prior_ops = Edit::RenameTreeNode {
+            tree: host_id,
+            node: h_sib_l,
+            label: "SibLeft renamed".into(),
+        }
+        .to_ops(ws.project(), "prior-editor", 10)
+        .expect("prior");
+        ws.apply(prior_ops, Origin::Edit).expect("prior apply");
+        ws
+    };
+
+    // 1. Nested diamond + differing boundary overlays + multi-parent + equal-control merging
+    //    + live control/condition/assumption transitions + post-Unshare source mutation isolation.
+    {
+        let mut ws = make_ws();
+        verify_unshare_fragment(&mut ws, host_id, h_ref);
+
+        let p_after = ws.project();
+        let h_idx = p_after.attack_tree_idx(&host_id).unwrap();
+        let h_tree = p_after.attack_tree(h_idx).unwrap();
+        let ref_idx = h_tree.idx_of(&h_ref).unwrap();
+        assert_eq!(
+            parent_positions(p_after, host_id, h_ref),
+            vec![(h_root, 1), (h_extra, 1)]
+        );
+        let bnds: Vec<_> = h_tree
+            .children(ref_idx)
+            .iter()
+            .map(|&c| (c, h_tree.get(c).unwrap().label()))
+            .collect();
+        assert_eq!(bnds.len(), 2);
+        assert_eq!(bnds[0].1, "DiamRoot");
+        assert_eq!(bnds[1].1, "DiamRoot");
+
+        let ctrl_same_idx = p_after.security_control_idx(&ctrl_same).unwrap();
+        let check_boundary = |bnd_idx: NodeIdx,
+                              expect_same_ceil: FeasibilityLevel,
+                              expect_mark: bool,
+                              extra_cond: ConditionId| {
+            let mut leaves = Vec::new();
+            let mut stack = vec![bnd_idx];
+            let mut seen = HashSet::new();
+            while let Some(ni) = stack.pop() {
+                if !seen.insert(ni) {
+                    continue;
+                }
+                let node = h_tree.get(ni).unwrap();
+                if node.gate_kind().is_none() {
+                    leaves.push((ni, node.label()));
+                } else {
+                    for &c in h_tree.children(ni) {
+                        stack.push(c);
+                    }
+                }
+            }
+            assert_eq!(leaves.len(), 2);
+            for (li, lbl) in leaves {
+                let lid = h_tree.id_of(li).unwrap();
+                assert_eq!(p_after.review_marked(host_id, lid), expect_mark);
+                let cond_ids: HashSet<ConditionId> = p_after
+                    .step_condition_link_ids(host_id, lid)
+                    .iter()
+                    .filter_map(|&ci| p_after.condition_id(ci))
+                    .collect();
+                assert!(cond_ids.contains(&cond_host_local));
+                assert!(cond_ids.contains(&cond_outer_tree));
+                assert!(cond_ids.contains(&cond_frag_tree));
+                assert!(cond_ids.contains(&extra_cond));
+                let same_mit = p_after
+                    .step_mitigations(h_idx, li)
+                    .iter()
+                    .find(|mt| mt.control() == ctrl_same_idx)
+                    .expect("ctrl_same");
+                assert_eq!(same_mit.feasibility(), expect_same_ceil);
+                if lbl == "SeqTail" {
+                    assert!(cond_ids.contains(&cond_leaf_on));
+                    assert_eq!(
+                        p_after.step_factors(h_idx, li).collect::<Vec<_>>(),
+                        vec![(factor, flevel_ok)]
+                    );
+                    assert_eq!(
+                        p_after.step_via(h_idx, li),
+                        Some(ItemRef::Interface(iface_id))
+                    );
+                    assert_eq!(p_after.step_attack_type(h_idx, li), Some(atk_type));
+                }
+            }
+        };
+        check_boundary(bnds[0].0, low, true, cond_bnd_a);
+        check_boundary(bnds[1].0, med, false, cond_bnd_b);
+
+        // Active-control & exclusion transitions after Unshare match BOTH IndependentFold and sibling consumer.
+        let transitions = vec![
+            Edit::SetControlStatus {
+                control: ctrl_host_plan,
+                status: ControlStatus::Implemented,
+            },
+            Edit::SetControlStatus {
+                control: ctrl_same,
+                status: ControlStatus::Off,
+            },
+            Edit::SetConditionPresent {
+                condition: cond_bnd_a,
+                present: false,
+            },
+            Edit::SetAssumptionHolds {
+                assumption: assump_host,
+                holds: true,
+            },
+            Edit::SetAssumptionHolds {
+                assumption: assump_host,
+                holds: false,
+            },
+            Edit::SetConditionPresent {
+                condition: cond_bnd_a,
+                present: true,
+            },
+            Edit::SetConditionPresent {
+                condition: cond_outer_tree,
+                present: false,
+            },
+            Edit::SetConditionPresent {
+                condition: cond_outer_tree,
+                present: true,
+            },
+            Edit::SetControlStatus {
+                control: ctrl_same,
+                status: ControlStatus::Implemented,
+            },
+            Edit::SetControlStatus {
+                control: ctrl_host_plan,
+                status: ControlStatus::Planned,
+            },
+        ];
+        for (step_no, ed) in transitions.into_iter().enumerate() {
+            let tops = ed
+                .to_ops(ws.project(), "trans", 500 + step_no as u64)
+                .unwrap();
+            ws.apply(tops, Origin::Edit).unwrap();
+            assert_fold_matches(ws.project(), host_id, sib_consumer_id);
+        }
+
+        // Source rating and structure edits AFTER Unshare do NOT alter copied host structure or values.
+        let before_host_eval = eval_outcome_pair(&ws, host_id);
+        let src_edits = vec![
+            Op::SetStepFeasibility {
+                target: StepTarget::Shared(shared_rich_id),
+                level: Some(low),
+                provenance: p.clone(),
+            },
+            Op::SetStepVia {
+                target: StepTarget::Shared(shared_rich_id),
+                via: None,
+                provenance: p.clone(),
+            },
+            Op::SetStepMitigation {
+                tree: frag_diam_id,
+                node: fd_shared_leaf,
+                control: ctrl_same,
+                feasibility: Some(low),
+                provenance: p.clone(),
+            },
+            Op::AddTreeNode {
+                tree: frag_diam_id,
+                parent: fd_left,
+                id: NodeId::new_v7(),
+                node: Node::step("ExtraSourceLeaf"),
+                index: 5,
+                position: 1,
+                provenance: p.clone(),
+            },
+            Op::SetTreeNodeGate {
+                tree: frag_outer_id,
+                id: fo_root,
+                gate: GateKind::And,
+                provenance: p.clone(),
+            },
+        ];
+        ws.apply(src_edits, Origin::Edit).expect("source mutations");
+        assert_eq!(eval_outcome_pair(&ws, host_id), before_host_eval);
+        let mut oracle = IndependentFold::new(ws.project());
+        assert_eq!(
+            (
+                oracle.fold_tree(host_id, false),
+                oracle.fold_tree(host_id, true)
+            ),
+            before_host_eval
+        );
+    }
+
+    // 2. Host ROOT fragment references (Threat root + Fragment root with consumer).
+    for (tree_id, node_id) in [(root_threat_id, rt_node), (frag_host_id, fh_node)] {
+        let mut ws = make_ws();
+        verify_unshare_fragment(&mut ws, tree_id, node_id);
+        if tree_id == frag_host_id {
+            assert_fold_matches(ws.project(), frag_con_id, frag_host_id);
+        }
+    }
+
+    // 3. Target single-Step roots stay host Steps with raw fields & merged overlays; unrated copied unrated.
+    {
+        let mut ws = make_ws();
+        verify_unshare_fragment(&mut ws, single_host_id, sh_plain);
+        verify_unshare_fragment(&mut ws, single_host_id, sh_shared);
+        verify_unshare_fragment(&mut ws, single_host_id, sh_unrated);
+
+        let proj = ws.project();
+        let si = proj.attack_tree_idx(&single_host_id).unwrap();
+        let st = proj.attack_tree(si).unwrap();
+        for (nid, expect_feas, expect_mit) in [
+            (sh_plain, Some(high), true),
+            (sh_shared, Some(high), false),
+            (sh_unrated, None, false),
+        ] {
+            let ni = st.idx_of(&nid).unwrap();
+            assert_eq!(st.get(ni).unwrap().gate_kind(), None);
+            assert_eq!(proj.step_fragment(si, ni), None);
+            assert_eq!(proj.step_shared(si, ni), None);
+            assert_eq!(proj.step_feasibility(si, ni), expect_feas);
+            if expect_feas.is_some() {
+                assert_eq!(
+                    proj.step_factors(si, ni).collect::<Vec<_>>(),
+                    vec![(factor, flevel_ok)]
+                );
+                assert_eq!(proj.step_via(si, ni), Some(ItemRef::Interface(iface_id)));
+                assert_eq!(proj.step_attack_type(si, ni), Some(atk_type));
+            } else {
+                assert_eq!(proj.step_factors(si, ni).next(), None);
+                assert_eq!(proj.step_via(si, ni), None);
+                assert_eq!(proj.step_attack_type(si, ni), None);
+            }
+            assert_eq!(!proj.step_mitigations(si, ni).is_empty(), expect_mit);
+        }
+    }
+
+    // 4. Excluded/unrated multi-leaf fragment (last user!) copies all states without inventing values.
+    {
+        let mut ws = make_ws();
+        verify_unshare_fragment(&mut ws, excl_host_id, eh_ref);
+        assert!(ws.project().attack_tree_idx(&frag_excl_id).is_some());
+        let ei = ws.project().attack_tree_idx(&excl_host_id).unwrap();
+        let et = ws.project().attack_tree(ei).unwrap();
+        let unrated_idx = et
+            .iter()
+            .find_map(|(ni, _, n)| (n.label() == "ExUnrated").then_some(ni))
+            .unwrap();
+        assert_eq!(ws.project().step_feasibility(ei, unrated_idx), None);
+        assert_eq!(
+            eval_outcome_pair(&ws, excl_host_id),
+            (FoldOutcome::Unrated, FoldOutcome::Unrated)
+        );
+    }
+
+    // 5. >32-node target fragment AND exact depth-8 Unshare.
+    {
+        let mut ws = make_ws();
+        verify_unshare_fragment(&mut ws, big_host_id, bh_ref);
+        let bi = ws.project().attack_tree_idx(&big_host_id).unwrap();
+        assert!(ws.project().attack_tree(bi).unwrap().len() > 32);
+        verify_unshare_fragment(&mut ws, d8_host_id, d8_node);
+    }
+
+    // 6. Existing SharedStep Unshare and plain 1-op Edit::UnuseFragment remain intact.
+    {
+        let mut ws = make_ws();
+        let sh_ops = Edit::Unshare {
+            tree: plain_shared_host_id,
+            node: psh_shared,
+        }
+        .to_ops(ws.project(), "sh-unshare", 99)
+        .expect("shared unshare");
+        ws.apply(sh_ops, Origin::Edit)
+            .expect("apply shared unshare");
+        let pi = ws.project().attack_tree_idx(&plain_shared_host_id).unwrap();
+        let pt = ws.project().attack_tree(pi).unwrap();
+        let si = pt.idx_of(&psh_shared).unwrap();
+        assert_eq!(ws.project().step_shared(pi, si), None);
+        assert_eq!(ws.project().step_feasibility(pi, si), Some(med));
+        assert!(ws.project().shared_step_idx(&shared_plain_id).is_some());
+
+        let unuse_ops = Edit::UnuseFragment {
+            tree: plain_shared_host_id,
+            node: psh_detach,
+        }
+        .to_ops(ws.project(), "unuse", 100)
+        .expect("unuse");
+        assert_eq!(unuse_ops.len(), 1);
+        ws.apply(unuse_ops, Origin::Edit).expect("apply unuse");
+        let pt = ws.project().attack_tree(pi).unwrap();
+        let di = pt.idx_of(&psh_detach).unwrap();
+        assert_eq!(ws.project().step_fragment(pi, di), None);
+        assert_eq!(ws.project().step_feasibility(pi, di), None);
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn unshare_fragment_caps_and_guards_fail_atomically() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let mut ws = Workspace::empty(Arc::clone(&m));
+    let p = Provenance::human("unshare-caps", 1421);
+    let low = m.feasibility_level("low").expect("low");
+
+    let conds: Vec<ConditionId> = (0..17).map(|_| ConditionId::new_v7()).collect();
+    let ctrls: Vec<ControlId> = (0..17).map(|_| ControlId::new_v7()).collect();
+    let mut setup = Vec::new();
+    for (i, &cid) in conds.iter().enumerate() {
+        setup.push(Op::AddCondition {
+            id: cid,
+            name: format!("C{i}").into(),
+            description: "".into(),
+            present: true,
+            provenance: p.clone(),
+        });
+    }
+    for (i, &kid) in ctrls.iter().enumerate() {
+        setup.push(Op::AddSecurityControl {
+            id: kid,
+            name: format!("Ctrl{i}").into(),
+            provenance: p.clone(),
+        });
+    }
+
+    // 1-step fragment (`frag_1`), 2-node gate fragment (`frag_2`), 2-leaf gate fragment (`frag_2l`).
+    let frag_1 = TreeId::new_v7();
+    let f1_r = NodeId::new_v7();
+    let frag_2 = TreeId::new_v7();
+    let (f2_r, f2_l) = (NodeId::new_v7(), NodeId::new_v7());
+    let mut f2_t = AttackTree::new(f2_r, Node::gate(GateKind::Or, "F2")).unwrap();
+    f2_t.add_child(f2_t.root(), f2_l, Node::step("F2Leaf"))
+        .unwrap();
+    let frag_2l = TreeId::new_v7();
+    let (f2l_r, f2l_a, f2l_b) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    let mut f2l_t = AttackTree::new(f2l_r, Node::gate(GateKind::Or, "F2L")).unwrap();
+    f2l_t
+        .add_child(f2l_t.root(), f2l_a, Node::step("A"))
+        .unwrap();
+    f2l_t
+        .add_child(f2l_t.root(), f2l_b, Node::step("B"))
+        .unwrap();
+
+    // Fragment with 10 conditions and 10 mitigations for metadata merge cap tests.
+    let frag_meta = TreeId::new_v7();
+    let fm_r = NodeId::new_v7();
+    setup.push(Op::AddAttackTree {
+        role: TreeRole::Fragment,
+        id: frag_1,
+        tree: AttackTree::new(f1_r, Node::step("F1")).unwrap(),
+        step_feasibility: vec![(f1_r, low)],
+        provenance: p.clone(),
+    });
+    // Exponential depth-5 chain exceeding MAX_ATTACK_TREE_NODES (6^5 = 7776 > 4096).
+    let mut exp_chain = vec![frag_1];
+    for lvl in 0..5 {
+        let tid = TreeId::new_v7();
+        let rn = NodeId::new_v7();
+        let mut ft = AttackTree::new(rn, Node::gate(GateKind::Or, format!("Exp{lvl}"))).unwrap();
+        let mut refs = Vec::new();
+        for k in 0..6 {
+            let ch = NodeId::new_v7();
+            ft.add_child(ft.root(), ch, Node::step(format!("E{lvl}_{k}")))
+                .unwrap();
+            refs.push(ch);
+        }
+        setup.push(Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: tid,
+            tree: ft,
+            step_feasibility: vec![],
+            provenance: p.clone(),
+        });
+        for ch in refs {
+            setup.push(Op::UseFragment {
+                tree: tid,
+                node: ch,
+                fragment: *exp_chain.last().unwrap(),
+                provenance: p.clone(),
+            });
+        }
+        exp_chain.push(tid);
+    }
+
+    // Large 350-node annotated fragment so Unshare emits > MAX_SUBMIT_OPS (1024).
+    let frag_huge = TreeId::new_v7();
+    let fh_r = NodeId::new_v7();
+    let mut fh_t = AttackTree::new(fh_r, Node::gate(GateKind::Or, "HugeFrag")).unwrap();
+    let mut fh_leaves = Vec::new();
+    for i in 0..350 {
+        let ch = NodeId::new_v7();
+        fh_t.add_child(fh_t.root(), ch, Node::step(format!("HF{i}")))
+            .unwrap();
+        fh_leaves.push(ch);
+    }
+
+    // Host tree (`host`) with test slots for metadata caps, assumption caps, exponential ref, and huge ref.
+    let host = TreeId::new_v7();
+    let (h_r, h_plain, h_c_over, h_c_ok, h_m_over, h_m_ok, h_exp, h_huge, h_as_step, h_as_tree) = (
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+    );
+    let mut h_t = AttackTree::new(h_r, Node::gate(GateKind::Or, "HostCaps")).unwrap();
+    for (nid, lbl) in [
+        (h_plain, "Plain"),
+        (h_c_over, "COver"),
+        (h_c_ok, "COk"),
+        (h_m_over, "MOver"),
+        (h_m_ok, "MOk"),
+        (h_exp, "Exp"),
+        (h_huge, "Huge"),
+        (h_as_step, "AsStep"),
+        (h_as_tree, "AsTree"),
+    ] {
+        h_t.add_child(h_t.root(), nid, Node::step(lbl)).unwrap();
+    }
+    let mut filler = Vec::new();
+    for i in 0..255 {
+        let fid = NodeId::new_v7();
+        h_t.add_child(h_t.root(), fid, Node::step(format!("Fill{i}")))
+            .unwrap();
+        filler.push(StepRef {
+            tree: host,
+            node: fid,
+        });
+    }
+
+    let frag_tree_excl = TreeId::new_v7();
+    let fte_r = NodeId::new_v7();
+    setup.extend([
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag_2,
+            tree: f2_t,
+            step_feasibility: vec![(f2_l, low)],
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag_2l,
+            tree: f2l_t,
+            step_feasibility: vec![(f2l_a, low), (f2l_b, low)],
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag_meta,
+            tree: AttackTree::new(fm_r, Node::step("FM")).unwrap(),
+            step_feasibility: vec![(fm_r, low)],
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag_tree_excl,
+            tree: AttackTree::new(fte_r, Node::step("FTE")).unwrap(),
+            step_feasibility: vec![(fte_r, low)],
+            provenance: p.clone(),
+        },
+    ]);
+    for batch in add_tree_skeleton_ops(TreeRole::Threat, host, &h_t, &p).chunks(400) {
+        ws.apply(batch.to_vec(), Origin::Edit).expect("host");
+    }
+    for &c in &conds[0..10] {
+        setup.push(Op::NeedStepCondition {
+            tree: frag_meta,
+            node: fm_r,
+            condition: c,
+            provenance: p.clone(),
+        });
+    }
+    for &ctrl in &ctrls[0..10] {
+        setup.push(Op::SetStepMitigation {
+            tree: frag_meta,
+            node: fm_r,
+            control: ctrl,
+            feasibility: Some(low),
+            provenance: p.clone(),
+        });
+    }
+    for (nid, fid) in [
+        (h_c_over, frag_meta),
+        (h_c_ok, frag_meta),
+        (h_m_over, frag_meta),
+        (h_m_ok, frag_meta),
+        (h_exp, *exp_chain.last().unwrap()),
+        (h_huge, frag_huge),
+        (h_as_step, frag_2l),
+        (h_as_tree, frag_tree_excl),
+    ] {
+        if nid != h_huge {
+            setup.push(Op::UseFragment {
+                tree: host,
+                node: nid,
+                fragment: fid,
+                provenance: p.clone(),
+            });
+        }
+    }
+    for &c in &conds[10..17] {
+        setup.push(Op::NeedStepCondition {
+            tree: host,
+            node: h_c_over,
+            condition: c,
+            provenance: p.clone(),
+        });
+    }
+    for &c in &conds[6..16] {
+        setup.push(Op::NeedStepCondition {
+            tree: host,
+            node: h_c_ok,
+            condition: c,
+            provenance: p.clone(),
+        });
+    }
+    for &ctrl in &ctrls[10..17] {
+        setup.push(Op::SetStepMitigation {
+            tree: host,
+            node: h_m_over,
+            control: ctrl,
+            feasibility: Some(low),
+            provenance: p.clone(),
+        });
+    }
+    for &ctrl in &ctrls[6..16] {
+        setup.push(Op::SetStepMitigation {
+            tree: host,
+            node: h_m_ok,
+            control: ctrl,
+            feasibility: Some(low),
+            provenance: p.clone(),
+        });
+    }
+
+    let a_step = AssumptionId::new_v7();
+    let a_tree = AssumptionId::new_v7();
+    let mut step_list = filler.clone();
+    step_list.push(StepRef {
+        tree: host,
+        node: h_as_step,
+    });
+    setup.extend([
+        Op::AddAssumption {
+            id: a_step,
+            name: "CapStep".into(),
+            holds: true,
+            provenance: p.clone(),
+        },
+        Op::SetAssumptionExcludes {
+            id: a_step,
+            trees: vec![],
+            steps: step_list,
+            provenance: p.clone(),
+        },
+        Op::AddAssumption {
+            id: a_tree,
+            name: "CapTree".into(),
+            holds: true,
+            provenance: p.clone(),
+        },
+        Op::SetAssumptionExcludes {
+            id: a_tree,
+            trees: vec![frag_tree_excl],
+            steps: filler,
+            provenance: p.clone(),
+        },
+    ]);
+
+    for batch in setup.chunks(400) {
+        ws.apply(batch.to_vec(), Origin::Edit).expect("setup");
+    }
+    for batch in add_tree_skeleton_ops(TreeRole::Fragment, frag_huge, &fh_t, &p).chunks(400) {
+        ws.apply(batch.to_vec(), Origin::Edit).expect("frag_huge");
+    }
+    let mut huge_meta = Vec::new();
+    for lid in fh_leaves {
+        huge_meta.push(Op::SetStepFeasibility {
+            target: StepTarget::Step(frag_huge, lid),
+            level: Some(low),
+            provenance: p.clone(),
+        });
+        huge_meta.push(Op::NeedStepCondition {
+            tree: frag_huge,
+            node: lid,
+            condition: conds[0],
+            provenance: p.clone(),
+        });
+        huge_meta.push(Op::SetReviewMark {
+            tree: frag_huge,
+            node: lid,
+            marked: true,
+            provenance: p.clone(),
+        });
+    }
+    for batch in huge_meta.chunks(400) {
+        ws.apply(batch.to_vec(), Origin::Edit).expect("huge_meta");
+    }
+    ws.apply(
+        vec![Op::UseFragment {
+            tree: host,
+            node: h_huge,
+            fragment: frag_huge,
+            provenance: p.clone(),
+        }],
+        Origin::Edit,
+    )
+    .expect("use huge");
+
+    // Host tree at exact MAX_ATTACK_TREE_NODES (4096).
+    let max_host = TreeId::new_v7();
+    let (mh_r, mh_ref2, mh_ref1) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    let mut mh_t = AttackTree::new(mh_r, Node::gate(GateKind::Or, "MaxHost")).unwrap();
+    mh_t.add_child(mh_t.root(), mh_ref2, Node::step("MaxRef2"))
+        .unwrap();
+    mh_t.add_child(mh_t.root(), mh_ref1, Node::step("MaxRef1"))
+        .unwrap();
+    for i in 0..(MAX_ATTACK_TREE_NODES - 3) {
+        let ch = NodeId::new_v7();
+        mh_t.add_child(mh_t.root(), ch, Node::step(format!("M{i}")))
+            .unwrap();
+    }
+    for batch in add_tree_skeleton_ops(TreeRole::Threat, max_host, &mh_t, &p).chunks(400) {
+        ws.apply(batch.to_vec(), Origin::Edit).expect("max_host");
+    }
+    ws.apply(
+        vec![
+            Op::UseFragment {
+                tree: max_host,
+                node: mh_ref2,
+                fragment: frag_2,
+                provenance: p.clone(),
+            },
+            Op::UseFragment {
+                tree: max_host,
+                node: mh_ref1,
+                fragment: frag_1,
+                provenance: p.clone(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("use max_host");
+
+    // Pre-existing undo entry & clean pending count before testing failures.
+    let mut ws = Workspace::new(ws.project().clone(), 0);
+    let prior_ops = Edit::RenameTreeNode {
+        tree: host,
+        node: h_plain,
+        label: "Plain renamed".into(),
+    }
+    .to_ops(ws.project(), "prior", 1)
+    .unwrap();
+    ws.apply(prior_ops, Origin::Edit).expect("prior");
+
+    let before_proj = ws.project().clone();
+    let before_bytes = saved(&before_proj);
+    let before_files = before_proj.to_workspace_files().expect("ws files");
+    let before_pending = ws.pending_batches();
+    let before_undo_len = ws.edits().count();
+    let before_label = ws.undo_label().expect("prior label").clone();
+
+    let assert_intact = |ws: &Workspace| {
+        assert!(ws.project() == &before_proj);
+        assert_eq!(saved(ws.project()), before_bytes);
+        assert_eq!(
+            ws.project().to_workspace_files().expect("ws files"),
+            before_files
+        );
+        assert_eq!(ws.pending_batches(), before_pending);
+        assert_eq!(ws.edits().count(), before_undo_len);
+        assert_eq!(ws.undo_label(), Some(&before_label));
+    };
+
+    // 1. Invalid selections -> EditError::Missing.
+    for (t, n) in [
+        (TreeId::new_v7(), h_plain),
+        (host, NodeId::new_v7()),
+        (host, h_r),
+        (host, h_plain),
+    ] {
+        assert_eq!(
+            Edit::Unshare { tree: t, node: n }.to_ops(ws.project(), "ed", 2),
+            Err(EditError::Missing)
+        );
+    }
+
+    // 2. Cap overflows fail in to_ops before mutation.
+    for ((t, n), expect_res, expect_max) in [
+        ((max_host, mh_ref2), "nodes", MAX_ATTACK_TREE_NODES),
+        ((host, h_exp), "nodes", MAX_ATTACK_TREE_NODES),
+        (
+            (host, h_c_over),
+            "step_conditions",
+            MAX_CONDITIONS_PER_ELEMENT,
+        ),
+        ((host, h_m_over), "step_mitigations", MAX_STEP_MITIGATIONS),
+        (
+            (host, h_as_step),
+            "assumption_excludes",
+            MAX_ASSUMPTION_EXCLUDES,
+        ),
+        (
+            (host, h_as_tree),
+            "assumption_excludes",
+            MAX_ASSUMPTION_EXCLUDES,
+        ),
+    ] {
+        assert_eq!(
+            Edit::Unshare { tree: t, node: n }.to_ops(ws.project(), "ed", 3),
+            Err(EditError::FragmentCopyLimit {
+                resource: expect_res,
+                max: expect_max
+            }),
+            "expected {expect_res} cap failure"
+        );
+        assert_intact(&ws);
+    }
+
+    // 3. MAX_SUBMIT_OPS overflow fails atomically in Workspace::apply.
+    let huge_ops = Edit::Unshare {
+        tree: host,
+        node: h_huge,
+    }
+    .to_ops(ws.project(), "ed", 4)
+    .expect("huge ops");
+    assert!(huge_ops.len() > MAX_SUBMIT_OPS);
+    assert!(matches!(
+        ws.apply(huge_ops, Origin::Edit),
+        Err(WorkspaceError::TooLarge { .. })
+    ));
+    assert_intact(&ws);
+
+    // 4. Contrasts succeed: 16 overlapping conditions, 16 overlapping mitigations, and 1-step on 4096-node host!
+    for (t, n) in [(host, h_c_ok), (host, h_m_ok), (max_host, mh_ref1)] {
+        let ops = Edit::Unshare { tree: t, node: n }
+            .to_ops(ws.project(), "ed", 5)
+            .expect("contrast ops");
+        ws.apply(ops, Origin::Edit).expect("contrast apply");
+    }
+    assert_eq!(
+        ws.project()
+            .attack_tree(ws.project().attack_tree_idx(&max_host).unwrap())
+            .unwrap()
+            .len(),
+        MAX_ATTACK_TREE_NODES
+    );
+}
+
+fn accept_and_verify_state(
+    ws: &mut Workspace,
+    log_bytes: &mut Vec<u8>,
+    seq: &mut u64,
+    m: &Arc<Methodology>,
+    expected_op_count: Option<usize>,
+) {
+    let sub = ws.next_submission().expect("pending submission");
+    if let Some(n) = expected_op_count {
+        assert_eq!(sub.ops.len(), n, "must submit entire batch atomically");
+    }
+    assert!(
+        ws.next_submission().is_none(),
+        "only one in-flight submission"
+    );
+    let new_seq = *seq + sub.ops.len() as u64;
+    ws.on_accepted(new_seq).expect("on_accepted");
+    assert_eq!(ws.pending_batches(), 0);
+
+    let mut writer = OpLogWriter::resume(&mut *log_bytes, Arc::clone(m), *seq);
+    for op in &sub.ops {
+        writer.append(op).expect("append oplog");
+    }
+    *seq = writer.last_seq();
+    writer.into_inner().expect("flush oplog");
+    assert_eq!(*seq, new_seq);
+
+    let snap = saved(ws.project());
+    let snap_loaded = Project::load(snap.as_slice(), Arc::clone(m)).expect("snap reload");
+    assert!(snap_loaded == *ws.project());
+
+    let ws_files = ws.project().to_workspace_files().expect("to_ws");
+    let ws_loaded = Project::from_workspace_files(
+        ws_files
+            .iter()
+            .map(|f| (f.path.as_str(), f.bytes.as_slice())),
+        Arc::clone(m),
+    )
+    .expect("from_ws");
+    assert!(ws_loaded == *ws.project());
+
+    let mut replayed = Project::new(Arc::clone(m));
+    let reader = OpLogReader::open(log_bytes.as_slice(), Arc::clone(m)).expect("open oplog");
+    for rec in reader {
+        replayed
+            .apply(rec.expect("valid record").op)
+            .expect("replay op");
+    }
+    assert!(replayed == *ws.project());
+    assert_eq!(saved(&replayed), snap);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn make_shared_then_unshare_end_to_end_roundtrips_snapshot_oplog_and_workspace_files() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let p = Provenance::human("e2e-author", 1422);
+    let low = m.feasibility_level("low").expect("low");
+    let med = m.feasibility_level("medium").expect("medium");
+    let high = m.feasibility_level("high").expect("high");
+    let factor = m.feasibility_factors().next().expect("factor");
+    let flevel = m.factor_levels(factor).last().expect("flevel");
+    let atk_type = m.attack_types().next().expect("atk_type");
+
+    let comp_id = ComponentId::new_v7();
+    let cond_id = ConditionId::new_v7();
+    let ctrl_id = ControlId::new_v7();
+    let assump_id = AssumptionId::new_v7();
+    let shared_inner_id = SharedStepId::new_v7();
+
+    let host_id = TreeId::new_v7();
+    let (h_root, h_gate, h_dm_a, h_dm_b, h_dm_leaf, h_shared_use, h_step) = (
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+        NodeId::new_v7(),
+    );
+    let mut host = AttackTree::new(h_root, Node::gate(GateKind::Or, "E2ERoot")).unwrap();
+    let hr = host.root();
+    let hg = host
+        .add_child(hr, h_gate, Node::gate(GateKind::SeqAnd, "SubGate"))
+        .unwrap();
+    let da = host
+        .add_child(hg, h_dm_a, Node::gate(GateKind::And, "DmA"))
+        .unwrap();
+    let db = host
+        .add_child(hg, h_dm_b, Node::gate(GateKind::Or, "DmB"))
+        .unwrap();
+    let dl = host.add_child(da, h_dm_leaf, Node::step("DmLeaf")).unwrap();
+    host.link(db, dl).unwrap();
+    host.add_child(hg, h_shared_use, Node::step("NestedShared"))
+        .unwrap();
+    host.add_child(hr, h_step, Node::step("PlainRichStep"))
+        .unwrap();
+
+    let setup_ops = vec![
+        Op::AddComponent {
+            id: comp_id,
+            name: "ECU".into(),
+            parent: None,
+            provenance: p.clone(),
+        },
+        Op::AddCondition {
+            id: cond_id,
+            name: "Cond".into(),
+            description: "".into(),
+            present: true,
+            provenance: p.clone(),
+        },
+        Op::AddSecurityControl {
+            id: ctrl_id,
+            name: "Ctrl".into(),
+            provenance: p.clone(),
+        },
+        Op::SetControlStatus {
+            control: ctrl_id,
+            status: ControlStatus::Implemented,
+            provenance: p.clone(),
+        },
+        Op::AddAssumption {
+            id: assump_id,
+            name: "Assump".into(),
+            holds: false,
+            provenance: p.clone(),
+        },
+        Op::AddSharedStep {
+            id: shared_inner_id,
+            name: "InnerShared".into(),
+            provenance: p.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Shared(shared_inner_id),
+            level: Some(med),
+            provenance: p.clone(),
+        },
+        Op::SetStepFactor {
+            target: StepTarget::Shared(shared_inner_id),
+            factor,
+            level: Some(flevel),
+            provenance: p.clone(),
+        },
+        Op::SetStepVia {
+            target: StepTarget::Shared(shared_inner_id),
+            via: Some(ItemRef::Component(comp_id)),
+            provenance: p.clone(),
+        },
+        Op::SetStepAttackType {
+            target: StepTarget::Shared(shared_inner_id),
+            attack_type: Some(atk_type),
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Threat,
+            id: host_id,
+            tree: host,
+            step_feasibility: vec![(h_dm_leaf, high), (h_step, high)],
+            provenance: p.clone(),
+        },
+        Op::UseSharedStep {
+            tree: host_id,
+            node: h_shared_use,
+            step: shared_inner_id,
+            provenance: p.clone(),
+        },
+        Op::NeedStepCondition {
+            tree: host_id,
+            node: h_dm_leaf,
+            condition: cond_id,
+            provenance: p.clone(),
+        },
+        Op::SetStepMitigation {
+            tree: host_id,
+            node: h_dm_leaf,
+            control: ctrl_id,
+            feasibility: Some(low),
+            provenance: p.clone(),
+        },
+        Op::SetReviewMark {
+            tree: host_id,
+            node: h_dm_leaf,
+            marked: true,
+            provenance: p.clone(),
+        },
+        Op::SetAssumptionExcludes {
+            id: assump_id,
+            trees: vec![],
+            steps: vec![StepRef {
+                tree: host_id,
+                node: h_dm_leaf,
+            }],
+            provenance: p.clone(),
+        },
+        Op::SetStepFactor {
+            target: StepTarget::Step(host_id, h_step),
+            factor,
+            level: Some(flevel),
+            provenance: p.clone(),
+        },
+        Op::SetStepVia {
+            target: StepTarget::Step(host_id, h_step),
+            via: Some(ItemRef::Component(comp_id)),
+            provenance: p.clone(),
+        },
+        Op::SetStepAttackType {
+            target: StepTarget::Step(host_id, h_step),
+            attack_type: Some(atk_type),
+            provenance: p.clone(),
+        },
+    ];
+
+    let mut log_bytes = OpLogWriter::create(Vec::new(), Arc::clone(&m))
+        .expect("create log")
+        .into_inner()
+        .expect("log bytes");
+    let mut seq = 0u64;
+    let mut init_ws = Workspace::empty(Arc::clone(&m));
+    init_ws.apply(setup_ops, Origin::Edit).expect("setup");
+    accept_and_verify_state(&mut init_ws, &mut log_bytes, &mut seq, &m, None);
+
+    // Reload initial Workspace from snapshot/workspace files (with prior undo entry + op log).
+    let init_snap = saved(init_ws.project());
+    let ws_files = Project::load(init_snap.as_slice(), Arc::clone(&m))
+        .expect("snap")
+        .to_workspace_files()
+        .expect("ws_files");
+    let loaded_proj = Project::from_workspace_files(
+        ws_files
+            .iter()
+            .map(|f| (f.path.as_str(), f.bytes.as_slice())),
+        Arc::clone(&m),
+    )
+    .expect("loaded");
+    let mut ws = Workspace::new(loaded_proj, seq);
+
+    let prior_ops = Edit::RenameTreeNode {
+        tree: host_id,
+        node: h_step,
+        label: "PlainRichStep 2".into(),
+    }
+    .to_ops(ws.project(), "prior", 50)
+    .expect("prior");
+    let prior_len = prior_ops.len();
+    ws.apply(prior_ops, Origin::Edit).expect("apply prior");
+    accept_and_verify_state(&mut ws, &mut log_bytes, &mut seq, &m, Some(prior_len));
+
+    let run_cycle = |ws: &mut Workspace,
+                     log_bytes: &mut Vec<u8>,
+                     seq: &mut u64,
+                     make_edit: Edit,
+                     unshare_edit: Edit| {
+        let s0 = ws.project().clone();
+        let s0_bytes = saved(&s0);
+        let s0_eval = eval_outcome_pair(ws, host_id);
+
+        let make_ops = make_edit
+            .to_ops(ws.project(), "e2e", 100)
+            .expect("make ops");
+        let make_len = make_ops.len();
+        ws.apply(make_ops, Origin::Edit).expect("apply make");
+        accept_and_verify_state(ws, log_bytes, seq, &m, Some(make_len));
+        let s1 = ws.project().clone();
+        let s1_bytes = saved(&s1);
+        assert_eq!(eval_outcome_pair(ws, host_id), s0_eval);
+
+        let un_ops = unshare_edit
+            .to_ops(ws.project(), "e2e", 101)
+            .expect("unshare ops");
+        let un_len = un_ops.len();
+        ws.apply(un_ops, Origin::Edit).expect("apply unshare");
+        accept_and_verify_state(ws, log_bytes, seq, &m, Some(un_len));
+        let s2 = ws.project().clone();
+        let s2_bytes = saved(&s2);
+        let s2_ids: Vec<NodeId> = s2
+            .attack_tree(s2.attack_tree_idx(&host_id).unwrap())
+            .unwrap()
+            .iter()
+            .map(|(_, id, _)| id)
+            .collect();
+        assert_eq!(eval_outcome_pair(ws, host_id), s0_eval);
+
+        // undo -> undo -> redo -> redo with snapshot/oplog/workspace reload after EVERY state.
+        ws.undo().expect("undo 1 (unshare)");
+        accept_and_verify_state(ws, log_bytes, seq, &m, None);
+        assert!(ws.project() == &s1);
+        assert_eq!(saved(ws.project()), s1_bytes);
+
+        ws.undo().expect("undo 2 (make)");
+        accept_and_verify_state(ws, log_bytes, seq, &m, None);
+        assert!(ws.project() == &s0);
+        assert_eq!(saved(ws.project()), s0_bytes);
+
+        ws.redo().expect("redo 1 (make)");
+        accept_and_verify_state(ws, log_bytes, seq, &m, None);
+        assert!(ws.project() == &s1);
+        assert_eq!(saved(ws.project()), s1_bytes);
+
+        ws.redo().expect("redo 2 (unshare)");
+        accept_and_verify_state(ws, log_bytes, seq, &m, None);
+        assert!(ws.project() == &s2);
+        assert_eq!(saved(ws.project()), s2_bytes);
+        let redo_ids: Vec<NodeId> = ws
+            .project()
+            .attack_tree(ws.project().attack_tree_idx(&host_id).unwrap())
+            .unwrap()
+            .iter()
+            .map(|(_, id, _)| id)
+            .collect();
+        assert_eq!(redo_ids, s2_ids);
+        assert_eq!(eval_outcome_pair(ws, host_id), s0_eval);
+    };
+
+    // Workflow 1: MakeSharedFragment -> Unshare -> undo -> undo -> redo -> redo.
+    let frag_id = TreeId::new_v7();
+    run_cycle(
+        &mut ws,
+        &mut log_bytes,
+        &mut seq,
+        Edit::MakeSharedFragment {
+            tree: host_id,
+            node: h_gate,
+            id: frag_id,
+        },
+        Edit::Unshare {
+            tree: host_id,
+            node: h_gate,
+        },
+    );
+
+    // Workflow 2: MakeShared -> Unshare -> undo -> undo -> redo -> redo.
+    let shared_id = SharedStepId::new_v7();
+    run_cycle(
+        &mut ws,
+        &mut log_bytes,
+        &mut seq,
+        Edit::MakeShared {
+            tree: host_id,
+            node: h_step,
+            id: shared_id,
+        },
+        Edit::Unshare {
+            tree: host_id,
+            node: h_step,
+        },
+    );
 }

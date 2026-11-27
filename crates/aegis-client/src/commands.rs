@@ -206,7 +206,8 @@ pub enum Edit {
         /// New fragment tree ID.
         id: TreeId,
     },
-    /// Copies a linked shared step's ratings onto its tree step and unlinks it.
+    /// Unshares a linked shared step or materializes a fragment reference into
+    /// its tree and unlinks it.
     Unshare {
         /// Tree.
         tree: TreeId,
@@ -1387,6 +1388,87 @@ fn make_shared_fragment_ops(
     Ok(ops)
 }
 
+fn unshare_fragment_ops(
+    project: &Project,
+    tree: TreeId,
+    node: NodeId,
+    p: &Provenance,
+) -> Result<Vec<Op>, EditError> {
+    let t_idx = project.attack_tree_idx(&tree).ok_or(EditError::Missing)?;
+    let host_tree = project.attack_tree(t_idx).ok_or(EditError::Missing)?;
+    let n_idx = host_tree.idx_of(&node).ok_or(EditError::Missing)?;
+    if project.step_fragment(t_idx, n_idx).is_none() {
+        return Err(EditError::Missing);
+    }
+    let plan = crate::fragments::copy_subtree(
+        project,
+        tree,
+        node,
+        crate::fragments::CopyMode::Materialize,
+    )?;
+    let insert = plan.insert_ops(tree, node, host_tree.len(), p)?;
+    let root_kind = plan.root_kind();
+    let target_sr = StepRef { tree, node };
+    let distributed = plan.materialized_assumptions(node);
+    let mut pre_excludes = Vec::new();
+    let mut post_excludes = Vec::new();
+    for (_, aid, a) in project.assumptions() {
+        let had_target = a.excludes_steps().contains(&target_sr);
+        let add_nodes = distributed.get(&aid);
+        if !had_target && add_nodes.is_none() {
+            continue;
+        }
+        let trees: BTreeSet<TreeId> = a
+            .excludes_trees()
+            .iter()
+            .filter_map(|&ti| project.attack_tree_id(ti))
+            .collect();
+        let existing: BTreeSet<StepRef> = a.excludes_steps().iter().copied().collect();
+        let mut after = existing.clone();
+        let mut without_target = None;
+        if had_target && root_kind.is_some() {
+            after.remove(&target_sr);
+            without_target = Some(after.clone());
+        }
+        if let Some(nodes) = add_nodes {
+            after.extend(nodes.iter().map(|&n| StepRef { tree, node: n }));
+        }
+        if trees.len().saturating_add(after.len()) > aegis_model::MAX_ASSUMPTION_EXCLUDES {
+            return Err(EditError::FragmentCopyLimit {
+                resource: "assumption_excludes",
+                max: aegis_model::MAX_ASSUMPTION_EXCLUDES,
+            });
+        }
+        let current = without_target.as_ref().unwrap_or(&existing);
+        let changed_after = after != *current;
+        if let Some(without) = without_target {
+            pre_excludes.push((aid, trees.clone(), without));
+        }
+        if changed_after {
+            post_excludes.push((aid, trees, after));
+        }
+    }
+
+    let mut ops = crate::tree_diff::clear_step_ops(project, tree, node, p);
+    ops.extend(unneed_step_conditions_ops(project, tree, Some(node), p));
+    for (aid, trees, steps) in &pre_excludes {
+        ops.push(set_excludes_op(*aid, trees, steps, p));
+    }
+    if root_kind.is_some() {
+        ops.push(Op::SetTreeNodeKind {
+            tree,
+            id: node,
+            gate: root_kind,
+            provenance: p.clone(),
+        });
+    }
+    ops.extend(insert);
+    for (aid, trees, steps) in &post_excludes {
+        ops.push(set_excludes_op(*aid, trees, steps, p));
+    }
+    Ok(ops)
+}
+
 /// Ops that clear the "through" of every step that goes through `item`
 /// itself (a component's interfaces are not included).
 pub(crate) fn clear_via_ops(project: &Project, item: ItemRef, p: &Provenance) -> Vec<Op> {
@@ -2072,10 +2154,16 @@ impl Edit {
                 make_shared_fragment_ops(project, *tree, *node, *id, &p)?
             }
             Edit::Unshare { tree, node } => {
-                if !matches!(step_op_target(project, *tree, *node), StepTarget::Shared(_)) {
+                let t_idx = project.attack_tree_idx(tree).ok_or(EditError::Missing)?;
+                let src_tree = project.attack_tree(t_idx).ok_or(EditError::Missing)?;
+                let n_idx = src_tree.idx_of(node).ok_or(EditError::Missing)?;
+                if project.step_fragment(t_idx, n_idx).is_some() {
+                    unshare_fragment_ops(project, *tree, *node, &p)?
+                } else if project.step_shared(t_idx, n_idx).is_some() {
+                    unshare_step_ops(project, *tree, *node, &p)
+                } else {
                     return Err(EditError::Missing);
                 }
-                unshare_step_ops(project, *tree, *node, &p)
             }
 
             Edit::AddAsset {
