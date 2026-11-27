@@ -4481,35 +4481,43 @@ fn unshare_fragment_workflows_preserve_values_overlays_and_live_refs() {
     let frag_single_shared = AttackTree::new(fssh_node, Node::step("SingleSharedTarget")).unwrap();
 
     let single_host_id = TreeId::new_v7();
-    let (sh_root, sh_plain, sh_shared, sh_unrated) = (
-        NodeId::new_v7(),
-        NodeId::new_v7(),
-        NodeId::new_v7(),
-        NodeId::new_v7(),
-    );
+    let (sh_root, sh_plain) = (NodeId::new_v7(), NodeId::new_v7());
     let mut single_host = AttackTree::new(sh_root, Node::gate(GateKind::Or, "SingleHost")).unwrap();
     single_host
         .add_child(single_host.root(), sh_plain, Node::step("PlainHostSlot"))
         .unwrap();
-    single_host
-        .add_child(single_host.root(), sh_shared, Node::step("SharedHostSlot"))
-        .unwrap();
-    single_host
+
+    let single_shared_host_id = TreeId::new_v7();
+    let (ssh_root, sh_shared) = (NodeId::new_v7(), NodeId::new_v7());
+    let mut single_shared_host =
+        AttackTree::new(ssh_root, Node::gate(GateKind::Or, "SingleSharedHost")).unwrap();
+    single_shared_host
         .add_child(
-            single_host.root(),
+            single_shared_host.root(),
+            sh_shared,
+            Node::step("SharedHostSlot"),
+        )
+        .unwrap();
+
+    // Unrated single-step fragment & isolated host, excluded multi-leaf fragment, and unrated multi-leaf fragment.
+    let frag_unrated_id = TreeId::new_v7();
+    let fur_node = NodeId::new_v7();
+    let frag_unrated = AttackTree::new(fur_node, Node::step("UnratedSingle")).unwrap();
+
+    let unrated_single_host_id = TreeId::new_v7();
+    let (ush_root, sh_unrated) = (NodeId::new_v7(), NodeId::new_v7());
+    let mut unrated_single_host =
+        AttackTree::new(ush_root, Node::gate(GateKind::Or, "UnratedSingleHost")).unwrap();
+    unrated_single_host
+        .add_child(
+            unrated_single_host.root(),
             sh_unrated,
             Node::step("UnratedHostSlot"),
         )
         .unwrap();
 
-    // Unrated single-step fragment & excluded/unrated multi-leaf fragment.
-    let frag_unrated_id = TreeId::new_v7();
-    let fur_node = NodeId::new_v7();
-    let frag_unrated = AttackTree::new(fur_node, Node::step("UnratedSingle")).unwrap();
-
     let frag_excl_id = TreeId::new_v7();
-    let (fe_root, fe_unrated, fe_cond, fe_via, fe_factor, fe_assump, fe_ok) = (
-        NodeId::new_v7(),
+    let (fe_root, fe_cond, fe_via, fe_factor, fe_assump, fe_ok) = (
         NodeId::new_v7(),
         NodeId::new_v7(),
         NodeId::new_v7(),
@@ -4520,7 +4528,6 @@ fn unshare_fragment_workflows_preserve_values_overlays_and_live_refs() {
     let mut frag_excl = AttackTree::new(fe_root, Node::gate(GateKind::Or, "ExclRoot")).unwrap();
     let fer = frag_excl.root();
     for (nid, lbl) in [
-        (fe_unrated, "ExUnrated"),
         (fe_cond, "ExCond"),
         (fe_via, "ExVia"),
         (fe_factor, "ExFactor"),
@@ -4534,6 +4541,36 @@ fn unshare_fragment_workflows_preserve_values_overlays_and_live_refs() {
     let mut excl_host = AttackTree::new(eh_root, Node::gate(GateKind::Or, "ExclHost")).unwrap();
     excl_host
         .add_child(excl_host.root(), eh_ref, Node::step("ExclSlot"))
+        .unwrap();
+
+    let frag_unrated_multi_id = TreeId::new_v7();
+    let (fum_root, fum_unrated, fum_rated) = (NodeId::new_v7(), NodeId::new_v7(), NodeId::new_v7());
+    let mut frag_unrated_multi =
+        AttackTree::new(fum_root, Node::gate(GateKind::Or, "UnratedMultiRoot")).unwrap();
+    frag_unrated_multi
+        .add_child(
+            frag_unrated_multi.root(),
+            fum_unrated,
+            Node::step("ExUnrated"),
+        )
+        .unwrap();
+    frag_unrated_multi
+        .add_child(
+            frag_unrated_multi.root(),
+            fum_rated,
+            Node::step("ExRatedSib"),
+        )
+        .unwrap();
+    let unrated_multi_host_id = TreeId::new_v7();
+    let (umh_root, umh_ref) = (NodeId::new_v7(), NodeId::new_v7());
+    let mut unrated_multi_host =
+        AttackTree::new(umh_root, Node::gate(GateKind::Or, "UnratedMultiHost")).unwrap();
+    unrated_multi_host
+        .add_child(
+            unrated_multi_host.root(),
+            umh_ref,
+            Node::step("UnratedMultiSlot"),
+        )
         .unwrap();
 
     // >32-node target fragment (40 nodes) and depth-8 chain fragment.
@@ -5167,14 +5204,28 @@ fn unshare_fragment_workflows_preserve_values_overlays_and_live_refs() {
             marked: true,
             provenance: p.clone(),
         },
+        Op::AddAttackTree {
+            role: TreeRole::Threat,
+            id: single_shared_host_id,
+            tree: single_shared_host,
+            step_feasibility: vec![],
+            provenance: p.clone(),
+        },
         Op::UseFragment {
-            tree: single_host_id,
+            tree: single_shared_host_id,
             node: sh_shared,
             fragment: frag_single_shared_id,
             provenance: p.clone(),
         },
+        Op::AddAttackTree {
+            role: TreeRole::Threat,
+            id: unrated_single_host_id,
+            tree: unrated_single_host,
+            step_feasibility: vec![],
+            provenance: p.clone(),
+        },
         Op::UseFragment {
-            tree: single_host_id,
+            tree: unrated_single_host_id,
             node: sh_unrated,
             fragment: frag_unrated_id,
             provenance: p.clone(),
@@ -5229,6 +5280,26 @@ fn unshare_fragment_workflows_preserve_values_overlays_and_live_refs() {
             tree: excl_host_id,
             node: eh_ref,
             fragment: frag_excl_id,
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag_unrated_multi_id,
+            tree: frag_unrated_multi,
+            step_feasibility: vec![(fum_rated, low)],
+            provenance: p.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Threat,
+            id: unrated_multi_host_id,
+            tree: unrated_multi_host,
+            step_feasibility: vec![],
+            provenance: p.clone(),
+        },
+        Op::UseFragment {
+            tree: unrated_multi_host_id,
+            node: umh_ref,
+            fragment: frag_unrated_multi_id,
             provenance: p.clone(),
         },
         Op::AddAttackTree {
@@ -5532,21 +5603,35 @@ fn unshare_fragment_workflows_preserve_values_overlays_and_live_refs() {
         }
     }
 
-    // 3. Target single-Step roots stay host Steps with raw fields & merged overlays; unrated copied unrated.
+    // 3. Target single-Step roots stay host Steps with raw fields & merged overlays; unrated isolated and copied unrated.
     {
         let mut ws = make_ws();
         verify_unshare_fragment(&mut ws, single_host_id, sh_plain);
-        verify_unshare_fragment(&mut ws, single_host_id, sh_shared);
-        verify_unshare_fragment(&mut ws, single_host_id, sh_unrated);
+        verify_unshare_fragment(&mut ws, single_shared_host_id, sh_shared);
+        verify_unshare_fragment(&mut ws, unrated_single_host_id, sh_unrated);
+
+        assert_eq!(
+            eval_outcome_pair(&ws, single_host_id),
+            (FoldOutcome::Value(low), FoldOutcome::Value(low))
+        );
+        assert_eq!(
+            eval_outcome_pair(&ws, single_shared_host_id),
+            (FoldOutcome::Value(high), FoldOutcome::Value(low))
+        );
+        assert_eq!(
+            eval_outcome_pair(&ws, unrated_single_host_id),
+            (FoldOutcome::Unrated, FoldOutcome::Unrated)
+        );
 
         let proj = ws.project();
-        let si = proj.attack_tree_idx(&single_host_id).unwrap();
-        let st = proj.attack_tree(si).unwrap();
-        for (nid, expect_feas, expect_mit) in [
-            (sh_plain, Some(high), true),
-            (sh_shared, Some(high), false),
-            (sh_unrated, None, false),
+        let ctrl_same_idx = proj.security_control_idx(&ctrl_same).unwrap();
+        for (tree_id, nid, expect_feas, expect_overlay) in [
+            (single_host_id, sh_plain, Some(high), true),
+            (single_shared_host_id, sh_shared, Some(high), false),
+            (unrated_single_host_id, sh_unrated, None, false),
         ] {
+            let si = proj.attack_tree_idx(&tree_id).unwrap();
+            let st = proj.attack_tree(si).unwrap();
             let ni = st.idx_of(&nid).unwrap();
             assert_eq!(st.get(ni).unwrap().gate_kind(), None);
             assert_eq!(proj.step_fragment(si, ni), None);
@@ -5564,24 +5649,166 @@ fn unshare_fragment_workflows_preserve_values_overlays_and_live_refs() {
                 assert_eq!(proj.step_via(si, ni), None);
                 assert_eq!(proj.step_attack_type(si, ni), None);
             }
-            assert_eq!(!proj.step_mitigations(si, ni).is_empty(), expect_mit);
+            assert_eq!(proj.review_marked(tree_id, nid), expect_overlay);
+            let conds: HashSet<ConditionId> = proj
+                .step_condition_link_ids(tree_id, nid)
+                .iter()
+                .filter_map(|&ci| proj.condition_id(ci))
+                .collect();
+            let mits = proj.step_mitigations(si, ni);
+            if expect_overlay {
+                assert_eq!(conds, HashSet::from([cond_host_local, cond_frag_tree]));
+                assert_eq!(mits.len(), 1);
+                assert_eq!(mits[0].control(), ctrl_same_idx);
+                assert_eq!(mits[0].feasibility(), low);
+            } else {
+                assert!(conds.is_empty());
+                assert!(mits.is_empty());
+            }
+        }
+
+        // Verify distributed conditions and merged ceiling drive single_host evaluation.
+        for (cond_id, present, expected) in [
+            (
+                cond_frag_tree,
+                false,
+                (FoldOutcome::Excluded, FoldOutcome::Excluded),
+            ),
+            (
+                cond_frag_tree,
+                true,
+                (FoldOutcome::Value(low), FoldOutcome::Value(low)),
+            ),
+            (
+                cond_host_local,
+                false,
+                (FoldOutcome::Excluded, FoldOutcome::Excluded),
+            ),
+            (
+                cond_host_local,
+                true,
+                (FoldOutcome::Value(low), FoldOutcome::Value(low)),
+            ),
+        ] {
+            let tops = Edit::SetConditionPresent {
+                condition: cond_id,
+                present,
+            }
+            .to_ops(ws.project(), "single-cond", 200)
+            .unwrap();
+            ws.apply(tops, Origin::Edit).unwrap();
+            assert_eq!(eval_outcome_pair(&ws, single_host_id), expected);
+            let mut oracle = IndependentFold::new(ws.project());
+            assert_eq!(
+                (
+                    oracle.fold_tree(single_host_id, false),
+                    oracle.fold_tree(single_host_id, true)
+                ),
+                expected
+            );
         }
     }
 
-    // 4. Excluded/unrated multi-leaf fragment (last user!) copies all states without inventing values.
+    // 4. Excluded multi-leaf fragment proves all four exclusion mechanisms survive; unrated multi-leaf stays isolated.
     {
         let mut ws = make_ws();
         verify_unshare_fragment(&mut ws, excl_host_id, eh_ref);
         assert!(ws.project().attack_tree_idx(&frag_excl_id).is_some());
-        let ei = ws.project().attack_tree_idx(&excl_host_id).unwrap();
-        let et = ws.project().attack_tree(ei).unwrap();
-        let unrated_idx = et
+        assert_eq!(
+            eval_outcome_pair(&ws, excl_host_id),
+            (FoldOutcome::Value(low), FoldOutcome::Value(low))
+        );
+
+        let proj = ws.project();
+        let ei = proj.attack_tree_idx(&excl_host_id).unwrap();
+        let et = proj.attack_tree(ei).unwrap();
+        let find_leaf = |lbl: &str| {
+            et.iter()
+                .find_map(|(ni, nid, n)| (n.label() == lbl).then_some((ni, nid)))
+                .unwrap()
+        };
+        let (ex_cond_idx, ex_cond_id) = find_leaf("ExCond");
+        let (ex_via_idx, _) = find_leaf("ExVia");
+        let (ex_factor_idx, _) = find_leaf("ExFactor");
+        let (_, ex_assump_id) = find_leaf("ExAssump");
+        let (ex_ok_idx, _) = find_leaf("ExOk");
+        assert_eq!(proj.step_feasibility(ei, ex_cond_idx), Some(high));
+        assert_eq!(
+            proj.step_condition_link_ids(excl_host_id, ex_cond_id)
+                .iter()
+                .filter_map(|&ci| proj.condition_id(ci))
+                .collect::<Vec<_>>(),
+            vec![cond_off]
+        );
+        assert_eq!(
+            proj.step_via(ei, ex_via_idx),
+            Some(ItemRef::Component(comp_off_id))
+        );
+        assert_eq!(
+            proj.step_factors(ei, ex_factor_idx).collect::<Vec<_>>(),
+            vec![(factor, flevel_excl)]
+        );
+        assert_eq!(proj.step_feasibility(ei, ex_ok_idx), Some(low));
+
+        let aft_idx = proj.assumption_idx(&assump_frag_tree).unwrap();
+        let aft = proj.assumption(aft_idx).unwrap();
+        assert!(aft.excludes_steps().contains(&StepRef {
+            tree: frag_excl_id,
+            node: fe_assump,
+        }));
+        assert!(aft.excludes_steps().contains(&StepRef {
+            tree: excl_host_id,
+            node: ex_assump_id,
+        }));
+
+        // Lifting assump_frag_tree raises excl_host_id from low to med (ExAssump) while cond/via/factor (high) stay excluded.
+        let lift_ops = Edit::SetAssumptionHolds {
+            assumption: assump_frag_tree,
+            holds: false,
+        }
+        .to_ops(ws.project(), "lift-assump", 201)
+        .unwrap();
+        ws.apply(lift_ops, Origin::Edit).unwrap();
+        assert_eq!(
+            eval_outcome_pair(&ws, excl_host_id),
+            (FoldOutcome::Value(med), FoldOutcome::Value(med))
+        );
+        let mut oracle = IndependentFold::new(ws.project());
+        assert_eq!(
+            (
+                oracle.fold_tree(excl_host_id, false),
+                oracle.fold_tree(excl_host_id, true)
+            ),
+            (FoldOutcome::Value(med), FoldOutcome::Value(med))
+        );
+
+        // Unrated multi-leaf fragment (last user!) copies unrated state without inventing values.
+        verify_unshare_fragment(&mut ws, unrated_multi_host_id, umh_ref);
+        assert!(
+            ws.project()
+                .attack_tree_idx(&frag_unrated_multi_id)
+                .is_some()
+        );
+        let ui = ws
+            .project()
+            .attack_tree_idx(&unrated_multi_host_id)
+            .unwrap();
+        let ut = ws.project().attack_tree(ui).unwrap();
+        let unrated_idx = ut
             .iter()
             .find_map(|(ni, _, n)| (n.label() == "ExUnrated").then_some(ni))
             .unwrap();
-        assert_eq!(ws.project().step_feasibility(ei, unrated_idx), None);
+        let rated_idx = ut
+            .iter()
+            .find_map(|(ni, _, n)| (n.label() == "ExRatedSib").then_some(ni))
+            .unwrap();
+        assert_eq!(ws.project().step_feasibility(ui, unrated_idx), None);
+        assert_eq!(ws.project().step_factors(ui, unrated_idx).next(), None);
+        assert_eq!(ws.project().step_via(ui, unrated_idx), None);
+        assert_eq!(ws.project().step_attack_type(ui, unrated_idx), None);
+        assert_eq!(ws.project().step_feasibility(ui, rated_idx), Some(low));
         assert_eq!(
-            eval_outcome_pair(&ws, excl_host_id),
+            eval_outcome_pair(&ws, unrated_multi_host_id),
             (FoldOutcome::Unrated, FoldOutcome::Unrated)
         );
     }
