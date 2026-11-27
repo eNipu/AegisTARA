@@ -5,12 +5,15 @@ mod common;
 
 use std::sync::Arc;
 
+use aegis_model::ControlStatus;
 use aegis_model::{
-    AssetId, AttackTree, DamageId, MAX_FRAGMENT_DEPTH, MAX_FRAGMENT_REFERENCES, Methodology,
-    ModelError, Node, NodeId, Op, Project, ProjectEvalCache, Provenance, StepRef, StepTarget,
-    StoreError, ThreatId, TreeId, TreeRole,
+    AssetId, AttackTree, DamageId, GateKind, MAX_FRAGMENT_DEPTH, MAX_FRAGMENT_REFERENCES,
+    Methodology, ModelError, Node, NodeId, Op, Project, ProjectEvalCache, Provenance, StepRef,
+    StepTarget, StoreError, ThreatId, TreeId, TreeRole,
 };
-use common::{builtin, node_id, read_log, save, tree_id, write_log};
+use common::{
+    builtin, condition_id, control_id, node_id, read_log, save, shared_step_id, tree_id, write_log,
+};
 use serde_json::Value;
 
 fn add_tree(n: u64, role: TreeRole) -> Op {
@@ -429,7 +432,7 @@ fn snapshot_and_workspace_round_trip_the_reference_and_keep_provenance() {
 }
 
 #[test]
-fn evaluation_fails_closed_on_references_and_recovers_after_unlink() {
+fn references_fold_the_fragment_root_and_recover_after_unlink() {
     let m = builtin();
     let mut p = linked(&m);
     let level = m.feasibility_level("high").expect("level");
@@ -450,73 +453,350 @@ fn evaluation_fails_closed_on_references_and_recovers_after_unlink() {
     let idx = p.attack_tree_idx(&tree_id(1)).expect("tree");
     let root = p.attack_tree(idx).expect("entry").root();
     assert_eq!(p.step_fragment_id(idx, root), Some(tree_id(2)));
-    // A reference is unrated: evaluation and lint fail closed, never a number.
+    // The reference consumes the fragment root in both modes, while the
+    // per-leaf accessors stay own-rating only and lint does not flag it.
+    assert_eq!(
+        p.evaluate_tree(tree_id(1)).expect("inherent").root_value(),
+        &level
+    );
+    let residual = p.evaluate_residual_tree(tree_id(1)).expect("residual");
+    assert_eq!(residual.root_value(), &level);
     assert_eq!(p.step_feasibility(idx, root), None);
     assert_eq!(p.effective_step_feasibility(idx, root), None);
-    assert!(matches!(
-        p.evaluate_tree(tree_id(1)),
-        Err(ModelError::MissingLeafValue(_))
-    ));
-    assert!(p.lint().iter().any(|f| {
+    assert_eq!(p.residual_step_feasibility(idx, root), None);
+    assert!(p.deciding_step(idx, &residual).is_none(), "tree-local");
+    assert!(!p.lint().iter().any(|f| {
         matches!(
             f.code(),
-            aegis_model::LintCode::AttackTreeStepUnrated { tree, node }
-            if tree == tree_id(1) && node == node_id(101)
+            aegis_model::LintCode::AttackTreeStepUnrated { tree, .. } if tree == tree_id(1)
         )
     }));
 
-    // The cached path cannot retain a number across link or unlink either.
     let mut cache = ProjectEvalCache::new(&p);
-    assert!(cache.evaluate_tree(&p, tree_id(1)).is_err());
-    p.apply_cached(
-        Op::UnuseFragment {
-            tree: tree_id(1),
-            node: node_id(101),
-            provenance: Provenance::human("alice", 9),
-        },
-        &mut cache,
-    )
-    .expect("unlink");
-    p.apply_cached(
-        Op::SetStepFeasibility {
-            target: StepTarget::Step(tree_id(1), node_id(101)),
-            level: Some(level),
-            provenance: Provenance::human("alice", 10),
-        },
-        &mut cache,
-    )
-    .expect("rate");
-    let eval = cache.evaluate_tree(&p, tree_id(1)).expect("evaluates");
-    assert_eq!(eval.root_value(), &level);
-
-    p.apply_cached(
-        Op::SetStepFeasibility {
-            target: StepTarget::Step(tree_id(1), node_id(101)),
-            level: None,
-            provenance: Provenance::human("alice", 11),
-        },
-        &mut cache,
-    )
-    .expect("clear rating");
-    p.apply_cached(
-        Op::UseFragment {
-            tree: tree_id(1),
-            node: node_id(101),
-            fragment: tree_id(2),
-            provenance: Provenance::human("alice", 12),
-        },
-        &mut cache,
-    )
-    .expect("relink");
-    assert!(cache.evaluate_tree(&p, tree_id(1)).is_err());
-    assert!(cache.evaluate_residual_tree(&p, tree_id(1)).is_err());
     assert_eq!(
         cache
-            .evaluate_tree(&p, tree_id(3))
-            .expect("unrelated cached tree")
+            .evaluate_tree(&p, tree_id(1))
+            .expect("cached")
             .root_value(),
         &level
     );
+    let unlink = p
+        .apply_cached(
+            Op::UnuseFragment {
+                tree: tree_id(1),
+                node: node_id(101),
+                provenance: Provenance::human("alice", 9),
+            },
+            &mut cache,
+        )
+        .expect("unlink");
+    assert!(matches!(
+        cache.evaluate_tree(&p, tree_id(1)),
+        Err(ModelError::MissingLeafValue(_))
+    ));
+    p.apply_cached(unlink, &mut cache).expect("undo unlink");
+    assert_eq!(cache, ProjectEvalCache::new(&p));
+
+    // An unrated fragment leaves the reference unrated: never a default.
+    let unrate = p
+        .apply_cached(
+            Op::SetStepFeasibility {
+                target: StepTarget::Step(tree_id(2), node_id(102)),
+                level: None,
+                provenance: Provenance::human("alice", 11),
+            },
+            &mut cache,
+        )
+        .expect("clear fragment rating");
+    for result in [
+        p.evaluate_tree(tree_id(1)),
+        p.evaluate_residual_tree(tree_id(1)),
+        cache.evaluate_tree(&p, tree_id(1)).cloned(),
+        cache.evaluate_residual_tree(&p, tree_id(1)).cloned(),
+    ] {
+        assert!(
+            matches!(result, Err(ModelError::MissingLeafValue(_))),
+            "{result:?}"
+        );
+    }
+    assert_eq!(
+        cache
+            .evaluate_tree(&p, tree_id(3))
+            .expect("unrelated")
+            .root_value(),
+        &level
+    );
+    p.apply_cached(unrate, &mut cache).expect("undo clear");
+    assert_eq!(
+        cache
+            .evaluate_tree(&p, tree_id(1))
+            .expect("again")
+            .root_value(),
+        &level
+    );
+    assert_eq!(cache, ProjectEvalCache::new(&p));
+}
+
+/// Adds a gate tree `n` with `role`: root `1000 * n`, then the given
+/// children (node IDs `1000 * n + i`) under the root in order.
+fn gate_tree(
+    n: u64,
+    role: TreeRole,
+    gate: GateKind,
+    steps: &[(u64, Option<&str>)],
+    m: &Methodology,
+) -> Op {
+    let root = node_id(1000 * n);
+    let mut tree = AttackTree::new(root, Node::gate(gate, "Gate")).expect("tree");
+    let mut rated = Vec::new();
+    for &(i, level) in steps {
+        tree.add_child(tree.root(), node_id(1000 * n + i), Node::step("Step"))
+            .expect("child");
+        if let Some(key) = level {
+            rated.push((
+                node_id(1000 * n + i),
+                m.feasibility_level(key).expect("level"),
+            ));
+        }
+    }
+    Op::AddAttackTree {
+        role,
+        id: tree_id(n),
+        tree,
+        step_feasibility: rated,
+        provenance: Provenance::human("alice", n),
+    }
+}
+
+fn use_fragment(n: u64, i: u64, target: u64) -> Op {
+    Op::UseFragment {
+        tree: tree_id(n),
+        node: node_id(1000 * n + i),
+        fragment: tree_id(target),
+        provenance: Provenance::human("alice", 30),
+    }
+}
+
+fn path_ids(path: &[StepRef]) -> Vec<(TreeId, NodeId)> {
+    path.iter().map(|s| (s.tree, s.node)).collect()
+}
+
+#[test]
+fn why_path_crosses_nested_references_in_the_requested_mode() {
+    let m = builtin();
+    let mut p = project_with(
+        &m,
+        &[
+            gate_tree(
+                1,
+                TreeRole::Threat,
+                GateKind::Or,
+                &[(1, Some("low")), (2, None)],
+                &m,
+            ),
+            gate_tree(
+                2,
+                TreeRole::Fragment,
+                GateKind::And,
+                &[(1, Some("high")), (2, None)],
+                &m,
+            ),
+            gate_tree(
+                3,
+                TreeRole::Fragment,
+                GateKind::Or,
+                &[(1, Some("medium"))],
+                &m,
+            ),
+            use_fragment(1, 2, 2),
+            use_fragment(2, 2, 3),
+        ],
+    );
+    let medium = m.feasibility_level("medium").expect("medium");
+    let eval = p.evaluate_tree(tree_id(1)).expect("evaluates");
+    assert_eq!(eval.root_value(), &medium);
+    let tree = p
+        .attack_tree(p.attack_tree_idx(&tree_id(1)).expect("idx"))
+        .expect("tree");
+    // The generic path stays inside the host tree and ends at the reference.
+    let local: Vec<_> = eval
+        .why_path(tree.root())
+        .map(|i| tree.id_of(i).expect("id"))
+        .collect();
+    assert_eq!(local, [node_id(1000), node_id(1002)]);
+    let crossing = [
+        (tree_id(1), node_id(1000)),
+        (tree_id(1), node_id(1002)),
+        (tree_id(2), node_id(2000)),
+        (tree_id(2), node_id(2002)),
+        (tree_id(3), node_id(3000)),
+        (tree_id(3), node_id(3001)),
+    ];
+    for residual in [false, true] {
+        let path = p
+            .fragment_why_path(tree_id(1), node_id(1000), residual)
+            .expect("path");
+        assert_eq!(path_ids(&path), crossing);
+    }
+    // Starting below the root walks from that node only.
+    let from_ref = p
+        .fragment_why_path(tree_id(1), node_id(1002), false)
+        .expect("path");
+    assert_eq!(path_ids(&from_ref), crossing[1..]);
+
+    // A planned control on the host reference lowers only the residual
+    // value, so only the residual path stops crossing.
+    let ctrl = aegis_model::ControlId::new_v7();
+    for op in [
+        Op::AddSecurityControl {
+            id: ctrl,
+            name: "Guard".into(),
+            provenance: Provenance::human("alice", 40),
+        },
+        Op::SetStepMitigation {
+            tree: tree_id(1),
+            node: node_id(1002),
+            control: ctrl,
+            feasibility: m.feasibility_level("very-low"),
+            provenance: Provenance::human("alice", 41),
+        },
+    ] {
+        p.apply(op).expect("mitigate");
+    }
+    let inherent = p
+        .fragment_why_path(tree_id(1), node_id(1000), false)
+        .expect("path");
+    assert_eq!(path_ids(&inherent), crossing);
+    let residual = p
+        .fragment_why_path(tree_id(1), node_id(1000), true)
+        .expect("path");
+    assert_eq!(
+        path_ids(&residual),
+        [(tree_id(1), node_id(1000)), (tree_id(1), node_id(1001))]
+    );
+
+    // No reference on the path: identical to the generic path.
+    let plain = p
+        .fragment_why_path(tree_id(3), node_id(3000), false)
+        .expect("path");
+    assert_eq!(path_ids(&plain), crossing[4..]);
+    assert!(matches!(
+        p.fragment_why_path(tree_id(1), node_id(9), false),
+        Err(ModelError::UnknownTreeNode { .. })
+    ));
+    assert!(matches!(
+        p.fragment_why_path(tree_id(9), node_id(1000), false),
+        Err(ModelError::UnknownAttackTree(_))
+    ));
+}
+
+#[test]
+fn excluded_fragments_and_local_conditions_exclude_the_reference() {
+    let m = builtin();
+    let cond = aegis_model::ConditionId::new_v7();
+    let mut p = project_with(
+        &m,
+        &[
+            gate_tree(
+                1,
+                TreeRole::Threat,
+                GateKind::Or,
+                &[(1, Some("low")), (2, None)],
+                &m,
+            ),
+            gate_tree(
+                2,
+                TreeRole::Fragment,
+                GateKind::Or,
+                &[(1, Some("high"))],
+                &m,
+            ),
+            gate_tree(
+                4,
+                TreeRole::Threat,
+                GateKind::And,
+                &[(1, Some("low")), (2, None)],
+                &m,
+            ),
+            use_fragment(1, 2, 2),
+            use_fragment(4, 2, 2),
+            Op::AddCondition {
+                id: cond,
+                name: "Debug port".into(),
+                description: "".into(),
+                present: true,
+                provenance: Provenance::human("alice", 50),
+            },
+            Op::NeedCondition {
+                element: aegis_model::ElementRef::Tree(tree_id(2)),
+                condition: cond,
+                provenance: Provenance::human("alice", 51),
+            },
+        ],
+    );
+    let (low, high) = (
+        m.feasibility_level("low").expect("low"),
+        m.feasibility_level("high").expect("high"),
+    );
+    let mut cache = ProjectEvalCache::new(&p);
+    assert_eq!(p.evaluate_tree(tree_id(1)).expect("on").root_value(), &high);
+    let off = p
+        .apply_cached(
+            Op::SetConditionPresent {
+                id: cond,
+                present: false,
+                provenance: Provenance::human("alice", 52),
+            },
+            &mut cache,
+        )
+        .expect("condition off");
+    // The fragment is excluded, so OR falls back to the own step and AND is
+    // excluded entirely, not unrated.
+    let eval = p.evaluate_tree(tree_id(1)).expect("excluded reference");
+    assert_eq!(eval.root_value(), &low);
+    let tree = p
+        .attack_tree(p.attack_tree_idx(&tree_id(1)).expect("idx"))
+        .expect("tree");
+    assert_eq!(eval.get(tree.idx_of(&node_id(1002)).expect("ref")), None);
+    assert_eq!(
+        p.evaluate_tree(tree_id(4)),
+        Err(ModelError::TreeNotApplicable(tree_id(4)))
+    );
+    assert_eq!(cache, ProjectEvalCache::new(&p));
+    p.apply_cached(off, &mut cache).expect("undo");
+    assert_eq!(cache, ProjectEvalCache::new(&p));
+    assert_eq!(
+        cache
+            .evaluate_tree(&p, tree_id(1))
+            .expect("on")
+            .root_value(),
+        &high
+    );
+
+    // A condition on the host step excludes the reference on its own.
+    let local = aegis_model::ConditionId::new_v7();
+    for op in [
+        Op::AddCondition {
+            id: local,
+            name: "Local".into(),
+            description: "".into(),
+            present: false,
+            provenance: Provenance::human("alice", 53),
+        },
+        Op::NeedStepCondition {
+            tree: tree_id(1),
+            node: node_id(1002),
+            condition: local,
+            provenance: Provenance::human("alice", 54),
+        },
+    ] {
+        p.apply_cached(op, &mut cache).expect("local condition");
+    }
+    assert_eq!(
+        p.evaluate_tree(tree_id(1)).expect("local").root_value(),
+        &low
+    );
+    assert_eq!(cache, ProjectEvalCache::new(&p));
 }
 
 #[test]
@@ -934,4 +1214,607 @@ fn maximum_parallel_references_round_trip_sorted_in_every_storage_path() {
             .map(|f| (&f.path, &f.bytes))
             .collect::<Vec<_>>()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Independent oracle: a recursive fold over a generated DAG description that
+// never calls the production order, evaluation or cache.
+// ---------------------------------------------------------------------------
+
+/// Trees 0, 1 and 5 are threat trees, 2..=4 fragments; nobody references 5.
+const ORACLE_TREES: usize = 6;
+const LEVELS: [&str; 4] = ["very-low", "low", "medium", "high"];
+
+#[derive(Clone, Debug, PartialEq)]
+enum Leaf {
+    Own(Option<usize>),
+    Shared(usize),
+    Ref(usize),
+}
+
+#[derive(Clone, Debug)]
+struct OStep {
+    id: NodeId,
+    leaf: Leaf,
+    cond: Option<usize>,
+    mit: Option<(usize, usize)>,
+}
+
+#[derive(Clone, Debug)]
+enum OKid {
+    Step(OStep),
+    Gate(NodeId, GateKind, Vec<OStep>),
+}
+
+#[derive(Clone, Debug)]
+struct OTree {
+    gate: GateKind,
+    kids: Vec<OKid>,
+    cond: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+struct Spec {
+    trees: Vec<OTree>,
+    shared: Vec<Option<usize>>,
+    present: Vec<bool>,
+    status: Vec<ControlStatus>,
+}
+
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self, n: usize) -> usize {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        ((z ^ (z >> 31)) % n as u64) as usize
+    }
+    fn chance(&mut self, percent: usize) -> bool {
+        self.next(100) < percent
+    }
+}
+
+const GATES: [GateKind; 3] = [GateKind::Or, GateKind::And, GateKind::SeqAnd];
+
+fn oracle_tid(t: usize) -> TreeId {
+    tree_id(500 + t as u64)
+}
+
+impl OTree {
+    fn steps(&self) -> impl Iterator<Item = &OStep> {
+        self.kids.iter().flat_map(|k| match k {
+            OKid::Step(s) => std::slice::from_ref(s).iter(),
+            OKid::Gate(_, _, s) => s.iter(),
+        })
+    }
+    fn steps_mut(&mut self) -> impl Iterator<Item = &mut OStep> {
+        self.kids.iter_mut().flat_map(|k| match k {
+            OKid::Step(s) => std::slice::from_mut(s).iter_mut(),
+            OKid::Gate(_, _, s) => s.iter_mut(),
+        })
+    }
+}
+
+fn gen_spec(rng: &mut Rng) -> Spec {
+    let mut next_node = 0u64;
+    let mut fresh = |t: usize| {
+        next_node += 1;
+        node_id(50_000 + 1000 * t as u64 + next_node)
+    };
+    let mut trees = Vec::new();
+    for t in 0..ORACLE_TREES {
+        let gen_step = |rng: &mut Rng, id: NodeId| {
+            let leaf = match rng.next(10) {
+                0 => Leaf::Own(None),
+                1 | 2 => Leaf::Shared(rng.next(2)),
+                3 | 4 if (1..ORACLE_TREES - 1).contains(&t) && t < 4 => {
+                    Leaf::Ref(rng.next(4 - t.max(1)) + t.max(1) + 1)
+                }
+                _ => Leaf::Own(Some(rng.next(LEVELS.len()))),
+            };
+            let leaf = match leaf {
+                Leaf::Ref(f) if f < 2 || f <= t => Leaf::Own(Some(1)),
+                other => other,
+            };
+            OStep {
+                id,
+                leaf,
+                cond: rng.chance(20).then(|| rng.next(2)),
+                mit: rng
+                    .chance(35)
+                    .then(|| (rng.next(3), rng.next(LEVELS.len()))),
+            }
+        };
+        let mut kids = Vec::new();
+        for _ in 0..1 + rng.next(3) {
+            if rng.chance(30) {
+                let gid = fresh(t);
+                let steps = (0..1 + rng.next(2))
+                    .map(|_| {
+                        let id = fresh(t);
+                        gen_step(rng, id)
+                    })
+                    .collect();
+                kids.push(OKid::Gate(gid, GATES[rng.next(3)], steps));
+            } else {
+                let id = fresh(t);
+                kids.push(OKid::Step(gen_step(rng, id)));
+            }
+        }
+        // Forced shape: tree 0 references 2 and 3, which both reference 4
+        // (a diamond, and two references to one target); tree 1 also uses 2.
+        let forced: &[usize] = match t {
+            0 => &[2, 3],
+            1 => &[2],
+            2..=3 => &[4],
+            _ => &[],
+        };
+        for &f in forced {
+            let id = fresh(t);
+            let mut s = gen_step(rng, id);
+            s.leaf = Leaf::Ref(f);
+            kids.push(OKid::Step(s));
+        }
+        if t == 5 {
+            let id = fresh(t);
+            kids.push(OKid::Step(OStep {
+                id,
+                leaf: Leaf::Own(None),
+                cond: None,
+                mit: None,
+            }));
+        }
+        trees.push(OTree {
+            gate: GATES[rng.next(3)],
+            kids,
+            cond: ((2..5).contains(&t) && rng.chance(25)).then(|| rng.next(2)),
+        });
+    }
+    Spec {
+        trees,
+        shared: (0..2)
+            .map(|_| (!rng.chance(15)).then(|| rng.next(LEVELS.len())))
+            .collect(),
+        present: (0..2).map(|_| !rng.chance(30)).collect(),
+        status: (0..3).map(|_| ControlStatus::ALL[rng.next(3)]).collect(),
+    }
+}
+
+fn oracle_root(t: usize) -> NodeId {
+    node_id(40_000 + t as u64)
+}
+
+fn build(m: &Arc<Methodology>, spec: &Spec) -> Project {
+    let mut p = Project::new(Arc::clone(m));
+    let prov = || Provenance::human("oracle", 1);
+    let level = |i: usize| m.feasibility_level(LEVELS[i]).expect("level");
+    let mut ops = Vec::new();
+    for (c, &present) in spec.present.iter().enumerate() {
+        ops.push(Op::AddCondition {
+            id: condition_id(c as u64 + 1),
+            name: "Condition".into(),
+            description: "".into(),
+            present,
+            provenance: prov(),
+        });
+    }
+    for (k, &status) in spec.status.iter().enumerate() {
+        ops.push(Op::AddSecurityControl {
+            id: control_id(k as u64 + 1),
+            name: "Control".into(),
+            provenance: prov(),
+        });
+        ops.push(Op::SetControlStatus {
+            control: control_id(k as u64 + 1),
+            status,
+            provenance: prov(),
+        });
+    }
+    for (s, rating) in spec.shared.iter().enumerate() {
+        ops.push(Op::AddSharedStep {
+            id: shared_step_id(s as u64 + 1),
+            name: "Shared".into(),
+            provenance: prov(),
+        });
+        ops.push(Op::SetStepFeasibility {
+            target: StepTarget::Shared(shared_step_id(s as u64 + 1)),
+            level: rating.map(level),
+            provenance: prov(),
+        });
+    }
+    let mut links = Vec::new();
+    for (t, tree) in spec.trees.iter().enumerate() {
+        let mut at = AttackTree::new(oracle_root(t), Node::gate(tree.gate, "Root")).expect("tree");
+        let mut rated = Vec::new();
+        let mut add = |at: &mut AttackTree, parent, s: &OStep| {
+            at.add_child(parent, s.id, Node::step("Step"))
+                .expect("step");
+            let tid = oracle_tid(t);
+            match s.leaf {
+                Leaf::Own(Some(l)) => rated.push((s.id, level(l))),
+                Leaf::Own(None) => {}
+                Leaf::Shared(sh) => links.push(Op::UseSharedStep {
+                    tree: tid,
+                    node: s.id,
+                    step: shared_step_id(sh as u64 + 1),
+                    provenance: prov(),
+                }),
+                Leaf::Ref(f) => links.push(Op::UseFragment {
+                    tree: tid,
+                    node: s.id,
+                    fragment: oracle_tid(f),
+                    provenance: prov(),
+                }),
+            }
+            if let Some(c) = s.cond {
+                links.push(Op::NeedStepCondition {
+                    tree: tid,
+                    node: s.id,
+                    condition: condition_id(c as u64 + 1),
+                    provenance: prov(),
+                });
+            }
+            if let Some((k, l)) = s.mit {
+                links.push(Op::SetStepMitigation {
+                    tree: tid,
+                    node: s.id,
+                    control: control_id(k as u64 + 1),
+                    feasibility: Some(level(l)),
+                    provenance: prov(),
+                });
+            }
+        };
+        for kid in &tree.kids {
+            let root = at.root();
+            match kid {
+                OKid::Step(s) => add(&mut at, root, s),
+                OKid::Gate(g, kind, steps) => {
+                    let gi = at
+                        .add_child(root, *g, Node::gate(*kind, "Gate"))
+                        .expect("gate");
+                    for s in steps {
+                        add(&mut at, gi, s);
+                    }
+                }
+            }
+        }
+        ops.push(Op::AddAttackTree {
+            role: if (2..5).contains(&t) {
+                TreeRole::Fragment
+            } else {
+                TreeRole::Threat
+            },
+            id: oracle_tid(t),
+            tree: at,
+            step_feasibility: rated,
+            provenance: prov(),
+        });
+        if let Some(c) = tree.cond {
+            links.push(Op::NeedCondition {
+                element: aegis_model::ElementRef::Tree(oracle_tid(t)),
+                condition: condition_id(c as u64 + 1),
+                provenance: prov(),
+            });
+        }
+    }
+    for op in ops.into_iter().chain(links) {
+        p.apply(op.clone())
+            .unwrap_or_else(|e| panic!("{op:?}: {e}"));
+    }
+    p
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum OVal {
+    Excluded,
+    Value(usize),
+    Unrated,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum OErr {
+    NotApplicable,
+    Unrated,
+}
+
+type OResult = Result<Vec<(NodeId, Option<usize>)>, OErr>;
+
+fn counts(status: ControlStatus, residual: bool) -> bool {
+    match status {
+        ControlStatus::Implemented => true,
+        ControlStatus::Planned => residual,
+        ControlStatus::Off => false,
+    }
+}
+
+fn fold(values: &[OVal], gate: GateKind) -> OVal {
+    if values.contains(&OVal::Unrated) {
+        return OVal::Unrated;
+    }
+    let kept: Vec<usize> = values
+        .iter()
+        .filter_map(|v| match v {
+            OVal::Value(l) => Some(*l),
+            _ => None,
+        })
+        .collect();
+    let any_excluded = values.contains(&OVal::Excluded);
+    match gate {
+        GateKind::Or if kept.is_empty() => OVal::Excluded,
+        GateKind::Or => OVal::Value(*kept.iter().max().expect("value")),
+        _ if any_excluded => OVal::Excluded,
+        _ => OVal::Value(*kept.iter().min().expect("value")),
+    }
+}
+
+/// Recursive fold of tree `t`: OR = max, AND/SEQ = min over non-excluded
+/// children, conditions exclude, mode-counted mitigations cap steps.
+fn oracle(spec: &Spec, t: usize, residual: bool) -> OResult {
+    let tree = &spec.trees[t];
+    if tree.cond.is_some_and(|c| !spec.present[c]) {
+        return Err(OErr::NotApplicable);
+    }
+    // Applicability alone (step conditions, not evaluation) excludes a tree
+    // whose root no applicable path reaches.
+    let off = |s: &OStep| {
+        if s.cond.is_some_and(|c| !spec.present[c]) {
+            OVal::Excluded
+        } else {
+            OVal::Value(0)
+        }
+    };
+    let presence: Vec<OVal> = tree
+        .kids
+        .iter()
+        .map(|k| match k {
+            OKid::Step(s) => off(s),
+            OKid::Gate(_, kind, steps) => fold(&steps.iter().map(off).collect::<Vec<_>>(), *kind),
+        })
+        .collect();
+    if fold(&presence, tree.gate) == OVal::Excluded {
+        return Err(OErr::NotApplicable);
+    }
+    let step = |s: &OStep| -> OVal {
+        if s.cond.is_some_and(|c| !spec.present[c]) {
+            return OVal::Excluded;
+        }
+        let base = match &s.leaf {
+            Leaf::Own(l) => *l,
+            Leaf::Shared(sh) => spec.shared[*sh],
+            Leaf::Ref(f) => match oracle(spec, *f, residual) {
+                Ok(values) => values[0].1,
+                Err(OErr::NotApplicable) => return OVal::Excluded,
+                Err(OErr::Unrated) => None,
+            },
+        };
+        let Some(mut v) = base else {
+            return OVal::Unrated;
+        };
+        if let Some((k, l)) = s.mit
+            && counts(spec.status[k], residual)
+        {
+            v = v.min(l);
+        }
+        OVal::Value(v)
+    };
+    let mut out = Vec::new();
+    let mut root_kids = Vec::new();
+    let mut unrated = false;
+    for kid in &tree.kids {
+        match kid {
+            OKid::Step(s) => {
+                let v = step(s);
+                unrated |= v == OVal::Unrated;
+                out.push((s.id, v));
+                root_kids.push(v);
+            }
+            OKid::Gate(g, kind, steps) => {
+                let vals: Vec<OVal> = steps.iter().map(step).collect();
+                unrated |= vals.contains(&OVal::Unrated);
+                let gv = fold(&vals, *kind);
+                out.push((*g, gv));
+                out.extend(steps.iter().map(|s| s.id).zip(vals));
+                root_kids.push(gv);
+            }
+        }
+    }
+    if unrated {
+        return Err(OErr::Unrated);
+    }
+    let OVal::Value(root) = fold(&root_kids, tree.gate) else {
+        return Err(OErr::NotApplicable);
+    };
+    let mut values = vec![(oracle_root(t), Some(root))];
+    values.extend(out.into_iter().map(|(id, v)| match v {
+        OVal::Value(l) => (id, Some(l)),
+        _ => (id, None),
+    }));
+    Ok(values)
+}
+
+fn assert_matches_oracle(
+    m: &Methodology,
+    p: &Project,
+    spec: &Spec,
+    got: &Result<aegis_model::Evaluation<aegis_model::FeasibilityLevel>, ModelError>,
+    t: usize,
+    residual: bool,
+) {
+    let want = oracle(spec, t, residual);
+    let tree = p
+        .attack_tree(p.attack_tree_idx(&oracle_tid(t)).expect("idx"))
+        .expect("tree");
+    match (&want, got) {
+        (Ok(values), Ok(eval)) => {
+            for (id, level) in values {
+                let idx = tree.idx_of(id).expect("node");
+                let expected = level.map(|l| m.feasibility_level(LEVELS[l]).expect("level"));
+                assert_eq!(
+                    eval.get(idx).copied(),
+                    expected,
+                    "tree {t} node {id} {residual}"
+                );
+            }
+        }
+        (Err(OErr::NotApplicable), Err(ModelError::TreeNotApplicable(_)))
+        | (Err(OErr::Unrated), Err(ModelError::MissingLeafValue(_))) => {}
+        _ => panic!("tree {t} residual {residual}: oracle {want:?}, engine {got:?}\n{spec:#?}"),
+    }
+}
+
+fn check_all(m: &Methodology, p: &Project, cache: &ProjectEvalCache, spec: &Spec) {
+    for t in 0..ORACLE_TREES {
+        for residual in [false, true] {
+            let id = oracle_tid(t);
+            let (live, cached) = if residual {
+                (
+                    p.evaluate_residual_tree(id),
+                    cache.evaluate_residual_tree(p, id).cloned(),
+                )
+            } else {
+                (p.evaluate_tree(id), cache.evaluate_tree(p, id).cloned())
+            };
+            assert_eq!(live, cached, "cache tree {t} residual {residual}");
+            assert_matches_oracle(m, p, spec, &live, t, residual);
+        }
+    }
+    assert_eq!(cache, &ProjectEvalCache::new(p), "incremental equals full");
+}
+
+/// A random op valid in `spec`, with the spec it produces.
+fn gen_op(m: &Methodology, rng: &mut Rng, spec: &Spec) -> (Op, Spec) {
+    let prov = Provenance::human("oracle", 2);
+    let mut next = spec.clone();
+    let level = |i: usize| m.feasibility_level(LEVELS[i]).expect("level");
+    loop {
+        let t = rng.next(ORACLE_TREES);
+        let count = spec.trees[t].steps().count();
+        let pick = rng.next(count);
+        let step = next.trees[t].steps_mut().nth(pick).expect("step");
+        let (tid, node) = (oracle_tid(t), step.id);
+        match rng.next(7) {
+            0 => {
+                let c = rng.next(2);
+                next.present[c] = !next.present[c];
+                let op = Op::SetConditionPresent {
+                    id: condition_id(c as u64 + 1),
+                    present: next.present[c],
+                    provenance: prov,
+                };
+                return (op, next);
+            }
+            1 => {
+                let k = rng.next(3);
+                next.status[k] = ControlStatus::ALL[rng.next(3)];
+                let op = Op::SetControlStatus {
+                    control: control_id(k as u64 + 1),
+                    status: next.status[k],
+                    provenance: prov,
+                };
+                return (op, next);
+            }
+            2 => {
+                let s = rng.next(2);
+                next.shared[s] = (!rng.chance(25)).then(|| rng.next(LEVELS.len()));
+                let op = Op::SetStepFeasibility {
+                    target: StepTarget::Shared(shared_step_id(s as u64 + 1)),
+                    level: next.shared[s].map(level),
+                    provenance: prov,
+                };
+                return (op, next);
+            }
+            3 if matches!(step.leaf, Leaf::Own(_)) => {
+                let l = (!rng.chance(25)).then(|| rng.next(LEVELS.len()));
+                step.leaf = Leaf::Own(l);
+                let op = Op::SetStepFeasibility {
+                    target: StepTarget::Step(tid, node),
+                    level: l.map(level),
+                    provenance: prov,
+                };
+                return (op, next);
+            }
+            4 if matches!(step.leaf, Leaf::Ref(_)) => {
+                step.leaf = Leaf::Own(None);
+                return (
+                    Op::UnuseFragment {
+                        tree: tid,
+                        node,
+                        provenance: prov,
+                    },
+                    next,
+                );
+            }
+            5 if step.leaf == Leaf::Own(None) && t != 4 => {
+                let low = if (2..5).contains(&t) { t + 1 } else { 2 };
+                let f = low + rng.next(5 - low);
+                step.leaf = Leaf::Ref(f);
+                let op = Op::UseFragment {
+                    tree: tid,
+                    node,
+                    fragment: oracle_tid(f),
+                    provenance: prov,
+                };
+                return (op, next);
+            }
+            6 => {
+                let (k, l) = (rng.next(3), rng.next(LEVELS.len()));
+                let cleared = rng.chance(30);
+                let k = step.mit.map_or(k, |(old, _)| old);
+                step.mit = (!cleared).then_some((k, l));
+                let op = Op::SetStepMitigation {
+                    tree: tid,
+                    node,
+                    control: control_id(k as u64 + 1),
+                    feasibility: (!cleared).then(|| level(l)),
+                    provenance: prov,
+                };
+                return (op, next);
+            }
+            _ => {}
+        }
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn fragment_evaluation_matches_an_independent_oracle(seed in proptest::prelude::any::<u64>()) {
+        let m = builtin();
+        let mut rng = Rng(seed);
+        let mut spec = gen_spec(&mut rng);
+        let mut p = build(&m, &spec);
+        let mut cache = ProjectEvalCache::new(&p);
+        check_all(&m, &p, &cache, &spec);
+        for _ in 0..8 {
+            let (op, next) = gen_op(&m, &mut rng, &spec);
+            let inverse = p
+                .apply_cached(op.clone(), &mut cache)
+                .unwrap_or_else(|e| panic!("{op:?}: {e}"));
+            check_all(&m, &p, &cache, &next);
+            p.apply_cached(inverse, &mut cache).expect("inverse");
+            check_all(&m, &p, &cache, &spec);
+            p.apply_cached(op, &mut cache).expect("redo");
+            check_all(&m, &p, &cache, &next);
+            spec = next;
+        }
+        // Saved and reloaded projects give the live values.
+        let snapshot = Project::load(save(&p).as_slice(), Arc::clone(&m)).expect("snapshot");
+        let files = p.to_workspace_files().expect("files");
+        let workspace = Project::from_workspace_files(
+            files.iter().map(|f| (f.path.as_str(), f.bytes.as_slice())),
+            Arc::clone(&m),
+        )
+        .expect("workspace");
+        for reloaded in [&snapshot, &workspace] {
+            for t in 0..ORACLE_TREES {
+                let id = oracle_tid(t);
+                assert_eq!(reloaded.evaluate_tree(id), p.evaluate_tree(id));
+                assert_eq!(reloaded.evaluate_residual_tree(id), p.evaluate_residual_tree(id));
+            }
+            assert_eq!(&ProjectEvalCache::new(reloaded), &ProjectEvalCache::new(&p));
+        }
+    }
 }

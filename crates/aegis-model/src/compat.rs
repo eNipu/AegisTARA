@@ -24,7 +24,7 @@ use std::fmt;
 /// Increment whenever a change to evaluation, mitigation, applicability, or
 /// lint semantics could change any computed output for the same pinned
 /// methodology pack and project state.
-pub const ENGINE_SEMANTICS_VERSION: u32 = 1;
+pub const ENGINE_SEMANTICS_VERSION: u32 = 2;
 
 /// Current wire and operation protocol version spoken by this build.
 pub const PROTOCOL_VERSION: u32 = 2;
@@ -420,15 +420,13 @@ mod tests {
             })
         ));
 
-        // This build requires protocol 2 for writes, so headerless legacy
-        // writes (mapped to the historical (1, 1)) are refused.
+        // Headerless legacy writes map to the historical (1, 1). This build
+        // runs semantics 2 (and requires protocol 2); the semantics check
+        // runs first, so the refusal names the semantics mismatch.
         assert!(matches!(
             check_server_write_compatibility(None, None, &EngineContract::current()),
-            Err(CompatibilityError::ProtocolTooOld {
-                client: 1,
-                server_min: MIN_SUPPORTED_PROTOCOL_VERSION,
-                server_current: PROTOCOL_VERSION,
-            })
+            Err(CompatibilityError::EngineSemanticsMismatch { client: 1, server })
+            if server == ENGINE_SEMANTICS_VERSION
         ));
     }
 }

@@ -250,6 +250,13 @@ impl TreeEntry {
         self.step_links.as_ref()?.fragment.get(i).copied().flatten()
     }
 
+    /// The fragments this tree's steps reference, in slot order.
+    fn fragments(&self) -> impl Iterator<Item = TreeIdx> + '_ {
+        self.step_links
+            .iter()
+            .flat_map(|l| l.fragment.iter().flatten().copied())
+    }
+
     /// The slots that have a "through" item, with the item.
     fn vias(&self) -> impl Iterator<Item = (usize, ItemIdx)> + '_ {
         self.step_links
@@ -1500,6 +1507,78 @@ impl Project {
         self.check_fragment_graph(None)
     }
 
+    /// Whether any step references a fragment. Time O(T + linked slots).
+    fn has_fragment_references(&self) -> bool {
+        self.trees
+            .iter()
+            .any(|(_, _, e)| e.fragments().next().is_some())
+    }
+
+    /// The deciding path from `node` of `tree` in one mode (residual when
+    /// `residual`), as stable tree/node IDs. Where the path ends at a step
+    /// that references a fragment, it continues from that fragment's root,
+    /// so a crossing lists the host step and then the fragment root. At most
+    /// [`MAX_FRAGMENT_DEPTH`] references are crossed.
+    ///
+    /// Every tree of the dependency closure is evaluated once, in the same
+    /// mode. [`Evaluation::why_path`] itself stays tree-local, and a crossed
+    /// reference is followed even when a local ceiling on the host step
+    /// decided its value; callers resolve such ceilings themselves.
+    /// Time O(closure nodes * m + depth), space O(closure nodes).
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::UnknownAttackTree`] or [`ModelError::UnknownTreeNode`]
+    /// for unknown IDs; otherwise the error [`evaluate_tree`](Self::evaluate_tree)
+    /// (or the residual one) gives for `tree` or a crossed fragment.
+    pub fn fragment_why_path(
+        &self,
+        tree: TreeId,
+        node: NodeId,
+        residual: bool,
+    ) -> Result<Vec<StepRef>, ModelError> {
+        let (mut idx, mut entry) = self.live_tree(tree)?;
+        let mut at = entry
+            .tree
+            .idx_of(&node)
+            .ok_or(ModelError::UnknownTreeNode { tree, node })?;
+        let (_, mut evals) = self.closure_evals(&self.applicability(), idx, residual)?;
+        let mut path = Vec::new();
+        for _ in 0..=MAX_FRAGMENT_DEPTH {
+            let id = self
+                .trees
+                .id(idx)
+                .ok_or(ModelError::UnknownAttackTree(tree))?;
+            let eval = evals
+                .remove(&idx)
+                .ok_or(ModelError::UnknownAttackTree(id))??;
+            if eval.root_value().is_excluded() {
+                return Err(ModelError::TreeNotApplicable(id));
+            }
+            let mut last = at;
+            for n in eval.why_path(at) {
+                let node = entry
+                    .tree
+                    .id_of(n)
+                    .ok_or(ModelError::UnknownAttackTree(id))?;
+                path.push(StepRef { tree: id, node });
+                last = n;
+            }
+            let Some(target) = entry.fragment_at(last.index()) else {
+                return Ok(path);
+            };
+            idx = target;
+            entry = self
+                .trees
+                .get(target)
+                .ok_or(ModelError::UnknownAttackTree(id))?;
+            at = entry.tree.root();
+        }
+        Err(ModelError::FragmentDepth {
+            max: MAX_FRAGMENT_DEPTH,
+        })
+    }
+
     fn check_fragment_graph(
         &self,
         candidate: Option<(TreeIdx, NodeIdx, TreeIdx)>,
@@ -1839,6 +1918,11 @@ impl Project {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// Own or shared-step ratings only, in O(leaf): a step that references a
+    /// fragment returns `None` here. Its value comes from the dependency
+    /// closure in [`evaluate_tree`](Self::evaluate_tree) or the cache, which
+    /// this accessor never recomputes.
     #[must_use]
     pub fn effective_step_feasibility(
         &self,
@@ -3858,6 +3942,10 @@ impl Project {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// Like [`effective_step_feasibility`](Self::effective_step_feasibility),
+    /// own or shared-step ratings only in O(leaf): a fragment reference gives
+    /// `None`, never a recomputed dependency closure.
     #[must_use]
     pub fn residual_step_feasibility(
         &self,
@@ -4030,6 +4118,10 @@ impl Project {
     ///
     /// Time O(depth + controls), space O(ceilings on the step).
     ///
+    /// Tree-local: a chain ending at a fragment reference returns `None`,
+    /// because the reference has no own rating. Use
+    /// [`fragment_why_path`](Self::fragment_why_path) to cross references.
+    ///
     /// ```
     /// # use std::sync::Arc;
     /// # use aegis_model::{
@@ -4180,8 +4272,8 @@ impl Project {
         entry: &TreeEntry,
         idx: NodeIdx,
     ) -> Option<FeasibilityLevel> {
-        // Fragment references persist but do not evaluate until 142d: fail
-        // closed (unrated) rather than falling back to any stored number.
+        // A reference has no own rating: only a dependency-closure
+        // evaluation gives it the fragment's root (see `lifted_leaf`).
         if entry.fragment_at(idx.index()).is_some() {
             return None;
         }
@@ -4202,7 +4294,19 @@ impl Project {
         idx: NodeIdx,
         residual: bool,
     ) -> Option<FeasibilityLevel> {
-        let mut res = self.entry_effective_step_feasibility(entry, idx)?;
+        let own = self.entry_effective_step_feasibility(entry, idx)?;
+        Some(self.entry_local_ceiling(entry, idx, residual, own))
+    }
+
+    /// `res` lowered by every mitigation and control rule of step `idx` that
+    /// counts in the mode (`ControlStatus::counts_for`). Time O(m + C).
+    fn entry_local_ceiling(
+        &self,
+        entry: &TreeEntry,
+        idx: NodeIdx,
+        residual: bool,
+        mut res: FeasibilityLevel,
+    ) -> FeasibilityLevel {
         if let Some(mitigations) = entry.step_mitigations.get(idx.index()) {
             for m in mitigations {
                 if self
@@ -4233,7 +4337,7 @@ impl Project {
                 }
             }
         }
-        Some(res)
+        res
     }
 
     fn entry_residual_step_feasibility(
@@ -4289,7 +4393,9 @@ impl Project {
     }
 
     /// The rating of step `idx` of tree `id` (inherent or residual), or
-    /// `Excluded` when applicability excludes it. Time O(log n + m).
+    /// `Excluded` when applicability excludes it. A reference step takes its
+    /// fragment's root from `roots`, lowered by its own ceilings in the same
+    /// mode; an unknown or unrated root leaves it unrated. Time O(log n + m).
     fn lifted_leaf(
         &self,
         app: &Applicability,
@@ -4297,29 +4403,100 @@ impl Project {
         entry: &TreeEntry,
         idx: NodeIdx,
         residual: bool,
+        roots: &FragmentRoots,
     ) -> Option<Lifted<FeasibilityLevel>> {
         if app.node_excluded_at(id, idx) {
             return Some(Lifted::Excluded);
+        }
+        if let Some(target) = entry.fragment_at(idx.index()) {
+            return match (*roots.get(&target)?)? {
+                Lifted::Value(v) => Some(Lifted::Value(
+                    self.entry_local_ceiling(entry, idx, residual, v),
+                )),
+                Lifted::Excluded => Some(Lifted::Excluded),
+            };
         }
         let rating = self.entry_step_feasibility_for(entry, idx, residual);
         rating.map(Lifted::Value)
     }
 
-    /// Evaluates tree `id` under `app`, leaving excluded steps out.
+    /// Evaluates live tree `idx` under `app` with its references reading
+    /// `roots`. The root is `Excluded` when every step is excluded.
     /// Time O(V * m + E), space O(V).
+    fn lifted_tree_with(
+        &self,
+        app: &Applicability,
+        (id, entry): (TreeId, &TreeEntry),
+        residual: bool,
+        roots: &FragmentRoots,
+    ) -> Result<Evaluation<Lifted<FeasibilityLevel>>, ModelError> {
+        if app.is_excluded(ElementRef::Tree(id)) {
+            return Err(ModelError::TreeNotApplicable(id));
+        }
+        evaluate(&entry.tree, &Applicable(MaxMin::new()), |i| {
+            self.lifted_leaf(app, id, entry, i, residual, roots)
+        })
+    }
+
+    /// Evaluates, in one mode, tree `idx` and every tree it depends on,
+    /// dependency first and each once. Only that closure is evaluated, so
+    /// unrelated invalid trees cannot block `idx`. Returns the root each
+    /// evaluated tree gives its references, and each tree's evaluation.
+    /// Time O(closure nodes * m) plus O(all nodes) for the order when `idx`
+    /// has references; space O(closure nodes).
+    #[allow(clippy::type_complexity)] // the two outputs of one fold
+    fn closure_evals(
+        &self,
+        app: &Applicability,
+        idx: TreeIdx,
+        residual: bool,
+    ) -> Result<
+        (
+            FragmentRoots,
+            BTreeMap<TreeIdx, Result<Evaluation<Lifted<FeasibilityLevel>>, ModelError>>,
+        ),
+        ModelError,
+    > {
+        let mut need = BTreeSet::from([idx]);
+        let mut stack = vec![idx];
+        while let Some(t) = stack.pop() {
+            for target in self.trees.get(t).into_iter().flat_map(TreeEntry::fragments) {
+                if need.insert(target) {
+                    stack.push(target);
+                }
+            }
+        }
+        let order = if need.len() == 1 {
+            vec![idx]
+        } else {
+            self.fragment_order()?
+        };
+        let (mut roots, mut evals) = (FragmentRoots::new(), BTreeMap::new());
+        for t in order.into_iter().filter(|t| need.contains(t)) {
+            let (Some(id), Some(entry)) = (self.trees.id(t), self.trees.get(t)) else {
+                continue;
+            };
+            let eval = self.lifted_tree_with(app, (id, entry), residual, &roots);
+            roots.insert(t, reference_root(eval.as_ref().map(|e| *e.root_value())));
+            evals.insert(t, eval);
+        }
+        Ok((roots, evals))
+    }
+
+    /// Evaluates tree `id` under `app`, leaving excluded steps out and
+    /// folding the trees it references first.
+    /// Time O(closure nodes * m), space O(closure nodes).
     fn evaluate_tree_with(
         &self,
         app: &Applicability,
         id: TreeId,
         residual: bool,
     ) -> Result<Evaluation<FeasibilityLevel>, ModelError> {
-        let (_, entry) = self.live_tree(id)?;
-        if app.is_excluded(ElementRef::Tree(id)) {
-            return Err(ModelError::TreeNotApplicable(id));
-        }
-        let eval = evaluate(&entry.tree, &Applicable(MaxMin::new()), |idx| {
-            self.lifted_leaf(app, id, entry, idx, residual)
-        })?;
+        let (idx, _) = self.live_tree(id)?;
+        let (_, mut evals) = self.closure_evals(app, idx, residual)?;
+        let eval = evals
+            .remove(&idx)
+            .ok_or(ModelError::UnknownAttackTree(id))??;
         Evaluation::from_lifted(&eval).ok_or(ModelError::TreeNotApplicable(id))
     }
 
@@ -5710,7 +5887,8 @@ impl Project {
             return Err(ModelError::TreeNotApplicable(id));
         }
         let domain = Applicable(MaxMin::<FeasibilityLevel>::new());
-        let leaf = |idx| self.lifted_leaf(app, id, entry, idx, residual);
+        let (roots, _) = self.closure_evals(app, self.live_tree(id)?.0, residual)?;
+        let leaf = |idx| self.lifted_leaf(app, id, entry, idx, residual, &roots);
         let mut cache = TreeEvalCache::new(&entry.tree, &domain, leaf)?;
         let Lifted::Value(baseline_root) = *cache.evaluation().root_value() else {
             return Err(ModelError::TreeNotApplicable(id));
@@ -6457,7 +6635,10 @@ impl Project {
                         }
                     }
                     Node::Step { .. } => {
-                        if self.effective_step_feasibility(idx, node_idx).is_none() {
+                        // A reference is rated by its fragment, which is linted itself.
+                        if entry.fragment_at(node_idx.index()).is_none()
+                            && self.effective_step_feasibility(idx, node_idx).is_none()
+                        {
                             findings.push(LintFinding::new(LintCode::AttackTreeStepUnrated {
                                 tree: id,
                                 node: node_id,
@@ -14836,6 +15017,23 @@ struct CachedTreeEval {
     residual: Result<LiftedTree, ModelError>,
 }
 
+/// The root each fragment gives a reference to it in one mode; `None` when
+/// the fragment cannot be evaluated.
+type FragmentRoots = BTreeMap<TreeIdx, Option<Lifted<FeasibilityLevel>>>;
+
+/// What a reference consumes from its fragment's evaluation `root`: a tree
+/// that does not apply is excluded at the reference, and any other error
+/// leaves the reference unrated rather than defaulting to a level.
+fn reference_root(
+    root: Result<Lifted<FeasibilityLevel>, &ModelError>,
+) -> Option<Lifted<FeasibilityLevel>> {
+    match root {
+        Ok(v) => Some(v),
+        Err(ModelError::TreeNotApplicable(_)) => Some(Lifted::Excluded),
+        Err(_) => None,
+    }
+}
+
 /// Maps a tree's [`ModelError::TreeNotApplicable`] to
 /// [`ModelError::ThreatNotApplicable`] for threat `id`; other errors pass.
 fn not_applicable_threat(e: ModelError, id: ThreatId) -> ModelError {
@@ -15183,7 +15381,15 @@ impl ProjectEvalCache {
         self.recomputed_nodes = 0;
         self.recomputed_threats = 0;
 
-        for (idx, id, entry) in project.trees.iter() {
+        // Dependency order lets each reference read its fragment's cached
+        // root; a graph error (never produced by valid ops) leaves them unrated.
+        let order = project
+            .fragment_order()
+            .unwrap_or_else(|_| project.trees.iter().map(|(idx, _, _)| idx).collect());
+        for idx in order {
+            let (Some(id), Some(entry)) = (project.trees.id(idx), project.trees.get(idx)) else {
+                continue;
+            };
             for (node_idx, node_id, _) in entry.tree.iter() {
                 if let Some(shared) = entry.shared_at(node_idx.index()) {
                     self.node_shared.insert((idx, node_id), shared);
@@ -15292,6 +15498,10 @@ impl ProjectEvalCache {
         if may_change_applicability(op, project.attack_filter()) {
             let next = project.applicability();
             if next != self.applicability {
+                if project.has_fragment_references() {
+                    self.rebuild(project);
+                    return;
+                }
                 self.apply_applicability_change(project, next, structure_tree(op));
             }
         }
@@ -15382,7 +15592,7 @@ impl ProjectEvalCache {
             | Op::AddBoundaryComponent { .. }
             | Op::RemoveBoundaryComponent { .. }
             | Op::RemoveTrustBoundary { .. }
-            | Op::SetAssetComponent { .. } => {}
+            | Op::SetAssetComponent { .. } => return,
 
             Op::AddDamageScenario { .. } | Op::RemoveDamageScenario { .. } => {
                 self.damage_threats
@@ -15406,8 +15616,8 @@ impl ProjectEvalCache {
                 self.update_shared_link(project, *tree, *node);
             }
             Op::UseFragment { .. } | Op::UnuseFragment { .. } => {
-                // Until fragment evaluation exists, invalidate all cached users.
                 self.rebuild(project);
+                return;
             }
             Op::SetStepFeasibility { target, .. } | Op::SetStepFactor { target, .. } => {
                 if let StepTarget::Step(tree, node) = target {
@@ -15473,6 +15683,11 @@ impl ProjectEvalCache {
             Op::LinkDamage { threat, .. } | Op::UnlinkDamage { threat, .. } => {
                 self.update_threat_damages(project, *threat);
             }
+        }
+        // References are not yet invalidated incrementally: any calculation
+        // or structure change rebuilds every tree in dependency order.
+        if project.has_fragment_references() {
+            self.rebuild(project);
         }
     }
 
@@ -15979,12 +16194,29 @@ impl ProjectEvalCache {
         if self.applicability.is_excluded(ElementRef::Tree(id)) {
             return Err(ModelError::TreeNotApplicable(id));
         }
+        let roots = self.cached_roots(entry, residual);
         let cache = TreeEvalCache::new(&entry.tree, &Applicable(MaxMin::new()), |idx| {
-            project.lifted_leaf(&self.applicability, id, entry, idx, residual)
+            project.lifted_leaf(&self.applicability, id, entry, idx, residual, &roots)
         })?;
         let view =
             Evaluation::from_lifted(cache.evaluation()).ok_or(ModelError::TreeNotApplicable(id))?;
         Ok(LiftedTree { cache, view })
+    }
+
+    /// The cached root, in one mode, of every fragment `entry` references.
+    /// Time O(references).
+    fn cached_roots(&self, entry: &TreeEntry, residual: bool) -> FragmentRoots {
+        entry
+            .fragments()
+            .map(|t| {
+                let slot = self.trees.get(t.index()).and_then(Option::as_ref);
+                let root = slot.and_then(|s| {
+                    let res = if residual { &s.residual } else { &s.inherent };
+                    reference_root(res.as_ref().map(|lt| *lt.cache.evaluation().root_value()))
+                });
+                (t, root)
+            })
+            .collect()
     }
 
     fn build_threat_eval(
@@ -16344,8 +16576,9 @@ impl ProjectEvalCache {
             self.rebuild(project);
             return;
         };
+        let roots = self.cached_roots(entry, residual);
         let app = &self.applicability;
-        let leaf = |i| project.lifted_leaf(app, tree_id, entry, i, residual);
+        let leaf = |i| project.lifted_leaf(app, tree_id, entry, i, residual, &roots);
         let all_rated = node_indices.iter().all(|&i| leaf(i).is_some());
         let mut touched = Vec::new();
 

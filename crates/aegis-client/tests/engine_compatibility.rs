@@ -351,8 +351,8 @@ async fn legacy_client_without_headers_is_accepted_on_v1_and_rejected_after_upgr
         .expect_err("legacy client must be rejected after protocol-only bump");
     assert_eq!(err.code(), Some(&ServerCode::IncompatibleClient));
 
-    // This build requires protocol 2 for writes, so the headerless legacy
-    // client (mapped to the historical (1, 1)) is refused outright.
+    // The headerless legacy client maps to the historical (1, 1); this build
+    // runs semantics 2 and requires protocol 2, so it is refused outright.
     let current_srv = start_with_contract(EngineContract::current()).await;
     let legacy_current =
         Connection::connect(&current_srv.url, Arc::new(DevLogin::new("alice", true)))
@@ -362,7 +362,7 @@ async fn legacy_client_without_headers_is_accepted_on_v1_and_rejected_after_upgr
     let err = legacy_current
         .create_project("Legacy Current", "iso21434-r155")
         .await
-        .expect_err("headerless legacy client must be rejected on protocol 2");
+        .expect_err("headerless legacy client must be rejected by the current build");
     assert_eq!(err.code(), Some(&ServerCode::IncompatibleClient));
 }
 
