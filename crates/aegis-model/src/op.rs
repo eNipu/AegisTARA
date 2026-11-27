@@ -55,6 +55,7 @@ pub enum StepTarget {
 /// | `UnlinkTreeNode` | `LinkTreeNode` at the old place with the old tree provenance | O(k + p) |
 /// | `RenameTreeNode` | the same with the old label and provenance | O(1) |
 /// | `SetTreeNodeGate` | the same with the old gate and provenance | O(1) |
+/// | `SetTreeNodeKind` | the same with the old kind and provenance | O(1) |
 /// | `AddAsset` | `RemoveAsset` | O(log n) |
 /// | `RenameAsset` | `RenameAsset` with the old name and provenance | O(log n) |
 /// | `SetAssetProperties` | the same with the old set and provenance | O(log n + p) |
@@ -296,6 +297,17 @@ pub enum Op {
         id: NodeId,
         /// The new gate kind.
         gate: GateKind,
+        /// Provenance of the change.
+        provenance: Provenance,
+    },
+    /// Changes a bare node between a step (`None`) and an empty gate (`Some`).
+    SetTreeNodeKind {
+        /// Existing attack tree.
+        tree: TreeId,
+        /// A bare node of the tree.
+        id: NodeId,
+        /// `None` for a step, `Some(kind)` for an empty gate.
+        gate: Option<GateKind>,
         /// Provenance of the change.
         provenance: Provenance,
     },
@@ -1346,6 +1358,7 @@ impl Op {
             | Self::UnlinkTreeNode { provenance, .. }
             | Self::RenameTreeNode { provenance, .. }
             | Self::SetTreeNodeGate { provenance, .. }
+            | Self::SetTreeNodeKind { provenance, .. }
             | Self::AddAsset { provenance, .. }
             | Self::RenameAsset { provenance, .. }
             | Self::SetAssetProperties { provenance, .. }
@@ -1488,6 +1501,7 @@ impl Op {
             | Self::UnlinkTreeNode { provenance, .. }
             | Self::RenameTreeNode { provenance, .. }
             | Self::SetTreeNodeGate { provenance, .. }
+            | Self::SetTreeNodeKind { provenance, .. }
             | Self::AddAsset { provenance, .. }
             | Self::RenameAsset { provenance, .. }
             | Self::SetAssetProperties { provenance, .. }

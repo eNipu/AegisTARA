@@ -265,6 +265,7 @@ fn target_of(op: &Op) -> Option<Selection> {
         Op::AddTreeNode { tree, id: node, .. }
         | Op::RenameTreeNode { tree, id: node, .. }
         | Op::SetTreeNodeGate { tree, id: node, .. }
+        | Op::SetTreeNodeKind { tree, id: node, .. }
         | Op::SetStepMitigation { tree, node, .. }
         | Op::SetReviewMark { tree, node, .. }
         | Op::UnuseSharedStep { tree, node, .. }
@@ -484,6 +485,7 @@ fn parts(op: &Op, p: &Project) -> Parts {
         Op::SetStepAttackType { .. } => ("change", "attack type of a step in attack tree", None),
         Op::LinkTreeNode { .. }
         | Op::SetTreeNodeGate { .. }
+        | Op::SetTreeNodeKind { .. }
         | Op::SetReviewMark { .. }
         | Op::SetStepFeasibility { .. }
         | Op::SetStepFactor { .. }

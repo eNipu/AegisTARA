@@ -586,7 +586,7 @@ fn ops_generator_covers_every_op_and_most_errors() {
         // Job 133 adds the eight condition ops; job 137 adds SetAttackFilter;
         // job 141a adds the three shared-step lifecycle ops; 141c adds link/unlink;
         // 142c adds the two fragment reference ops.
-        let kinds = if m.interface_kind_count() > 0 { 81 } else { 78 };
+        let kinds = if m.interface_kind_count() > 0 { 82 } else { 79 };
         assert_eq!(stats.ok_kinds.len(), kinds, "{:?}", stats.ok_kinds);
         for kind in [
             "SetStepVia",
@@ -603,6 +603,7 @@ fn ops_generator_covers_every_op_and_most_errors() {
             "UnuseSharedStep",
             "UseFragment",
             "UnuseFragment",
+            "SetTreeNodeKind",
         ] {
             assert!(stats.ok_kinds.contains(kind), "{kind} never succeeded");
         }
@@ -612,7 +613,7 @@ fn ops_generator_covers_every_op_and_most_errors() {
                 "SetControlRule never succeeded"
             );
         }
-        for error in ["UnknownComponent", "NotAStep"] {
+        for error in ["UnknownComponent", "NotAStep", "BareTreeNodeRequired"] {
             assert!(stats.errors.contains(error), "{error} never raised");
         }
         assert!(stats.errors.len() >= 38, "{:?}", stats.errors);

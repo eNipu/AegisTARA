@@ -2658,3 +2658,805 @@ fn tipping_a_reference_matches_hand_derived_and_independent_tips() {
         assert_eq!(actual, expected, "residual={mode}");
     }
 }
+
+#[test]
+fn set_tree_node_kind_retains_identities_edges_role_and_round_trips() {
+    let m = builtin();
+    let p_init = Provenance::human("alice", 10);
+    let p_edit = Provenance::human("bob", 20);
+    let p_edit2 = Provenance::ai("carol", 30);
+
+    // Threat tree with a threat link, an empty root step at first converted to OR,
+    // plus a fragment tree whose root is a bare Step, and a non-root multiply-parented node.
+    let (threat_tree, frag_tree) = (tree_id(10), tree_id(11));
+    let (root, g1, g2, s0, m_node, s2, s3) = (
+        node_id(100),
+        node_id(101),
+        node_id(102),
+        node_id(103),
+        node_id(104),
+        node_id(105),
+        node_id(106),
+    );
+    let frag_root = node_id(200);
+    let (asset, damage, threat) = (asset_id(10), damage_id(10), threat_id(10));
+    let safety = m.impact_category("safety").expect("safety");
+    let severe = m.level(safety, "severe").expect("severe");
+
+    let mut p = project_with(
+        &m,
+        &[
+            Op::AddAsset {
+                id: asset,
+                name: "Gateway".into(),
+                properties: m.all_properties(),
+                provenance: p_init.clone(),
+            },
+            Op::AddDamageScenario {
+                id: damage,
+                name: "Loss".into(),
+                impacts: vec![(safety, severe)],
+                provenance: p_init.clone(),
+            },
+            Op::AddThreatScenario {
+                id: threat,
+                name: "Tamper".into(),
+                asset,
+                category: m.threat_categories().next().expect("cat"),
+                catalog_refs: vec![],
+                damages: vec![damage],
+                provenance: p_init.clone(),
+            },
+            Op::AddAttackTree {
+                role: TreeRole::Threat,
+                id: threat_tree,
+                tree: AttackTree::new(root, Node::step("Threat root")).expect("root"),
+                step_feasibility: vec![],
+                provenance: p_init.clone(),
+            },
+            Op::SetThreatAttackTree {
+                threat,
+                tree: Some(threat_tree),
+                provenance: p_init.clone(),
+            },
+            Op::AddAttackTree {
+                role: TreeRole::Fragment,
+                id: frag_tree,
+                tree: AttackTree::new(frag_root, Node::step("Frag root")).expect("frag"),
+                step_feasibility: vec![],
+                provenance: p_init.clone(),
+            },
+        ],
+    );
+
+    // 1. Root Step <-> empty OR / AND / SEQ_AND on both Threat and Fragment trees.
+    for target_tree in [threat_tree, frag_tree] {
+        let target_root = if target_tree == threat_tree {
+            root
+        } else {
+            frag_root
+        };
+        let expected_role = if target_tree == threat_tree {
+            TreeRole::Threat
+        } else {
+            TreeRole::Fragment
+        };
+        let expected_visual = if target_tree == threat_tree {
+            "AT00"
+        } else {
+            "TT01"
+        };
+        for kind in [GateKind::Or, GateKind::And, GateKind::SeqAnd] {
+            let before = p.clone();
+            let op = Op::SetTreeNodeKind {
+                tree: target_tree,
+                id: target_root,
+                gate: Some(kind),
+                provenance: p_edit.clone(),
+            };
+            assert_eq!(p.validate(&op), Ok(()));
+            let inv = p.apply(op.clone()).expect("step -> gate");
+            assert_eq!(
+                inv,
+                Op::SetTreeNodeKind {
+                    tree: target_tree,
+                    id: target_root,
+                    gate: None,
+                    provenance: p_init.clone(),
+                }
+            );
+            let tidx = p.attack_tree_idx(&target_tree).expect("idx");
+            assert_eq!(p.attack_tree_role(tidx), Some(expected_role));
+            assert_eq!(
+                p.attack_tree_visual_id(tidx).as_deref(),
+                Some(expected_visual)
+            );
+            let t = p.attack_tree(tidx).expect("tree");
+            let r_idx = t.root();
+            assert_eq!(t.idx_of(&target_root), Some(r_idx));
+            assert_eq!(t.get(r_idx).and_then(Node::gate_kind), Some(kind));
+            assert_eq!(p.attack_tree_provenance(tidx).expect("prov"), &p_edit);
+
+            // Round-trip snapshot, op log, and workspace files with empty gate root.
+            let snap = save(&p);
+            let loaded = Project::load(snap.as_slice(), Arc::clone(&m)).expect("snap");
+            assert_eq!(loaded, p);
+            assert_eq!(save(&loaded), snap);
+            let files = p.to_workspace_files().expect("ws");
+            let ws_loaded = Project::from_workspace_files(
+                files.iter().map(|f| (f.path.as_str(), f.bytes.as_slice())),
+                Arc::clone(&m),
+            )
+            .expect("ws load");
+            assert_eq!(ws_loaded, p);
+            let log_bytes = write_log(&m, std::slice::from_ref(&op));
+            let log_back: Vec<Op> = read_log(&m, &log_bytes).into_iter().map(|r| r.op).collect();
+            assert_eq!(log_back.as_slice(), std::slice::from_ref(&op));
+
+            // Undo back to bare Step root and redo.
+            let redo = p.apply(inv).expect("undo");
+            assert_eq!(redo, op);
+            assert_eq!(p, before);
+            assert_eq!(save(&p), save(&before));
+        }
+    }
+
+    // 2. Non-root multiply-parented node Step <-> empty Gate retains ID, label, index,
+    // owner, parents, children ordering, threat link, role, and visual ID.
+    p.apply(Op::SetTreeNodeKind {
+        tree: threat_tree,
+        id: root,
+        gate: Some(GateKind::Or),
+        provenance: p_init.clone(),
+    })
+    .expect("root gate");
+    for op in [
+        Op::AddTreeNode {
+            tree: threat_tree,
+            parent: root,
+            id: g1,
+            node: Node::gate(GateKind::And, "G1"),
+            index: 1,
+            position: 0,
+            provenance: p_init.clone(),
+        },
+        Op::AddTreeNode {
+            tree: threat_tree,
+            parent: root,
+            id: g2,
+            node: Node::gate(GateKind::Or, "G2"),
+            index: 2,
+            position: 1,
+            provenance: p_init.clone(),
+        },
+        Op::AddTreeNode {
+            tree: threat_tree,
+            parent: g1,
+            id: s0,
+            node: Node::step("S0"),
+            index: 3,
+            position: 0,
+            provenance: p_init.clone(),
+        },
+        Op::AddTreeNode {
+            tree: threat_tree,
+            parent: g1,
+            id: m_node,
+            node: Node::step("Shared bare node"),
+            index: 4,
+            position: 1,
+            provenance: p_init.clone(),
+        },
+        Op::AddTreeNode {
+            tree: threat_tree,
+            parent: g1,
+            id: s2,
+            node: Node::step("S2"),
+            index: 5,
+            position: 2,
+            provenance: p_init.clone(),
+        },
+        Op::AddTreeNode {
+            tree: threat_tree,
+            parent: g2,
+            id: s3,
+            node: Node::step("S3"),
+            index: 6,
+            position: 0,
+            provenance: p_init.clone(),
+        },
+        Op::LinkTreeNode {
+            tree: threat_tree,
+            parent: g2,
+            child: m_node,
+            position: 0,
+            slot: 0,
+            provenance: p_init.clone(),
+        },
+    ] {
+        p.apply(op).expect("build tree");
+    }
+
+    let before_multi = p.clone();
+    let tidx = p.attack_tree_idx(&threat_tree).expect("idx");
+    let t_before = p.attack_tree(tidx).expect("tree");
+    let m_idx_before = t_before.idx_of(&m_node).expect("m_idx");
+    let g1_idx = t_before.idx_of(&g1).expect("g1");
+    let g2_idx = t_before.idx_of(&g2).expect("g2");
+    let g1_children_before = t_before.children(g1_idx).to_vec();
+    let g2_children_before = t_before.children(g2_idx).to_vec();
+    let m_parents_before: Vec<_> = t_before.parents(m_idx_before).collect();
+
+    let to_gate = Op::SetTreeNodeKind {
+        tree: threat_tree,
+        id: m_node,
+        gate: Some(GateKind::SeqAnd),
+        provenance: p_edit.clone(),
+    };
+    let inv1 = p.apply(to_gate.clone()).expect("multi step -> gate");
+    assert_eq!(
+        inv1,
+        Op::SetTreeNodeKind {
+            tree: threat_tree,
+            id: m_node,
+            gate: None,
+            provenance: p_init.clone(),
+        }
+    );
+    let to_or = Op::SetTreeNodeKind {
+        tree: threat_tree,
+        id: m_node,
+        gate: Some(GateKind::Or),
+        provenance: p_edit2.clone(),
+    };
+    let inv2 = p.apply(to_or.clone()).expect("empty gate -> empty gate");
+    assert_eq!(
+        inv2,
+        Op::SetTreeNodeKind {
+            tree: threat_tree,
+            id: m_node,
+            gate: Some(GateKind::SeqAnd),
+            provenance: p_edit.clone(),
+        }
+    );
+
+    let tidx = p.attack_tree_idx(&threat_tree).expect("idx");
+    let t_after = p.attack_tree(tidx).expect("tree");
+    assert_eq!(t_after.idx_of(&m_node), Some(m_idx_before));
+    assert_eq!(t_after.id_of(m_idx_before), Some(m_node));
+    assert_eq!(
+        t_after.get(m_idx_before).map(Node::label),
+        Some("Shared bare node")
+    );
+    assert_eq!(
+        t_after.get(m_idx_before).and_then(Node::gate_kind),
+        Some(GateKind::Or)
+    );
+    assert_eq!(t_after.owner(m_idx_before), Some(g1_idx));
+    assert_eq!(
+        t_after.parents(m_idx_before).collect::<Vec<_>>(),
+        m_parents_before
+    );
+    assert_eq!(t_after.children(g1_idx), g1_children_before.as_slice());
+    assert_eq!(t_after.children(g2_idx), g2_children_before.as_slice());
+    assert_eq!(p.attack_tree_role(tidx), Some(TreeRole::Threat));
+    assert_eq!(p.attack_tree_visual_id(tidx).as_deref(), Some("AT00"));
+    assert_eq!(
+        p.threat_scenario(p.threat_scenario_idx(&threat).expect("th"))
+            .expect("th")
+            .attack_tree(),
+        Some(tidx)
+    );
+    assert_eq!(p.attack_tree_provenance(tidx).expect("prov"), &p_edit2);
+
+    // Log, snapshot, and workspace round trips on the multi-parent empty gate.
+    let log = write_log(&m, &[to_gate.clone(), to_or.clone()]);
+    assert_eq!(
+        read_log(&m, &log)
+            .into_iter()
+            .map(|r| r.op)
+            .collect::<Vec<_>>(),
+        [to_gate, to_or.clone()]
+    );
+    let snap = save(&p);
+    assert_eq!(
+        Project::load(snap.as_slice(), Arc::clone(&m)).expect("snap"),
+        p
+    );
+    let files = p.to_workspace_files().expect("ws");
+    assert_eq!(
+        Project::from_workspace_files(
+            files.iter().map(|f| (f.path.as_str(), f.bytes.as_slice())),
+            Arc::clone(&m),
+        )
+        .expect("ws"),
+        p
+    );
+
+    // Undo inv2 then inv1 -> exact original project, then redo inv2's redo.
+    let redo2 = p.apply(inv2).expect("undo 2");
+    assert_eq!(redo2, to_or);
+    p.apply(inv1).expect("undo 1");
+    assert_eq!(p, before_multi);
+    assert_eq!(save(&p), save(&before_multi));
+}
+
+#[test]
+fn set_tree_node_kind_rejects_non_bare_nodes_and_bad_provenance_without_mutation() {
+    let m = builtin();
+    let prov = Provenance::human("alice", 10);
+    let tree = tree_id(50);
+    let frag = tree_id(51);
+    let (root, step, gate_with_child) = (node_id(500), node_id(501), node_id(502));
+    let shared = shared_step_id(50);
+    let ctrl = control_id(50);
+    let cond = condition_id(50);
+    let comp = common::component_id(50);
+    let assump = aegis_model::AssumptionId::from_uuid(common::v7(50)).expect("v7");
+
+    let mut p = project_with(
+        &m,
+        &[
+            Op::AddSharedStep {
+                id: shared,
+                name: "Shared".into(),
+                provenance: prov.clone(),
+            },
+            Op::AddSecurityControl {
+                id: ctrl,
+                name: "Control".into(),
+                provenance: prov.clone(),
+            },
+            Op::AddCondition {
+                id: cond,
+                name: "Cond".into(),
+                description: "".into(),
+                present: true,
+                provenance: prov.clone(),
+            },
+            Op::AddComponent {
+                id: comp,
+                name: "ECU".into(),
+                parent: None,
+                provenance: prov.clone(),
+            },
+            Op::AddAssumption {
+                id: assump,
+                name: "Assump".into(),
+                holds: true,
+                provenance: prov.clone(),
+            },
+            add_tree(51, TreeRole::Fragment),
+            Op::AddAttackTree {
+                role: TreeRole::Threat,
+                id: tree,
+                tree: AttackTree::new(root, Node::gate(GateKind::Or, "Root")).expect("root"),
+                step_feasibility: vec![],
+                provenance: prov.clone(),
+            },
+            Op::AddTreeNode {
+                tree,
+                parent: root,
+                id: gate_with_child,
+                node: Node::gate(GateKind::And, "Parent"),
+                index: 1,
+                position: 0,
+                provenance: prov.clone(),
+            },
+            Op::AddTreeNode {
+                tree,
+                parent: gate_with_child,
+                id: step,
+                node: Node::step("Leaf"),
+                index: 2,
+                position: 0,
+                provenance: prov.clone(),
+            },
+        ],
+    );
+
+    let assert_rejects = |proj: &mut Project, op: Op, expected: ModelError| {
+        let before = proj.clone();
+        let bytes = save(proj);
+        assert_eq!(proj.validate(&op), Err(expected.clone()), "{op:?}");
+        assert_eq!(proj.apply(op.clone()), Err(expected), "{op:?}");
+        assert_eq!(proj, &before);
+        assert_eq!(save(proj), bytes);
+    };
+
+    // Unknown tree / node / blank provenance on bare node.
+    assert_rejects(
+        &mut p,
+        Op::SetTreeNodeKind {
+            tree: tree_id(999),
+            id: step,
+            gate: Some(GateKind::Or),
+            provenance: prov.clone(),
+        },
+        ModelError::UnknownAttackTree(tree_id(999)),
+    );
+    assert_rejects(
+        &mut p,
+        Op::SetTreeNodeKind {
+            tree,
+            id: node_id(999),
+            gate: Some(GateKind::Or),
+            provenance: prov.clone(),
+        },
+        ModelError::UnknownTreeNode {
+            tree,
+            node: node_id(999),
+        },
+    );
+    assert_rejects(
+        &mut p,
+        Op::SetTreeNodeKind {
+            tree,
+            id: step,
+            gate: Some(GateKind::Or),
+            provenance: Provenance::human("   ", 11),
+        },
+        ModelError::EmptyActor,
+    );
+
+    // Child-bearing gates (root and non-root) cannot change kind, even to another GateKind.
+    for gate in [None, Some(GateKind::And)] {
+        assert_rejects(
+            &mut p,
+            Op::SetTreeNodeKind {
+                tree,
+                id: root,
+                gate,
+                provenance: prov.clone(),
+            },
+            ModelError::BareTreeNodeRequired { tree, node: root },
+        );
+        assert_rejects(
+            &mut p,
+            Op::SetTreeNodeKind {
+                tree,
+                id: gate_with_child,
+                gate,
+                provenance: prov.clone(),
+            },
+            ModelError::BareTreeNodeRequired {
+                tree,
+                node: gate_with_child,
+            },
+        );
+    }
+
+    // Each step attachment blocks SetTreeNodeKind with BareTreeNodeRequired, and clearing restores bareness.
+    let f = m.feasibility_factors().next().expect("factor");
+    let fl = m.factor_levels(f).next().expect("factor level");
+    let at = m.attack_types().next().expect("attack type");
+    let blockers: Vec<Op> = vec![
+        Op::SetStepFeasibility {
+            target: StepTarget::Step(tree, step),
+            level: Some(feas(&m, "high")),
+            provenance: prov.clone(),
+        },
+        Op::SetStepFactor {
+            target: StepTarget::Step(tree, step),
+            factor: f,
+            level: Some(fl),
+            provenance: prov.clone(),
+        },
+        Op::SetStepVia {
+            target: StepTarget::Step(tree, step),
+            via: Some(aegis_model::ItemRef::Component(comp)),
+            provenance: prov.clone(),
+        },
+        Op::SetStepAttackType {
+            target: StepTarget::Step(tree, step),
+            attack_type: Some(at),
+            provenance: prov.clone(),
+        },
+        Op::UseSharedStep {
+            tree,
+            node: step,
+            step: shared,
+            provenance: prov.clone(),
+        },
+        Op::UseFragment {
+            tree,
+            node: step,
+            fragment: frag,
+            provenance: prov.clone(),
+        },
+        Op::SetStepMitigation {
+            tree,
+            node: step,
+            control: ctrl,
+            feasibility: Some(feas(&m, "low")),
+            provenance: prov.clone(),
+        },
+        Op::NeedStepCondition {
+            tree,
+            node: step,
+            condition: cond,
+            provenance: prov.clone(),
+        },
+        Op::SetReviewMark {
+            tree,
+            node: step,
+            marked: true,
+            provenance: prov.clone(),
+        },
+        Op::SetAssumptionExcludes {
+            id: assump,
+            trees: vec![],
+            steps: vec![StepRef { tree, node: step }],
+            provenance: prov.clone(),
+        },
+    ];
+
+    for setup_op in blockers {
+        let before_block = p.clone();
+        let clear = p.apply(setup_op.clone()).expect("attach");
+        assert_rejects(
+            &mut p,
+            Op::SetTreeNodeKind {
+                tree,
+                id: step,
+                gate: Some(GateKind::Or),
+                provenance: prov.clone(),
+            },
+            ModelError::BareTreeNodeRequired { tree, node: step },
+        );
+        // Clearing restores bareness and exact original state.
+        p.apply(clear).expect("clear");
+        assert_eq!(p, before_block);
+        let to_gate = p
+            .apply(Op::SetTreeNodeKind {
+                tree,
+                id: step,
+                gate: Some(GateKind::Or),
+                provenance: prov.clone(),
+            })
+            .expect("bare after clear");
+        p.apply(to_gate).expect("restore step");
+        assert_eq!(p, before_block);
+    }
+}
+
+#[test]
+fn set_tree_node_kind_wire_codec_is_strict() {
+    let m = builtin();
+    let codec = aegis_model::OpCodec::new(Arc::clone(&m));
+    let t = tree_id(60);
+    let n = node_id(600);
+    let p_human = Provenance::human("alice", 42);
+
+    let cases = [
+        (
+            Op::SetTreeNodeKind {
+                tree: t,
+                id: n,
+                gate: None,
+                provenance: Provenance::default(),
+            },
+            format!(r#"{{"op":"set_tree_node_kind","tree":"{t}","id":"{n}","gate":null}}"#),
+        ),
+        (
+            Op::SetTreeNodeKind {
+                tree: t,
+                id: n,
+                gate: Some(GateKind::Or),
+                provenance: Provenance::default(),
+            },
+            format!(r#"{{"op":"set_tree_node_kind","tree":"{t}","id":"{n}","gate":"or"}}"#),
+        ),
+        (
+            Op::SetTreeNodeKind {
+                tree: t,
+                id: n,
+                gate: Some(GateKind::And),
+                provenance: Provenance::default(),
+            },
+            format!(r#"{{"op":"set_tree_node_kind","tree":"{t}","id":"{n}","gate":"and"}}"#),
+        ),
+        (
+            Op::SetTreeNodeKind {
+                tree: t,
+                id: n,
+                gate: Some(GateKind::SeqAnd),
+                provenance: p_human,
+            },
+            format!(
+                r#"{{"op":"set_tree_node_kind","tree":"{t}","id":"{n}","gate":"seq_and","provenance":{{"actor":"alice","timestamp_ms":42,"source":"human"}}}}"#
+            ),
+        ),
+    ];
+
+    for (op, expected_json) in &cases {
+        let bytes = codec.encode(op).expect("encode");
+        assert_eq!(std::str::from_utf8(&bytes).expect("utf8"), expected_json);
+        assert_eq!(&codec.decode(&bytes).expect("decode"), op);
+        let log_bytes = write_log(&m, std::slice::from_ref(op));
+        let back: Vec<Op> = read_log(&m, &log_bytes).into_iter().map(|r| r.op).collect();
+        assert_eq!(&back, std::slice::from_ref(op));
+    }
+
+    for bad in [
+        format!(r#"{{"op":"set_tree_node_kind","tree":"{t}","id":"{n}"}}"#),
+        format!(r#"{{"op":"set_tree_node_kind","tree":"{t}","id":"{n}","gate":"xor"}}"#),
+        format!(r#"{{"op":"set_tree_node_kind","tree":"{t}","id":"{n}","gate":1}}"#),
+        format!(
+            r#"{{"op":"set_tree_node_kind","tree":"{t}","id":"{n}","gate":null,"extra":true}}"#
+        ),
+        format!(r#"{{"op":"set_tree_node_kind","tree":"not-uuid","id":"{n}","gate":null}}"#),
+        format!(r#"{{"op":"set_tree_node_kind","tree":"{t}","id":"BAD","gate":null}}"#),
+        format!(r#"{{"op":"SetTreeNodeKind","tree":"{t}","id":"{n}","gate":null}}"#),
+        format!(
+            r#"{{"op":"set_tree_node_kind","tree":"{t}","id":"{n}","gate":null,"provenance":null}}"#
+        ),
+        format!(
+            r#"{{"op":"set_tree_node_kind","tree":"{t}","id":"{n}","gate":null,"provenance":{{"actor":"","timestamp_ms":0,"source":"human"}}}}"#
+        ),
+    ] {
+        assert!(
+            codec.decode(bad.as_bytes()).is_err(),
+            "codec should reject {bad}"
+        );
+        let log = format!(
+            "{}\n{{\"seq\":1,\"op\":{bad}}}\n",
+            std::str::from_utf8(&write_log(&m, &[]))
+                .expect("utf8")
+                .trim_end()
+        );
+        assert!(
+            aegis_model::OpLogReader::open(log.as_bytes(), Arc::clone(&m))
+                .expect("header")
+                .next()
+                .expect("record")
+                .is_err(),
+            "op log should reject {bad}"
+        );
+    }
+}
+
+#[test]
+fn set_tree_node_kind_updates_cache_and_fragment_users_transitively() {
+    let m = builtin();
+    let mut p = diamond(&m);
+    let prov = Provenance::human("alice", 99);
+    let before = p.clone();
+    let mut cache = ProjectEvalCache::new(&p);
+    check_fragments(&p, &cache);
+
+    // Split fragment 34's second leaf (34002, rated low) into an AND gate with two children,
+    // raising its value to high so fragments 32, 33, host 30, and threat 70 update transitively.
+    let ops = vec![
+        Op::SetStepFeasibility {
+            target: StepTarget::Step(tree_id(34), node_id(34002)),
+            level: None,
+            provenance: prov.clone(),
+        },
+        Op::SetTreeNodeKind {
+            tree: tree_id(34),
+            id: node_id(34002),
+            gate: Some(GateKind::And),
+            provenance: prov.clone(),
+        },
+        Op::AddTreeNode {
+            tree: tree_id(34),
+            parent: node_id(34002),
+            id: node_id(34003),
+            node: Node::step("Child A"),
+            index: 3,
+            position: 0,
+            provenance: prov.clone(),
+        },
+        Op::AddTreeNode {
+            tree: tree_id(34),
+            parent: node_id(34002),
+            id: node_id(34004),
+            node: Node::step("Child B"),
+            index: 4,
+            position: 1,
+            provenance: prov.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Step(tree_id(34), node_id(34003)),
+            level: Some(feas(&m, "medium")),
+            provenance: prov.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Step(tree_id(34), node_id(34004)),
+            level: Some(feas(&m, "medium")),
+            provenance: prov.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Step(tree_id(34), node_id(34001)),
+            level: Some(feas(&m, "very-low")),
+            provenance: prov.clone(),
+        },
+    ];
+
+    let mut inverses = Vec::new();
+    for op in ops {
+        let inv = p.apply_cached(op, &mut cache).expect("apply cached");
+        check_fragments(&p, &cache);
+        inverses.push(inv);
+    }
+    assert_eq!(
+        cache
+            .evaluate_tree(&p, tree_id(30))
+            .expect("host")
+            .root_value(),
+        &feas(&m, "medium")
+    );
+
+    // Also test root kind change on fragment 34 after clearing its children, then undo all back to before.
+    let mut cleanup_inverses = Vec::new();
+    for op in [
+        Op::SetStepFeasibility {
+            target: StepTarget::Step(tree_id(34), node_id(34001)),
+            level: None,
+            provenance: prov.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Step(tree_id(34), node_id(34003)),
+            level: None,
+            provenance: prov.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Step(tree_id(34), node_id(34004)),
+            level: None,
+            provenance: prov.clone(),
+        },
+        Op::RemoveTreeNode {
+            tree: tree_id(34),
+            id: node_id(34004),
+            provenance: prov.clone(),
+        },
+        Op::RemoveTreeNode {
+            tree: tree_id(34),
+            id: node_id(34003),
+            provenance: prov.clone(),
+        },
+        Op::RemoveTreeNode {
+            tree: tree_id(34),
+            id: node_id(34002),
+            provenance: prov.clone(),
+        },
+        Op::RemoveTreeNode {
+            tree: tree_id(34),
+            id: node_id(34001),
+            provenance: prov.clone(),
+        },
+        Op::SetTreeNodeKind {
+            tree: tree_id(34),
+            id: node_id(34000),
+            gate: None,
+            provenance: prov.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Step(tree_id(34), node_id(34000)),
+            level: Some(feas(&m, "high")),
+            provenance: prov,
+        },
+    ] {
+        let inv = p.apply_cached(op, &mut cache).expect("collapse to step");
+        check_fragments(&p, &cache);
+        cleanup_inverses.push(inv);
+    }
+    assert_eq!(
+        cache
+            .evaluate_tree(&p, tree_id(30))
+            .expect("host")
+            .root_value(),
+        &feas(&m, "high")
+    );
+
+    for inv in cleanup_inverses
+        .into_iter()
+        .rev()
+        .chain(inverses.into_iter().rev())
+    {
+        p.apply_cached(inv, &mut cache).expect("undo");
+        check_fragments(&p, &cache);
+    }
+    assert_eq!(p, before);
+}

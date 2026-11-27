@@ -675,7 +675,7 @@ impl Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..91,
+        0u8..92,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -2418,6 +2418,62 @@ impl Gen {
                         node,
                         provenance,
                     }
+                }
+            }
+            91 => {
+                let mut bare = Vec::new();
+                let mut non_bare = Vec::new();
+                for (t_idx, t_id, tree) in p.attack_trees() {
+                    for (n_idx, n_id, node) in tree.iter() {
+                        let is_bare = node.children().is_empty()
+                            && p.step_feasibility(t_idx, n_idx).is_none()
+                            && p.step_factors(t_idx, n_idx).next().is_none()
+                            && p.step_mitigations(t_idx, n_idx).is_empty()
+                            && p.step_via(t_idx, n_idx).is_none()
+                            && p.step_attack_type(t_idx, n_idx).is_none()
+                            && p.step_shared(t_idx, n_idx).is_none()
+                            && p.step_fragment(t_idx, n_idx).is_none()
+                            && p.step_condition_link_ids(t_id, n_id).is_empty()
+                            && !p.review_marked(t_id, n_id)
+                            && !p.assumptions().any(|(_, _, a)| {
+                                a.excludes_steps()
+                                    .binary_search(&aegis_model::StepRef {
+                                        tree: t_id,
+                                        node: n_id,
+                                    })
+                                    .is_ok()
+                            });
+                        if is_bare {
+                            bare.push((t_id, n_id, node.gate_kind().is_some()));
+                        } else {
+                            non_bare.push((t_id, n_id, node.gate_kind().is_some()));
+                        }
+                    }
+                }
+                let (tree, id, was_gate) = if !bare.is_empty() && !s.c.is_multiple_of(3) {
+                    nth(bare, s.a).expect("non-empty")
+                } else if !non_bare.is_empty() && !s.b.is_multiple_of(4) {
+                    nth(non_bare, s.a).expect("non-empty")
+                } else {
+                    let (t, n) = self.step_node(p, s.a, s.b);
+                    (t, n, false)
+                };
+                let gate = if (was_gate && !s.b.is_multiple_of(3))
+                    || (!was_gate && s.b.is_multiple_of(5))
+                {
+                    None
+                } else {
+                    Some(match s.b % 3 {
+                        0 => GateKind::Or,
+                        1 => GateKind::And,
+                        _ => GateKind::SeqAnd,
+                    })
+                };
+                Op::SetTreeNodeKind {
+                    tree,
+                    id,
+                    gate,
+                    provenance,
                 }
             }
             _ => Op::SetComponentSystem {

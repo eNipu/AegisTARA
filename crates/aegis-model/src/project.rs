@@ -7592,6 +7592,12 @@ impl Project {
                 }
                 check_provenance(provenance)?;
             }
+            Op::SetTreeNodeKind {
+                tree,
+                id,
+                provenance,
+                ..
+            } => return self.check_set_tree_node_kind(*tree, *id, provenance),
             Op::AddAsset {
                 id,
                 name,
@@ -8236,6 +8242,26 @@ impl Project {
                 let gate = entry.tree.set_gate_kind(idx, gate)?;
                 let provenance = std::mem::replace(&mut entry.provenance, provenance);
                 Ok(Op::SetTreeNodeGate {
+                    tree,
+                    id,
+                    gate,
+                    provenance,
+                })
+            }
+            Op::SetTreeNodeKind {
+                tree,
+                id,
+                gate,
+                provenance,
+            } => {
+                let entry = self.tree_mut(tree)?;
+                let idx = entry
+                    .tree
+                    .idx_of(&id)
+                    .ok_or(ModelError::UnknownTreeNode { tree, node: id })?;
+                let gate = entry.tree.set_node_kind(idx, gate)?;
+                let provenance = std::mem::replace(&mut entry.provenance, provenance);
+                Ok(Op::SetTreeNodeKind {
                     tree,
                     id,
                     gate,
@@ -9386,19 +9412,8 @@ impl Project {
             .check_insert(parent_idx, at, position as usize, id, node)
     }
 
-    fn check_remove_tree_node(
-        &self,
-        tree: TreeId,
-        id: NodeId,
-        provenance: &Provenance,
-    ) -> Result<(), ModelError> {
-        let (entry, idx) = self.tree_node(tree, id)?;
-        entry.tree.check_remove(idx)?;
-        self.require_no_fragment(tree, id, entry.fragment_at(idx.index()))?;
-        if let Some(shared) = entry.shared_at(idx.index()) {
-            return Err(self.shared_link_error(tree, id, shared));
-        }
-        let rated = self.review_marks.contains(&(tree, id))
+    fn has_node_metadata(&self, tree: TreeId, id: NodeId, entry: &TreeEntry, idx: NodeIdx) -> bool {
+        self.review_marks.contains(&(tree, id))
             || entry
                 .step_feasibility
                 .get(idx.index())
@@ -9418,8 +9433,39 @@ impl Project {
                 a.excludes_steps
                     .binary_search(&StepRef { tree, node: id })
                     .is_ok()
-            });
-        if rated {
+            })
+    }
+
+    fn check_set_tree_node_kind(
+        &self,
+        tree: TreeId,
+        id: NodeId,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let (entry, idx) = self.tree_node(tree, id)?;
+        let bare = entry.tree.children(idx).is_empty()
+            && entry.fragment_at(idx.index()).is_none()
+            && entry.shared_at(idx.index()).is_none()
+            && !self.has_node_metadata(tree, id, entry, idx);
+        if !bare {
+            return Err(ModelError::BareTreeNodeRequired { tree, node: id });
+        }
+        check_provenance(provenance)
+    }
+
+    fn check_remove_tree_node(
+        &self,
+        tree: TreeId,
+        id: NodeId,
+        provenance: &Provenance,
+    ) -> Result<(), ModelError> {
+        let (entry, idx) = self.tree_node(tree, id)?;
+        entry.tree.check_remove(idx)?;
+        self.require_no_fragment(tree, id, entry.fragment_at(idx.index()))?;
+        if let Some(shared) = entry.shared_at(idx.index()) {
+            return Err(self.shared_link_error(tree, id, shared));
+        }
+        if self.has_node_metadata(tree, id, entry, idx) {
             return Err(ModelError::NodeIsRated(id));
         }
         check_provenance(provenance)
@@ -15091,6 +15137,7 @@ const fn may_change_applicability(op: &Op, filter: &AttackFilter) -> bool {
         | Op::LinkTreeNode { .. }
         | Op::UnlinkTreeNode { .. }
         | Op::SetTreeNodeGate { .. }
+        | Op::SetTreeNodeKind { .. }
         | Op::RemoveCybersecurityGoal { .. }
         | Op::RemoveCybersecurityClaim { .. }
         | Op::SetAttackFilter { .. } => true,
@@ -15186,7 +15233,8 @@ const fn structure_tree(op: &Op) -> Option<TreeId> {
         | Op::RemoveTreeNode { tree, .. }
         | Op::LinkTreeNode { tree, .. }
         | Op::UnlinkTreeNode { tree, .. }
-        | Op::SetTreeNodeGate { tree, .. } => Some(*tree),
+        | Op::SetTreeNodeGate { tree, .. }
+        | Op::SetTreeNodeKind { tree, .. } => Some(*tree),
         Op::AddAttackTree { id, .. } | Op::RemoveAttackTree { id } => Some(*id),
         _ => None,
     }
@@ -15653,7 +15701,8 @@ impl ProjectEvalCache {
             | Op::RemoveTreeNode { tree, .. }
             | Op::LinkTreeNode { tree, .. }
             | Op::UnlinkTreeNode { tree, .. }
-            | Op::SetTreeNodeGate { tree, .. } => self.update_tree_structure(project, *tree),
+            | Op::SetTreeNodeGate { tree, .. }
+            | Op::SetTreeNodeKind { tree, .. } => self.update_tree_structure(project, *tree),
             Op::UseSharedStep { tree, node, .. } | Op::UnuseSharedStep { tree, node, .. } => {
                 self.update_shared_link(project, *tree, *node);
             }

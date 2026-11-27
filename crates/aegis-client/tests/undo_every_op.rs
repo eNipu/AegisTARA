@@ -295,6 +295,18 @@ fn walk_item_definition_trees_and_descriptions(seen: &mut BTreeSet<String>) {
         gate: GateKind::Or,
         provenance: who(),
     });
+    go(Op::SetTreeNodeKind {
+        tree,
+        id: g2,
+        gate: None,
+        provenance: who(),
+    });
+    go(Op::SetTreeNodeKind {
+        tree,
+        id: g2,
+        gate: Some(GateKind::SeqAnd),
+        provenance: who(),
+    });
     go(Op::SetReviewMark {
         tree,
         node: s1,

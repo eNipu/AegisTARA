@@ -2491,6 +2491,14 @@ pub(super) enum OpWire {
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },
+    SetTreeNodeKind {
+        tree: WireId<TreeId>,
+        id: WireId<NodeId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        gate: Option<GateKindWire>,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
     SetDescription {
         target: TargetWire,
         text: DescriptionText,

@@ -115,6 +115,13 @@ enum OpView<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         provenance: Option<ProvenanceView<'a>>,
     },
+    SetTreeNodeKind {
+        tree: Text<TreeId>,
+        id: Text<NodeId>,
+        gate: Option<GateKindWire>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provenance: Option<ProvenanceView<'a>>,
+    },
     SetDescription {
         target: TargetView,
         text: &'a str,
@@ -1010,6 +1017,17 @@ fn op_view<'a>(m: &'a Methodology, order: &'a KeyOrder, op: &'a Op) -> OpView<'a
             tree: Text(*tree),
             id: Text(*id),
             gate: GateKindWire::from(*gate),
+            provenance: ProvenanceView::of(provenance),
+        },
+        Op::SetTreeNodeKind {
+            tree,
+            id,
+            gate,
+            provenance,
+        } => OpView::SetTreeNodeKind {
+            tree: Text(*tree),
+            id: Text(*id),
+            gate: gate.map(GateKindWire::from),
             provenance: ProvenanceView::of(provenance),
         },
         Op::SetReviewMark {
@@ -2099,6 +2117,17 @@ fn op_from_wire(m: &Methodology, w: OpWire, line: u64) -> Result<Op, StoreError>
             tree: tree.0,
             id: id.0,
             gate: gate.into(),
+            provenance: wire::unwrap_provenance(provenance),
+        },
+        OpWire::SetTreeNodeKind {
+            tree,
+            id,
+            gate,
+            provenance,
+        } => Op::SetTreeNodeKind {
+            tree: tree.0,
+            id: id.0,
+            gate: gate.map(Into::into),
             provenance: wire::unwrap_provenance(provenance),
         },
         OpWire::SetReviewMark {

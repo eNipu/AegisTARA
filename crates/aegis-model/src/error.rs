@@ -514,6 +514,14 @@ pub enum ModelError {
         /// The gate node ID.
         node: NodeId,
     },
+    /// A node must have no children, ratings, links, or review mark before changing kind.
+    #[error("node {node} of attack tree {tree} must be bare before changing kind")]
+    BareTreeNodeRequired {
+        /// The attack tree.
+        tree: TreeId,
+        /// The non-bare node ID.
+        node: NodeId,
+    },
     /// A name is empty after trimming whitespace.
     #[error("{kind} name is empty")]
     EmptyName {
