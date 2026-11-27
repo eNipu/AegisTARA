@@ -223,8 +223,152 @@ fn push_ceiling_causes(
     }
 }
 
-fn push_tree_deciding_step(
+fn push_path_node(
     project: &Project,
+    catalog: Option<&Catalog>,
+    tree_id: TreeId,
+    node_id: aegis_model::NodeId,
+    causes: &mut Vec<CauseTarget>,
+) -> Option<(TreeIdx, aegis_model::NodeIdx)> {
+    let tree_idx = project.attack_tree_idx(&tree_id)?;
+    let tree = project.attack_tree(tree_idx)?;
+    let node_idx = tree.idx_of(&node_id)?;
+    let node = tree.get(node_idx)?;
+    let target = Selection::TreeNode(tree_id, node_id);
+    if causes.iter().any(|cause| cause.target == target) {
+        return Some((tree_idx, node_idx));
+    }
+    let role = if project.step_fragment_id(tree_idx, node_idx).is_some() {
+        "inspector-fragment-reference"
+    } else {
+        "inspector-deciding-step"
+    };
+    causes.push(CauseTarget {
+        role: catalog.map_or_else(String::new, |c| c.tr(role)),
+        visual_id: project.attack_tree_visual_id(tree_idx).unwrap_or_default(),
+        label: node.label().to_owned(),
+        target,
+    });
+    Some((tree_idx, node_idx))
+}
+
+fn push_condition_causes(
+    project: &Project,
+    catalog: Option<&Catalog>,
+    selection: Selection,
+    causes: &mut Vec<CauseTarget>,
+) {
+    for target in exclusion_targets(project, selection) {
+        if !causes.iter().any(|cause| cause.target == target) {
+            causes.push(make_cause(
+                project,
+                catalog,
+                "inspector-excluded-by",
+                target,
+            ));
+        }
+    }
+}
+
+fn cached_node_value(
+    ws: &Workspace,
+    tree_id: TreeId,
+    node_idx: aegis_model::NodeIdx,
+    residual: bool,
+) -> Option<FeasibilityLevel> {
+    let project = ws.project();
+    let eval = if residual {
+        ws.cache().evaluate_residual_tree(project, tree_id)
+    } else {
+        ws.cache().evaluate_tree(project, tree_id)
+    };
+    eval.ok()?.get(node_idx).copied()
+}
+
+fn push_fragment_deciding_path(
+    ws: &Workspace,
+    catalog: Option<&Catalog>,
+    tree_id: TreeId,
+    node_id: aegis_model::NodeId,
+    residual: bool,
+    causes: &mut Vec<CauseTarget>,
+) {
+    let project = ws.project();
+    let Ok(path) = project.fragment_why_path(tree_id, node_id, residual) else {
+        return;
+    };
+    let crosses_tree = path.windows(2).any(|pair| pair[0].tree != pair[1].tree);
+    if !crosses_tree {
+        for step in path.iter().rev() {
+            let Some(tree_idx) = project.attack_tree_idx(&step.tree) else {
+                continue;
+            };
+            let Some(tree) = project.attack_tree(tree_idx) else {
+                continue;
+            };
+            let Some(node_idx) = tree.idx_of(&step.node) else {
+                continue;
+            };
+            if tree
+                .get(node_idx)
+                .is_some_and(|node| node.gate_kind().is_none())
+            {
+                push_path_node(project, catalog, step.tree, step.node, causes);
+                break;
+            }
+        }
+        return;
+    }
+
+    for (position, step) in path.iter().enumerate() {
+        let boundary_host = path
+            .get(position + 1)
+            .is_some_and(|next| next.tree != step.tree);
+        let boundary_target = position > 0 && path[position - 1].tree != step.tree;
+        if !boundary_host && !boundary_target && position + 1 != path.len() {
+            continue;
+        }
+        let Some((tree_idx, node_idx)) =
+            push_path_node(project, catalog, step.tree, step.node, causes)
+        else {
+            continue;
+        };
+        if !boundary_host {
+            continue;
+        }
+        let target_root = path[position + 1];
+        let target_idx = project.attack_tree_idx(&target_root.tree);
+        let target_value = target_idx.and_then(|idx| {
+            cached_node_value(
+                ws,
+                target_root.tree,
+                project.attack_tree(idx)?.root(),
+                residual,
+            )
+        });
+        let host_value = cached_node_value(ws, step.tree, node_idx, residual);
+        if host_value
+            .zip(target_value)
+            .is_some_and(|(host, target)| host != target)
+        {
+            push_ceiling_causes(
+                project,
+                catalog,
+                &project.step_ceilings(tree_idx, node_idx),
+                causes,
+            );
+            push_condition_causes(
+                project,
+                catalog,
+                Selection::TreeNode(step.tree, step.node),
+                causes,
+            );
+        }
+    }
+}
+
+fn push_tree_deciding_step(
+    ws: &Workspace,
     catalog: Option<&Catalog>,
     tree_id: TreeId,
     tree_idx: TreeIdx,
@@ -232,6 +376,7 @@ fn push_tree_deciding_step(
     inherent_eval: Option<&Evaluation<FeasibilityLevel>>,
     causes: &mut Vec<CauseTarget>,
 ) {
+    let project = ws.project();
     let Some(tree) = project.attack_tree(tree_idx) else {
         return;
     };
@@ -253,20 +398,18 @@ fn push_tree_deciding_step(
         push_ceiling_causes(project, catalog, step.ceilings(), causes);
         return;
     }
-    if let Some(eval) = residual_eval.or(inherent_eval)
-        && let Some((ni, node)) = eval
-            .why_path(tree.root())
-            .filter_map(|ni| Some((ni, tree.get(ni)?)))
-            .filter(|(_, n)| n.gate_kind().is_none())
-            .last()
-        && let Some(nid) = tree.id_of(ni)
-    {
-        causes.push(CauseTarget {
-            role: catalog.map_or_else(String::new, |c| c.tr("inspector-deciding-step")),
-            visual_id: project.attack_tree_visual_id(tree_idx).unwrap_or_default(),
-            label: node.label().to_owned(),
-            target: Selection::TreeNode(tree_id, nid),
-        });
+    if residual_eval.is_none() && inherent_eval.is_none() {
+        return;
+    }
+    if let Some(root_id) = tree.id_of(tree.root()) {
+        push_fragment_deciding_path(
+            ws,
+            catalog,
+            tree_id,
+            root_id,
+            residual_eval.is_some(),
+            causes,
+        );
     }
 }
 
@@ -289,7 +432,7 @@ fn explain_threat(
     {
         let res = ws.cache().evaluate_residual_threat(project, id).ok();
         let inh = ws.cache().evaluate_threat(project, id).ok();
-        push_tree_deciding_step(project, catalog, tree_id, tree_idx, res, inh, &mut causes);
+        push_tree_deciding_step(ws, catalog, tree_id, tree_idx, res, inh, &mut causes);
     }
     let deciding_damage = ws
         .cache()
@@ -334,7 +477,7 @@ fn explain_tree(
         lines.push(format!("Feasibility after controls: {lvl}"));
     }
     let mut causes = Vec::new();
-    push_tree_deciding_step(project, catalog, tree_id, tree_idx, res, inh, &mut causes);
+    push_tree_deciding_step(ws, catalog, tree_id, tree_idx, res, inh, &mut causes);
     (!lines.is_empty() || !causes.is_empty()).then_some(InspectorExplain { lines, causes })
 }
 
@@ -353,11 +496,11 @@ fn explain_tree_node(
     let mut lines = Vec::new();
     let mut causes = Vec::new();
     if node.gate_kind().is_some() {
-        let eval = ws
-            .cache()
-            .evaluate_residual_tree(project, tree_id)
-            .or_else(|_| ws.cache().evaluate_tree(project, tree_id))
-            .ok()?;
+        let residual_eval = ws.cache().evaluate_residual_tree(project, tree_id);
+        let (eval, residual) = match residual_eval {
+            Ok(eval) => (eval, true),
+            Err(_) => (ws.cache().evaluate_tree(project, tree_id).ok()?, false),
+        };
         let explanation = eval.explain(tree, node_idx)?;
         let rule = match explanation.rule() {
             Some(GateKind::And) => "AND: the hardest child decides",
@@ -379,26 +522,12 @@ fn explain_tree_node(
             let vis = project.attack_tree_visual_id(tree_idx).unwrap_or_default();
             causes.push(CauseTarget {
                 role: catalog.map_or_else(String::new, |c| c.tr("inspector-deciding-child")),
-                visual_id: vis.clone(),
+                visual_id: vis,
                 label: child.label().to_owned(),
                 target: Selection::TreeNode(tree_id, child_id),
             });
-            if child.gate_kind().is_some()
-                && let Some((leaf_idx, leaf)) = eval
-                    .why_path(child_idx)
-                    .filter_map(|ni| Some((ni, tree.get(ni)?)))
-                    .filter(|(_, n)| n.gate_kind().is_none())
-                    .last()
-                && let Some(leaf_id) = tree.id_of(leaf_idx)
-            {
-                causes.push(CauseTarget {
-                    role: catalog.map_or_else(String::new, |c| c.tr("inspector-deciding-step")),
-                    visual_id: vis,
-                    label: leaf.label().to_owned(),
-                    target: Selection::TreeNode(tree_id, leaf_id),
-                });
-            }
         }
+        push_fragment_deciding_path(ws, catalog, tree_id, node_id, residual, &mut causes);
     } else {
         let ceilings = project.step_ceilings(tree_idx, node_idx);
         for c in &ceilings {
@@ -416,6 +545,19 @@ fn explain_tree_node(
             lines.push(line);
         }
         push_ceiling_causes(project, catalog, &ceilings, &mut causes);
+        if let Some(fragment) = project.step_fragment_id(tree_idx, node_idx) {
+            push_condition_causes(
+                project,
+                catalog,
+                Selection::TreeNode(tree_id, node_id),
+                &mut causes,
+            );
+            let residual = ws.cache().evaluate_residual_tree(project, tree_id).is_ok();
+            if residual || ws.cache().evaluate_tree(project, tree_id).is_ok() {
+                push_fragment_deciding_path(ws, catalog, tree_id, node_id, residual, &mut causes);
+            }
+            push_condition_causes(project, catalog, Selection::Tree(fragment), &mut causes);
+        }
         if let Some(via) = project.step_via(tree_idx, node_idx) {
             let target = match via {
                 ItemRef::Component(cid) => Selection::Component(cid),
@@ -692,11 +834,17 @@ pub fn inspector_view(ws: &Workspace, sel: Selection, catalog: &Catalog) -> Opti
             let tree = project.attack_tree(t_idx)?;
             let n_idx = tree.idx_of(&node_id)?;
             let node = tree.get(n_idx)?;
-            let kind = match node.gate_kind() {
-                None => "Step",
-                Some(GateKind::Or) => "OR gate",
-                Some(GateKind::And) => "AND gate",
-                Some(GateKind::SeqAnd) => "Sequential AND gate",
+            let fragment = project.step_fragment_id(t_idx, n_idx);
+            let kind = if fragment.is_some() {
+                catalog.tr("inspector-fragment-reference")
+            } else {
+                match node.gate_kind() {
+                    None => "Step",
+                    Some(GateKind::Or) => "OR gate",
+                    Some(GateKind::And) => "AND gate",
+                    Some(GateKind::SeqAnd) => "Sequential AND gate",
+                }
+                .to_owned()
             };
             if node.gate_kind().is_some() {
                 let eval = ws
@@ -714,21 +862,48 @@ pub fn inspector_view(ws: &Workspace, sel: Selection, catalog: &Catalog) -> Opti
                     fields.push(field(catalog.tr("feasibility"), unrated(), None));
                 }
             } else {
-                if let Some(inh) = project.effective_step_feasibility(t_idx, n_idx) {
-                    fields.push(field(
-                        catalog.tr("before-controls"),
-                        feasibility_text(m, lang, inh),
-                        Some(feasibility_tone(m, inh)),
-                    ));
+                if fragment.is_some() {
+                    let inherent = ws
+                        .cache()
+                        .evaluate_tree(project, tree_id)
+                        .ok()
+                        .and_then(|eval| eval.get(n_idx).copied());
+                    let residual = ws
+                        .cache()
+                        .evaluate_residual_tree(project, tree_id)
+                        .ok()
+                        .and_then(|eval| eval.get(n_idx).copied());
+                    for (label, value) in [
+                        (catalog.tr("before-controls"), inherent),
+                        (catalog.tr("after-controls"), residual),
+                    ] {
+                        if let Some(level) = value {
+                            fields.push(field(
+                                label,
+                                feasibility_text(m, lang, level),
+                                Some(feasibility_tone(m, level)),
+                            ));
+                        } else {
+                            fields.push(field(label, unrated(), None));
+                        }
+                    }
                 } else {
-                    fields.push(field(catalog.tr("before-controls"), unrated(), None));
-                }
-                if let Some(res) = project.residual_step_feasibility(t_idx, n_idx) {
-                    fields.push(field(
-                        catalog.tr("after-controls"),
-                        feasibility_text(m, lang, res),
-                        Some(feasibility_tone(m, res)),
-                    ));
+                    if let Some(inh) = project.effective_step_feasibility(t_idx, n_idx) {
+                        fields.push(field(
+                            catalog.tr("before-controls"),
+                            feasibility_text(m, lang, inh),
+                            Some(feasibility_tone(m, inh)),
+                        ));
+                    } else {
+                        fields.push(field(catalog.tr("before-controls"), unrated(), None));
+                    }
+                    if let Some(res) = project.residual_step_feasibility(t_idx, n_idx) {
+                        fields.push(field(
+                            catalog.tr("after-controls"),
+                            feasibility_text(m, lang, res),
+                            Some(feasibility_tone(m, res)),
+                        ));
+                    }
                 }
                 if let Some(p) = project.step_attack_potential(t_idx, n_idx) {
                     let lvl = feasibility_text(m, lang, p.feasibility());
@@ -758,7 +933,7 @@ pub fn inspector_view(ws: &Workspace, sel: Selection, catalog: &Catalog) -> Opti
                 .attack_tree_provenance(t_idx)
                 .map(pages::changed_text)
                 .unwrap_or_default();
-            (kind.to_owned(), changed)
+            (kind, changed)
         }
         Selection::SharedStep(id) => {
             let idx = project.shared_step_idx(&id)?;

@@ -388,6 +388,7 @@ inspector-rev-claim-responsible = Responsible for claims
 inspector-rev-control-targets = Security controls
 inspector-rev-step-via = Attack steps through this
 fragment = Fragment
+inspector-fragment-reference = Fragment reference
 inspector-rev-fragment-used-in = Fragment
 inspector-rev-shared-step-used-in = Shared step
 inspector-rev-step-mitigations = Attack steps mitigated

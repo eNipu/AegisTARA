@@ -380,6 +380,7 @@ inspector-rev-claim-responsible = ⟦Réspônsîblé fôr clâîms␣⟧
 inspector-rev-control-targets = ⟦Sécûrîtý côntrôls␣⟧
 inspector-rev-step-via = ⟦Âttâck stéps thrôûgh thîs␣⟧
 fragment = ⟦Frâgmént␣⟧
+inspector-fragment-reference = ⟦Frâgmént référéncé␣⟧
 inspector-rev-fragment-used-in = ⟦Frâgmént␣⟧
 inspector-rev-shared-step-used-in = ⟦Shâréd stép␣⟧
 inspector-rev-step-mitigations = ⟦Âttâck stéps mîtîgâtéd␣⟧
