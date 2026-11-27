@@ -379,6 +379,7 @@ inspector-rev-claim-responsible = 担当するクレーム
 inspector-rev-control-targets = セキュリティ対策
 inspector-rev-step-via = 経由する攻撃ステップ
 fragment = フラグメント
+make-shared-fragment = 共有フラグメントを作成
 inspector-fragment-reference = フラグメント参照
 inspector-rev-fragment-used-in = フラグメント
 inspector-rev-shared-step-used-in = 共通ステップ

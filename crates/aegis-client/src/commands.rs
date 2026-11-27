@@ -196,6 +196,16 @@ pub enum Edit {
         /// New shared step ID.
         id: SharedStepId,
     },
+    /// Extracts a selected node and its reachable descendants into a new
+    /// fragment and replaces the selection with a reference to it.
+    MakeSharedFragment {
+        /// Source tree.
+        tree: TreeId,
+        /// Selected node whose reachable subtree is extracted.
+        node: NodeId,
+        /// New fragment tree ID.
+        id: TreeId,
+    },
     /// Copies a linked shared step's ratings onto its tree step and unlinks it.
     Unshare {
         /// Tree.
@@ -1164,6 +1174,9 @@ pub enum EditError {
         /// The model bound on that resource.
         max: usize,
     },
+    /// The selected node already uses a shared step or fragment.
+    #[error("the selected node is already shared; use Unshare first")]
+    AlreadyShared,
 }
 
 /// The refusal for a preset that does not fit `target`.
@@ -1328,6 +1341,50 @@ fn unshare_step_ops(project: &Project, tree: TreeId, node: NodeId, p: &Provenanc
         p,
     ));
     ops
+}
+
+fn make_shared_fragment_ops(
+    project: &Project,
+    tree: TreeId,
+    node: NodeId,
+    id: TreeId,
+    p: &Provenance,
+) -> Result<Vec<Op>, EditError> {
+    let t_idx = project.attack_tree_idx(&tree).ok_or(EditError::Missing)?;
+    let src_tree = project.attack_tree(t_idx).ok_or(EditError::Missing)?;
+    let n_idx = src_tree.idx_of(&node).ok_or(EditError::Missing)?;
+    let src_node = src_tree.get(n_idx).ok_or(EditError::Missing)?;
+    if project.step_shared(t_idx, n_idx).is_some() || project.step_fragment(t_idx, n_idx).is_some()
+    {
+        return Err(EditError::AlreadyShared);
+    }
+    let plan = crate::fragments::copy_subtree(
+        project,
+        tree,
+        node,
+        crate::fragments::CopyMode::PreserveReferences,
+    )?;
+    let mut ops = plan.new_tree_ops(id, TreeRole::Fragment, p)?;
+    ops.extend(crate::tree_diff::collapse_subtree_ops(
+        project, tree, node, p,
+    )?);
+    ops.extend(crate::tree_diff::clear_step_ops(project, tree, node, p));
+    ops.extend(unneed_step_conditions_ops(project, tree, Some(node), p));
+    if src_node.gate_kind().is_some() {
+        ops.push(Op::SetTreeNodeKind {
+            tree,
+            id: node,
+            gate: None,
+            provenance: p.clone(),
+        });
+    }
+    ops.push(Op::UseFragment {
+        tree,
+        node,
+        fragment: id,
+        provenance: p.clone(),
+    });
+    Ok(ops)
 }
 
 /// Ops that clear the "through" of every step that goes through `item`
@@ -2010,6 +2067,9 @@ impl Edit {
                     provenance: p,
                 });
                 ops
+            }
+            Edit::MakeSharedFragment { tree, node, id } => {
+                make_shared_fragment_ops(project, *tree, *node, *id, &p)?
             }
             Edit::Unshare { tree, node } => {
                 if !matches!(step_op_target(project, *tree, *node), StepTarget::Shared(_)) {
@@ -3968,7 +4028,9 @@ impl Edit {
             Edit::AddThreat { id, .. } | Edit::AddThreatLeading { id, .. } => {
                 Some(Selection::Threat(*id))
             }
-            Edit::NewTree { id, .. } | Edit::NewFragment { id, .. } => Some(Selection::Tree(*id)),
+            Edit::NewTree { id, .. }
+            | Edit::NewFragment { id, .. }
+            | Edit::MakeSharedFragment { id, .. } => Some(Selection::Tree(*id)),
             Edit::AddSharedStep { id, .. } => Some(Selection::SharedStep(*id)),
             Edit::AddTreeChild { tree, id, .. }
             | Edit::BranchStepToGate { tree, id, .. }

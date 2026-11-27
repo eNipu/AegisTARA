@@ -118,6 +118,7 @@ impl Label {
             "unlink" => "unlinked",
             "rate" => "rated",
             "reset" => "reset",
+            "share" => "shared",
             _ => "changed",
         };
         if self.count > 0 {
@@ -183,6 +184,32 @@ pub fn describe(ops: &[Op], project: &Project) -> Label {
             .all(|op| matches!(op, Op::SetComponentSystem { .. }))
     {
         return Label::bulk("move", "components", ops.len());
+    }
+    if let Some((id, name)) = ops.iter().find_map(|op| match op {
+        Op::AddAttackTree {
+            role: aegis_model::TreeRole::Fragment,
+            id,
+            tree,
+            ..
+        } if ops
+            .iter()
+            .any(|u| matches!(u, Op::UseFragment { fragment, .. } if fragment == id)) =>
+        {
+            Some((*id, tree.get(tree.root()).map(|n| n.label().to_owned())))
+        }
+        _ => None,
+    }) {
+        return Label {
+            verb: "share",
+            noun: "fragment",
+            name,
+            others: 0,
+            unlinked: 0,
+            lost_via: 0,
+            target: Some(Selection::Tree(id)),
+            count: 0,
+            no_system: 0,
+        };
     }
     let parts: Vec<_> = ops.iter().map(|op| parts(op, project)).collect();
     // The edit is named after its removal, else its first addition, else its

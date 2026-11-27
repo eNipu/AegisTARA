@@ -493,7 +493,8 @@ fn replace_shape_ops(
         }
     }
     let kept_edge = |g: NodeId, c: NodeId| {
-        stays.contains(&c)
+        stays.contains(&g)
+            && stays.contains(&c)
             && old_edges.contains(&(g, c))
             && new_edges.contains(&(g, c))
             && !forced_edges.contains(&(g, c))
@@ -879,25 +880,52 @@ pub(crate) fn remove_node_ops(
     node: NodeId,
     p: &Provenance,
 ) -> Result<Vec<Op>, EditError> {
+    prune_shape_ops(project, tree, node, false, p)
+}
+
+/// Collapses `node`'s reachable region in place by clearing its outgoing edges,
+/// retaining any descendants reachable from outside `node` (re-parenting those
+/// whose original owner was removed), and removing only newly unreachable
+/// descendants children-first while keeping `node`'s ID, label, and incoming
+/// edges intact.
+pub(crate) fn collapse_subtree_ops(
+    project: &Project,
+    tree: TreeId,
+    node: NodeId,
+    p: &Provenance,
+) -> Result<Vec<Op>, EditError> {
+    prune_shape_ops(project, tree, node, true, p)
+}
+
+fn prune_shape_ops(
+    project: &Project,
+    tree: TreeId,
+    node: NodeId,
+    keep_selected: bool,
+    p: &Provenance,
+) -> Result<Vec<Op>, EditError> {
     let t_idx = project.attack_tree_idx(&tree).ok_or(EditError::Missing)?;
     let old_tree = project.attack_tree(t_idx).ok_or(EditError::Missing)?;
     let old = Shape::of(old_tree);
     let root = old.root.ok_or(EditError::Missing)?;
-    if node == root || !old.info.contains_key(&node) {
+    if (!keep_selected && node == root) || !old.info.contains_key(&node) {
         return Err(EditError::Missing);
     }
 
-    // Find all nodes still reachable from `root` when `node` is removed, and
-    // record a cycle-free spanning parent from `root` for re-parenting shared
-    // descendants whose original owner was inside the removed branch.
+    // Find all nodes still reachable from `root` when `node` (or its outgoing
+    // edges when `keep_selected`) is cut, recording a cycle-free surviving
+    // parent for re-parenting shared descendants whose owner was removed.
     let mut reachable: HashSet<NodeId> = HashSet::with_capacity(old.order.len());
     let mut first_parent: HashMap<NodeId, NodeId> = HashMap::new();
     let mut stack = vec![root];
     reachable.insert(root);
     while let Some(cur) = stack.pop() {
+        if keep_selected && cur == node {
+            continue;
+        }
         if let Some(kids) = old.children.get(&cur) {
             for &c in kids.iter().rev() {
-                if c != node && reachable.insert(c) {
+                if (keep_selected || c != node) && reachable.insert(c) {
                     first_parent.insert(c, cur);
                     stack.push(c);
                 }
@@ -910,8 +938,12 @@ pub(crate) fn remove_node_ops(
     new.info.retain(|id, _| reachable.contains(id));
     new.owner.retain(|id, _| reachable.contains(id));
     new.children.retain(|id, _| reachable.contains(id));
-    for kids in new.children.values_mut() {
-        kids.retain(|c| reachable.contains(c));
+    for (&g, kids) in &mut new.children {
+        if keep_selected && g == node {
+            kids.clear();
+        } else {
+            kids.retain(|c| reachable.contains(c));
+        }
     }
 
     // Re-parent any surviving shared descendant whose previous owner was removed.
@@ -924,7 +956,7 @@ pub(crate) fn remove_node_ops(
             .get(&id)
             .copied()
             .flatten()
-            .is_some_and(|o| reachable.contains(&o));
+            .is_some_and(|o| (!keep_selected || o != node) && reachable.contains(&o));
         if !owner_alive {
             new.owner.insert(id, first_parent.get(&id).copied());
         }
