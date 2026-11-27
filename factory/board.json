@@ -3098,7 +3098,7 @@
       "id": "142-shared-fragments",
       "title": "Shared fragments (BLK-02, BLK-03)",
       "branch": "factory/142-shared-fragments",
-      "stage": "review",
+      "stage": "merged",
       "slice": "142l",
       "base": "4b73f3764ca87c216443c05618f78fe397eae406",
       "reviews": {
@@ -3230,7 +3230,7 @@
         }
       ],
       "decision": "142a-142l all passed gates and reviews on factory/142-shared-fragments; ready to merge into master.",
-      "updated": "2026-11-27T19:31:01Z"
+      "updated": "2026-11-27T20:47:01Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
