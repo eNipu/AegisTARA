@@ -3098,13 +3098,13 @@
       "id": "142-shared-fragments",
       "title": "Shared fragments (BLK-02, BLK-03)",
       "branch": "factory/142-shared-fragments",
-      "stage": "build",
-      "slice": "142h",
-      "base": "3ad1ee7b0355aae51f8f08b06a8aa48f2e306b51",
+      "stage": "review",
+      "slice": "142l",
+      "base": "4b73f3764ca87c216443c05618f78fe397eae406",
       "reviews": {
-        "slice": "142h",
-        "gate": "pending",
-        "review": "pending",
+        "slice": "142l",
+        "gate": "PASS",
+        "review": "PASS",
         "owner": "auto"
       },
       "history": [
@@ -3177,10 +3177,60 @@
           "gate_tries": 1,
           "review_tries": 1,
           "lines": 294
+        },
+        {
+          "slice": "142h",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "pro",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 288
+        },
+        {
+          "slice": "142i",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "pro",
+          "gate_tries": 2,
+          "review_tries": 2,
+          "lines": 599
+        },
+        {
+          "slice": "142j",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "pro",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 144
+        },
+        {
+          "slice": "142k",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "pro",
+          "gate_tries": 2,
+          "review_tries": 2,
+          "lines": 196
+        },
+        {
+          "slice": "142l",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "inherit",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 245
         }
       ],
-      "decision": "142b-142g passed gates and reviews. 142h worker stopped: model_usage_exhausted; no 142h code changes. Resume at 142h.",
-      "updated": "2026-11-27T11:02:16Z"
+      "decision": "142a-142l all passed gates and reviews on factory/142-shared-fragments; ready to merge into master.",
+      "updated": "2026-11-27T19:31:01Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
