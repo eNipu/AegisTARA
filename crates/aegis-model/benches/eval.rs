@@ -20,10 +20,12 @@
 #![forbid(unsafe_code)]
 
 use std::collections::VecDeque;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use aegis_model::{
-    AttackTree, GateKind, MaxMin, ModelError, Node, NodeId, NodeIdx, TreeEvalCache, evaluate,
+    AssetId, AttackTree, DamageId, FeasibilityLevel, GateKind, MaxMin, Methodology, ModelError,
+    Node, NodeId, NodeIdx, Op, Project, ProjectEvalCache, Provenance, StepTarget, ThreatId,
+    TreeEvalCache, TreeId, TreeRole, evaluate,
 };
 use divan::counter::ItemsCount;
 use divan::{Bencher, black_box};
@@ -204,5 +206,206 @@ fn incremental_single_step(bencher: Bencher, n: usize) {
                 f.levels.get(i.index()).copied()
             }
         })
+    });
+}
+
+// ---------------------------------------------------------------------------
+// One rating edit inside a shared fragment (142e).
+// ---------------------------------------------------------------------------
+
+/// Fragments in the reference graph of `fragment_single_edit_50`.
+const FRAGMENTS: usize = 50;
+/// Threat trees that each reference three fragments.
+const FRAGMENT_USERS: usize = 10;
+
+/// A project to edit, its cache, the step the benchmark re-rates, and the
+/// two levels it alternates between.
+struct FragmentFixture {
+    project: Project,
+    cache: ProjectEvalCache,
+    step: (TreeId, NodeId),
+    levels: [FeasibilityLevel; 2],
+}
+
+/// Adds one OR-rooted tree with a step per entry of `rated` and a step per
+/// entry of `refs`, each linked to that fragment. Returns the tree and its
+/// rated steps.
+fn add_ref_tree(
+    project: &mut Project,
+    role: TreeRole,
+    rated: &[FeasibilityLevel],
+    refs: &[TreeId],
+) -> Option<(TreeId, Vec<NodeId>)> {
+    let id = TreeId::new_v7();
+    let mut tree = AttackTree::new(NodeId::new_v7(), Node::gate(GateKind::Or, "root")).ok()?;
+    let mut steps = Vec::new();
+    for &level in rated {
+        let node = NodeId::new_v7();
+        tree.add_child(tree.root(), node, Node::step("s")).ok()?;
+        steps.push((node, level));
+    }
+    let mut ref_nodes = Vec::new();
+    for _ in refs {
+        let node = NodeId::new_v7();
+        tree.add_child(tree.root(), node, Node::step("r")).ok()?;
+        ref_nodes.push(node);
+    }
+    let rated_steps = steps.iter().map(|&(node, _)| node).collect();
+    project
+        .apply(Op::AddAttackTree {
+            role,
+            id,
+            tree,
+            step_feasibility: steps,
+            provenance: Provenance::default(),
+        })
+        .ok()?;
+    for (&node, &fragment) in ref_nodes.iter().zip(refs) {
+        project
+            .apply(Op::UseFragment {
+                tree: id,
+                node,
+                fragment,
+                provenance: Provenance::default(),
+            })
+            .ok()?;
+    }
+    Some((id, rated_steps))
+}
+
+/// 50 fragments in a binary reference tree that all also reference one
+/// common sink fragment, so an edit in the sink fans out through nested
+/// diamonds; then 10 threat trees referencing three fragments each, one
+/// threat scenario per threat tree. Every own rating but the sink's is
+/// `very-low`, so the sink decides every root above it.
+fn fragment_fixture() -> Option<FragmentFixture> {
+    let m = Arc::new(Methodology::iso21434_r155().ok()?);
+    let (very_low, low, high) = (
+        m.feasibility_level("very-low")?,
+        m.feasibility_level("low")?,
+        m.feasibility_level("high")?,
+    );
+    let mut project = Project::new(Arc::clone(&m));
+    let mut ids: Vec<Option<TreeId>> = vec![None; FRAGMENTS];
+    let mut step = None;
+    // Bottom-up: children 2i+1 and 2i+2 of i are built before i.
+    for i in (0..FRAGMENTS).rev() {
+        let mut refs = Vec::new();
+        for child in [2 * i + 1, 2 * i + 2] {
+            if let Some(&Some(id)) = ids.get(child) {
+                refs.push(id);
+            }
+        }
+        if let Some(Some(sink)) = ids.last().filter(|_| i + 1 < FRAGMENTS) {
+            refs.push(*sink);
+        }
+        let own: &[FeasibilityLevel] = if i + 1 == FRAGMENTS {
+            &[very_low, high]
+        } else {
+            &[very_low, very_low]
+        };
+        let (id, rated) = add_ref_tree(&mut project, TreeRole::Fragment, own, &refs)?;
+        if i + 1 == FRAGMENTS {
+            step = Some((id, *rated.last()?));
+        }
+        ids[i] = Some(id);
+    }
+    let asset = AssetId::new_v7();
+    let damage = DamageId::new_v7();
+    let safety = m.impact_category("safety")?;
+    let severe = m.level(safety, "severe")?;
+    let category = m.threat_categories().next()?;
+    for op in [
+        Op::AddAsset {
+            id: asset,
+            name: "ECU".into(),
+            properties: m.all_properties(),
+            provenance: Provenance::default(),
+        },
+        Op::AddDamageScenario {
+            id: damage,
+            name: "Crash".into(),
+            impacts: vec![(safety, severe)],
+            provenance: Provenance::default(),
+        },
+    ] {
+        project.apply(op).ok()?;
+    }
+    let roots: Vec<TreeId> = ids.iter().take(3).copied().collect::<Option<Vec<_>>>()?;
+    for _ in 0..FRAGMENT_USERS {
+        let (tree, _) = add_ref_tree(
+            &mut project,
+            TreeRole::Threat,
+            &[very_low, very_low],
+            &roots,
+        )?;
+        let threat = ThreatId::new_v7();
+        for op in [
+            Op::AddThreatScenario {
+                id: threat,
+                name: "Spoof".into(),
+                asset,
+                category,
+                catalog_refs: vec![],
+                damages: vec![damage],
+                provenance: Provenance::default(),
+            },
+            Op::SetThreatAttackTree {
+                threat,
+                tree: Some(tree),
+                provenance: Provenance::default(),
+            },
+        ] {
+            project.apply(op).ok()?;
+        }
+    }
+    let cache = ProjectEvalCache::new(&project);
+    Some(FragmentFixture {
+        project,
+        cache,
+        step: step?,
+        levels: [high, low],
+    })
+}
+
+/// One step rating edit inside a shared fragment, with the incremental cache
+/// update that follows it, against the "recompute after one rating change"
+/// budget (engineering standards section 2): at most 5 ms. The project is
+/// built outside the timed region; each sample re-rates the same step with
+/// the other level, so the sink's root really moves and every tree above it
+/// is invalidated.
+#[divan::bench(sample_count = 100, max_time = 10)]
+fn fragment_single_edit_50(bencher: Bencher) {
+    let Some(mut f) = fragment_fixture() else {
+        eprintln!("fragment fixture could not be built");
+        return;
+    };
+    let edit = |level: FeasibilityLevel| Op::SetStepFeasibility {
+        target: StepTarget::Step(f.step.0, f.step.1),
+        level: Some(level),
+        provenance: Provenance::default(),
+    };
+    // The cost of one edit, measured outside the timed region.
+    let (nodes, threats) = (f.cache.recomputed_nodes(), f.cache.recomputed_threats());
+    if f.project
+        .apply_cached(edit(f.levels[1]), &mut f.cache)
+        .is_err()
+    {
+        eprintln!("fragment edit failed");
+        return;
+    }
+    let (nodes, threats) = (
+        f.cache.recomputed_nodes() - nodes,
+        f.cache.recomputed_threats() - threats,
+    );
+    eprintln!(
+        "fragment bench: {FRAGMENTS} fragments, {FRAGMENT_USERS} using trees, \
+         {nodes} nodes and {threats} threats recomputed per edit"
+    );
+    let mut flip = 1_usize;
+    bencher.counter(ItemsCount::new(nodes)).bench_local(|| {
+        flip ^= 1;
+        let level = f.levels[flip];
+        f.project.apply_cached(black_box(edit(level)), &mut f.cache)
     });
 }

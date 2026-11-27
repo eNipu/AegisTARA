@@ -5,6 +5,8 @@
 //! project.
 
 mod common;
+#[path = "common/fragment_oracle.rs"]
+mod fragment_oracle;
 
 use proptest::prelude::*;
 use proptest::test_runner::{Config, TestRunner};
@@ -110,8 +112,8 @@ fn check_sensitivity_and_choke_points(p: &aegis_model::Project) -> Result<(), Te
     let m = p.methodology();
     let feas_levels: Vec<_> = m.feasibility_levels().map(|(l, _, _)| l).collect();
 
-    let app = p.applicability();
-    for (tree_idx, tree_id, tree) in p.attack_trees() {
+    let mut oracle = fragment_oracle::Oracle::new(p);
+    for (_, tree_id, tree) in p.attack_trees() {
         if let Ok(eval) = p.evaluate_tree(tree_id) {
             prop_assert_eq!(
                 p.tree_choke_points(tree_id, 4).ok(),
@@ -127,32 +129,16 @@ fn check_sensitivity_and_choke_points(p: &aegis_model::Project) -> Result<(), Te
             for tip in &tips {
                 prop_assert_eq!(tip.from_root(), *eval.root_value());
                 prop_assert_ne!(tip.to_root(), tip.from_root());
-                // Excluded steps stay out of the oracle too (job 134).
-                let perturbed = aegis_model::evaluate(
-                    tree,
-                    &aegis_model::Applicable(
-                        aegis_model::MaxMin::<aegis_model::FeasibilityLevel>::new(),
-                    ),
-                    |idx| {
-                        let excluded = tree
-                            .id_of(idx)
-                            .is_some_and(|n| app.is_node_excluded(tree_id, n));
-                        if idx == tip.step() {
-                            Some(aegis_model::Lifted::Value(tip.to_step()))
-                        } else if excluded {
-                            Some(aegis_model::Lifted::Excluded)
-                        } else {
-                            p.effective_step_feasibility(tree_idx, idx)
-                                .map(aegis_model::Lifted::Value)
-                        }
-                    },
-                )
-                .map_err(|e| TestCaseError::fail(format!("perturbed eval: {e}")))?;
-                prop_assert_eq!(
-                    *perturbed.root_value(),
-                    aegis_model::Lifted::Value(tip.to_root())
-                );
+                let perturbed = oracle
+                    .host(
+                        tree_id,
+                        false,
+                        Some((tree.id_of(tip.step()).expect("step"), tip.to_step())),
+                    )
+                    .map_err(|e| TestCaseError::fail(format!("perturbed eval: {e}")))?;
+                prop_assert_eq!(perturbed, aegis_model::Lifted::Value(tip.to_root()));
             }
+            check_complete_tips(p, &mut oracle, tree_id, false)?;
         }
         if let Ok(res_eval) = p.evaluate_residual_tree(tree_id) {
             prop_assert_eq!(
@@ -170,6 +156,7 @@ fn check_sensitivity_and_choke_points(p: &aegis_model::Project) -> Result<(), Te
                 prop_assert_eq!(tip.from_root(), *res_eval.root_value());
                 prop_assert_ne!(tip.to_root(), tip.from_root());
             }
+            check_complete_tips(p, &mut oracle, tree_id, true)?;
         }
     }
 
@@ -268,6 +255,63 @@ fn check_sensitivity_and_choke_points(p: &aegis_model::Project) -> Result<(), Te
         }
     }
     Ok(())
+}
+
+fn check_complete_tips(
+    p: &aegis_model::Project,
+    oracle: &mut fragment_oracle::Oracle<'_>,
+    id: aegis_model::TreeId,
+    residual: bool,
+) -> Result<(), TestCaseError> {
+    let tips = if residual {
+        p.residual_tree_tipping_points(id)
+    } else {
+        p.tree_tipping_points(id)
+    }
+    .map_err(|e| TestCaseError::fail(e.to_string()))?;
+    let tree = p
+        .attack_tree(p.attack_tree_idx(&id).expect("tree"))
+        .expect("tree");
+    let mut actual: Vec<_> = tips
+        .iter()
+        .map(|tip| {
+            (
+                tree.id_of(tip.step()).expect("node"),
+                tip.from_step(),
+                tip.to_step(),
+                tip.from_root(),
+                tip.to_root(),
+            )
+        })
+        .collect();
+    actual.sort();
+    let expected = oracle.tips(id, residual).map_err(TestCaseError::fail)?;
+    prop_assert_eq!(actual, expected);
+    Ok(())
+}
+
+#[test]
+fn saved_fragment_sensitivity_regression_in_both_methodologies() {
+    let seeds = [
+        common::Seed::new(22, 841, 1044, 50441, 0, vec![]),
+        common::Seed::new(22, 101, 7, 29909, 57931701551, vec![45538, 23841]),
+        common::Seed::new(
+            89,
+            46802,
+            2804,
+            10341,
+            12297114111229839380,
+            vec![47242, 36467],
+        ),
+    ];
+    for m in [builtin(), second()] {
+        let p = accepted(&m, &seeds, |_, _, _| Ok(())).expect("fixture");
+        assert!(p.attack_trees().any(|(idx, _, tree)| {
+            tree.iter()
+                .any(|(node, _, _)| p.step_fragment_id(idx, node).is_some())
+        }));
+        check_sensitivity_and_choke_points(&p).expect("fragment-aware sensitivity");
+    }
 }
 
 fn assert_cache_agrees_with_project(

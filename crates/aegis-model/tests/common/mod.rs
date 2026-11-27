@@ -658,6 +658,20 @@ pub struct Seed {
     list: Vec<u16>,
 }
 
+impl Seed {
+    /// A fixed seed, for replaying a saved proptest regression by value.
+    pub fn new(kind: u8, a: u16, b: u16, c: u16, bits: u64, list: Vec<u16>) -> Self {
+        Self {
+            kind,
+            a,
+            b,
+            c,
+            bits,
+            list,
+        }
+    }
+}
+
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (

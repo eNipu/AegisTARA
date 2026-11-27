@@ -15021,6 +15021,18 @@ struct CachedTreeEval {
 /// the fragment cannot be evaluated.
 type FragmentRoots = BTreeMap<TreeIdx, Option<Lifted<FeasibilityLevel>>>;
 
+/// Source steps waiting to be refolded, per tree, keyed by the tree's
+/// dependency rank so a fragment is folded before the trees referencing it.
+type DirtyTrees = BTreeMap<(u32, TreeIdx), BTreeSet<NodeIdx>>;
+
+/// Live trees dependency-first, falling back to arena order for a reference
+/// graph that no valid op can produce (a cycle leaves roots unrated).
+fn dependency_order(project: &Project) -> Vec<TreeIdx> {
+    project
+        .fragment_order()
+        .unwrap_or_else(|_| project.trees.iter().map(|(idx, _, _)| idx).collect())
+}
+
 /// What a reference consumes from its fragment's evaluation `root`: a tree
 /// that does not apply is excluded at the reference, and any other error
 /// leaves the reference unrated rather than defaulting to a level.
@@ -15211,6 +15223,12 @@ struct CachedThreatEval {
 ///    threats linked to that damage scenario update their risk entries in
 ///    place. Metadata, asset, control, goal, and claim edits do zero
 ///    evaluation work (`O(1)`).
+/// 3. **Cross-tree fragment level**: a reverse index maps each fragment to
+///    the steps referencing it, by stable tree and node ID. An edit inside a
+///    fragment refolds the fragment, and only when its root for that mode
+///    changes does it refold the using trees, in dependency order and each
+///    once per mode, transitively. A project-wide applicability change still
+///    rebuilds every tree, fragments before their users.
 ///
 /// ```
 /// use std::sync::Arc;
@@ -15293,6 +15311,12 @@ pub struct ProjectEvalCache {
     damage_threats: Vec<Vec<ThreatIdx>>,
     shared_users: Vec<Vec<(TreeIdx, NodeId)>>,
     node_shared: HashMap<(TreeIdx, NodeId), SharedStepIdx>,
+    fragment_users: Vec<Vec<(TreeIdx, NodeId)>>,
+    node_fragment: HashMap<(TreeIdx, NodeId), TreeIdx>,
+    /// Position of every live tree in dependency order, so dirty work folds
+    /// a fragment before the trees that reference it; `u32::MAX` for a slot
+    /// no live tree holds.
+    fragment_rank: Vec<u32>,
     recomputed_nodes: u64,
     recomputed_threats: u64,
 }
@@ -15306,6 +15330,9 @@ impl PartialEq for ProjectEvalCache {
             && self.damage_threats == other.damage_threats
             && self.shared_users == other.shared_users
             && self.node_shared == other.node_shared
+            && self.fragment_users == other.fragment_users
+            && self.node_fragment == other.node_fragment
+            && self.fragment_rank == other.fragment_rank
     }
 }
 
@@ -15338,6 +15365,9 @@ impl ProjectEvalCache {
             damage_threats: Vec::new(),
             shared_users: Vec::new(),
             node_shared: HashMap::new(),
+            fragment_users: Vec::new(),
+            node_fragment: HashMap::new(),
+            fragment_rank: Vec::new(),
             recomputed_nodes: 0,
             recomputed_threats: 0,
         };
@@ -15378,14 +15408,14 @@ impl ProjectEvalCache {
             .resize_with(project.threats.slot_count(), || None);
         self.shared_users = vec![Vec::new(); project.shared_steps.slot_count()];
         self.node_shared.clear();
+        self.fragment_users = vec![Vec::new(); project.trees.slot_count()];
+        self.node_fragment.clear();
         self.recomputed_nodes = 0;
         self.recomputed_threats = 0;
 
-        // Dependency order lets each reference read its fragment's cached
-        // root; a graph error (never produced by valid ops) leaves them unrated.
-        let order = project
-            .fragment_order()
-            .unwrap_or_else(|_| project.trees.iter().map(|(idx, _, _)| idx).collect());
+        // Dependency order lets each reference read its fragment's cached root.
+        let order = dependency_order(project);
+        self.set_ranks(project, &order);
         for idx in order {
             let (Some(id), Some(entry)) = (project.trees.id(idx), project.trees.get(idx)) else {
                 continue;
@@ -15393,7 +15423,11 @@ impl ProjectEvalCache {
             for (node_idx, node_id, _) in entry.tree.iter() {
                 if let Some(shared) = entry.shared_at(node_idx.index()) {
                     self.node_shared.insert((idx, node_id), shared);
-                    insert_shared_user(&mut self.shared_users, shared, (idx, node_id));
+                    insert_user(&mut self.shared_users, shared.index(), (idx, node_id));
+                }
+                if let Some(target) = entry.fragment_at(node_idx.index()) {
+                    self.node_fragment.insert((idx, node_id), target);
+                    insert_user(&mut self.fragment_users, target.index(), (idx, node_id));
                 }
             }
             let cached = self.build_tree_eval(project, id, entry);
@@ -15431,8 +15465,9 @@ impl ProjectEvalCache {
     /// [`Project::apply`] or the inverse [`Op`] returned by it.
     ///
     /// Time O(depth x fan-out) for a single step rating or mitigation
-    /// change, O(linked threats x d x c) for a damage impact change, and
-    /// O(1) for metadata, asset, control, goal, and claim operations.
+    /// change, plus O(depth x fan-out) per tree that reads a fragment root
+    /// changed by it; O(linked threats x d x c) for a damage impact change,
+    /// and O(1) for metadata, asset, control, goal, and claim operations.
     ///
     /// ```
     /// # use std::sync::Arc;
@@ -15490,6 +15525,12 @@ impl ProjectEvalCache {
         if matches!(op, Op::AddSharedStep { .. } | Op::RemoveSharedStep { .. }) {
             self.shared_users
                 .resize_with(project.shared_steps.slot_count(), Vec::new);
+        }
+        if matches!(op, Op::AddAttackTree { .. } | Op::RemoveAttackTree { .. }) {
+            self.fragment_users
+                .resize_with(project.trees.slot_count(), Vec::new);
+            self.fragment_rank
+                .resize(project.trees.slot_count(), u32::MAX);
         }
         if !self.arenas_compatible(project, op) {
             self.rebuild(project);
@@ -15592,7 +15633,7 @@ impl ProjectEvalCache {
             | Op::AddBoundaryComponent { .. }
             | Op::RemoveBoundaryComponent { .. }
             | Op::RemoveTrustBoundary { .. }
-            | Op::SetAssetComponent { .. } => return,
+            | Op::SetAssetComponent { .. } => (),
 
             Op::AddDamageScenario { .. } | Op::RemoveDamageScenario { .. } => {
                 self.damage_threats
@@ -15606,6 +15647,7 @@ impl ProjectEvalCache {
                 } else {
                     self.update_tree_removed(project);
                 }
+                self.rebuild_fragment_rank(project);
             }
             Op::AddTreeNode { tree, .. }
             | Op::RemoveTreeNode { tree, .. }
@@ -15615,9 +15657,8 @@ impl ProjectEvalCache {
             Op::UseSharedStep { tree, node, .. } | Op::UnuseSharedStep { tree, node, .. } => {
                 self.update_shared_link(project, *tree, *node);
             }
-            Op::UseFragment { .. } | Op::UnuseFragment { .. } => {
-                self.rebuild(project);
-                return;
+            Op::UseFragment { tree, node, .. } | Op::UnuseFragment { tree, node, .. } => {
+                self.update_fragment_link(project, *tree, *node);
             }
             Op::SetStepFeasibility { target, .. } | Op::SetStepFactor { target, .. } => {
                 if let StepTarget::Step(tree, node) = target {
@@ -15683,11 +15724,6 @@ impl ProjectEvalCache {
             Op::LinkDamage { threat, .. } | Op::UnlinkDamage { threat, .. } => {
                 self.update_threat_damages(project, *threat);
             }
-        }
-        // References are not yet invalidated incrementally: any calculation
-        // or structure change rebuilds every tree in dependency order.
-        if project.has_fragment_references() {
-            self.rebuild(project);
         }
     }
 
@@ -16172,6 +16208,8 @@ impl ProjectEvalCache {
             && threats_ok
             && damages_ok
             && self.shared_users.len() == project.shared_steps.slot_count()
+            && self.fragment_users.len() == project.trees.slot_count()
+            && self.fragment_rank.len() == project.trees.slot_count()
             && self.tree_threats.len() == self.trees.len()
     }
 
@@ -16208,15 +16246,132 @@ impl ProjectEvalCache {
     fn cached_roots(&self, entry: &TreeEntry, residual: bool) -> FragmentRoots {
         entry
             .fragments()
-            .map(|t| {
-                let slot = self.trees.get(t.index()).and_then(Option::as_ref);
-                let root = slot.and_then(|s| {
-                    let res = if residual { &s.residual } else { &s.inherent };
-                    reference_root(res.as_ref().map(|lt| *lt.cache.evaluation().root_value()))
-                });
-                (t, root)
-            })
+            .map(|t| (t, self.fragment_root(t, residual)))
             .collect()
+    }
+
+    /// What a step referencing `tree` reads from its cached evaluation in
+    /// one mode: a level, `Excluded`, or `None` while the fragment is
+    /// unrated, unknown or in error. Time O(1).
+    fn fragment_root(&self, tree: TreeIdx, residual: bool) -> Option<Lifted<FeasibilityLevel>> {
+        let cached = self.trees.get(tree.index()).and_then(Option::as_ref)?;
+        let res = if residual {
+            &cached.residual
+        } else {
+            &cached.inherent
+        };
+        reference_root(res.as_ref().map(|lt| *lt.cache.evaluation().root_value()))
+    }
+
+    /// Stores each tree's position in `order`, dependency-first.
+    fn set_ranks(&mut self, project: &Project, order: &[TreeIdx]) {
+        self.fragment_rank.clear();
+        self.fragment_rank
+            .resize(project.trees.slot_count(), u32::MAX);
+        for (pos, t) in order.iter().enumerate() {
+            if let Some(slot) = self.fragment_rank.get_mut(t.index()) {
+                *slot = u32::try_from(pos).unwrap_or(u32::MAX);
+            }
+        }
+    }
+
+    /// Recomputes the dependency ranks after a reference or tree-set change.
+    /// Time O(K + references).
+    fn rebuild_fragment_rank(&mut self, project: &Project) {
+        let order = dependency_order(project);
+        self.set_ranks(project, &order);
+    }
+
+    /// Adds `nodes` to the dirty set of `tree`, at its dependency rank.
+    fn enqueue(
+        &self,
+        queue: &mut DirtyTrees,
+        tree: TreeIdx,
+        nodes: impl IntoIterator<Item = NodeIdx>,
+    ) {
+        let rank = self
+            .fragment_rank
+            .get(tree.index())
+            .copied()
+            .unwrap_or(u32::MAX);
+        queue.entry((rank, tree)).or_default().extend(nodes);
+    }
+
+    /// Adds every step that references `fragment` to the dirty set, resolved
+    /// through its stable node ID, so a moved index cannot be missed.
+    fn enqueue_users(&self, project: &Project, fragment: TreeIdx, queue: &mut DirtyTrees) {
+        for &(tree, node) in self
+            .fragment_users
+            .get(fragment.index())
+            .into_iter()
+            .flatten()
+        {
+            if let Some(node_idx) = project.trees.get(tree).and_then(|e| e.tree.idx_of(&node)) {
+                self.enqueue(queue, tree, [node_idx]);
+            }
+        }
+    }
+
+    /// Folds the dirty trees in one mode, each once and fragments first,
+    /// following references on to the using steps of every fragment whose
+    /// root for that mode changed. Ranks rise along a reference, so a tree
+    /// collects all of its dirty steps before it is folded.
+    /// Time O(sum over dirty trees of depth x fan-out).
+    fn run_dirty(&mut self, project: &Project, mut queue: DirtyTrees, residual: bool) {
+        let mut folded = BTreeSet::new();
+        while let Some(&key) = queue.keys().next() {
+            let Some(nodes) = queue.remove(&key) else {
+                break;
+            };
+            let (_, tree_idx) = key;
+            // Rule A2: one fold per tree and mode, even if ranks collapse.
+            if !folded.insert(tree_idx) {
+                continue;
+            }
+            let Some(entry) = project.trees.get(tree_idx) else {
+                continue;
+            };
+            let before = self.fragment_root(tree_idx, residual);
+            let dirty: Vec<NodeIdx> = nodes.into_iter().collect();
+            self.update_tree_mode(project, tree_idx, entry, &dirty, residual);
+            if before != self.fragment_root(tree_idx, residual) {
+                self.enqueue_users(project, tree_idx, &mut queue);
+            }
+        }
+    }
+
+    /// Recomputes the seeded steps and every fragment user they reach, in
+    /// the residual mode and, when `include_inherent`, the inherent one. The
+    /// two modes stay separate: a residual-only edit never dirties an
+    /// inherent user.
+    fn update_dirty(&mut self, project: &Project, seeds: &DirtyTrees, include_inherent: bool) {
+        if include_inherent {
+            self.run_dirty(project, seeds.clone(), false);
+        }
+        self.run_dirty(project, seeds.clone(), true);
+    }
+
+    /// A reference was created or dropped at one step: both directions of
+    /// the index and the dependency ranks follow, then the step and the
+    /// trees above it are recomputed.
+    fn update_fragment_link(&mut self, project: &Project, tree: TreeId, node: NodeId) {
+        let Some((tree_idx, node_idx)) = project.attack_tree_idx(&tree).and_then(|tree| {
+            let entry = project.trees.get(tree)?;
+            Some((tree, entry.tree.idx_of(&node)?))
+        }) else {
+            return;
+        };
+        let user = (tree_idx, node);
+        if let Some(target) = project.step_fragment(tree_idx, node_idx) {
+            self.node_fragment.insert(user, target);
+            insert_user(&mut self.fragment_users, target.index(), user);
+        } else if let Some(target) = self.node_fragment.remove(&user)
+            && let Some(users) = self.fragment_users.get_mut(target.index())
+        {
+            users.retain(|candidate| *candidate != user);
+        }
+        self.rebuild_fragment_rank(project);
+        self.update_step(project, tree, node, true);
     }
 
     fn build_threat_eval(
@@ -16286,11 +16441,16 @@ impl ProjectEvalCache {
 
     /// The shape of a tree changed: indices moved or a gate changed meaning,
     /// so this tree's evaluation is rebuilt (O(V + E)) and the threats that
-    /// use it are refreshed from it. Other trees and threats are untouched.
+    /// use it are refreshed from it. When the tree is a fragment whose root
+    /// moved in a mode, the steps referencing it follow in that mode; other
+    /// trees and threats are untouched. Dependency ranks keep their values:
+    /// a node holding a reference cannot be removed and a new node carries
+    /// none, so no structural edit can change the reference graph.
     fn update_tree_structure(&mut self, project: &Project, tree: TreeId) {
         let Some(tree_idx) = project.attack_tree_idx(&tree) else {
             return;
         };
+        let before = [false, true].map(|residual| self.fragment_root(tree_idx, residual));
         self.update_tree_added(project, tree_idx);
         let linked = self
             .tree_threats
@@ -16300,6 +16460,13 @@ impl ProjectEvalCache {
         for threat_idx in linked {
             for residual in [false, true] {
                 self.sync_threat_from_tree(project, threat_idx, tree_idx, residual, &[], true);
+            }
+        }
+        for (residual, old_root) in [false, true].into_iter().zip(before) {
+            if old_root != self.fragment_root(tree_idx, residual) {
+                let mut queue = DirtyTrees::new();
+                self.enqueue_users(project, tree_idx, &mut queue);
+                self.run_dirty(project, queue, residual);
             }
         }
     }
@@ -16393,6 +16560,12 @@ impl ProjectEvalCache {
                 if let Some(list) = self.tree_threats.get_mut(i) {
                     list.clear();
                 }
+                // A later tree can take this freed slot, so no reference
+                // index entry may outlive the tree it described.
+                if let Some(list) = self.fragment_users.get_mut(i) {
+                    list.clear();
+                }
+                self.node_fragment.retain(|&(t, _), _| t.index() != i);
             }
         }
     }
@@ -16413,10 +16586,9 @@ impl ProjectEvalCache {
         let Some(node_idx) = entry.tree.idx_of(&node_id) else {
             return;
         };
-        if include_inherent {
-            self.update_tree_mode(project, tree_idx, entry, &[node_idx], false);
-        }
-        self.update_tree_mode(project, tree_idx, entry, &[node_idx], true);
+        let mut seeds = DirtyTrees::new();
+        self.enqueue(&mut seeds, tree_idx, [node_idx]);
+        self.update_dirty(project, &seeds, include_inherent);
     }
 
     fn update_shared_link(&mut self, project: &Project, tree: TreeId, node: NodeId) {
@@ -16429,7 +16601,7 @@ impl ProjectEvalCache {
         let user = (tree_idx, node);
         if let Some(shared) = project.step_shared(tree_idx, node_idx) {
             self.node_shared.insert(user, shared);
-            insert_shared_user(&mut self.shared_users, shared, user);
+            insert_user(&mut self.shared_users, shared.index(), user);
         } else if let Some(shared) = self.node_shared.remove(&user)
             && let Some(users) = self.shared_users.get_mut(shared.index())
         {
@@ -16447,16 +16619,20 @@ impl ProjectEvalCache {
         let Some(idx) = project.shared_step_idx(&shared) else {
             return;
         };
-        let users = self
+        // One batch, so a parent above several users of this step, and a
+        // fragment reached through several of them, still folds once.
+        let mut seeds = DirtyTrees::new();
+        for (tree, node) in self
             .shared_users
             .get(idx.index())
             .cloned()
-            .unwrap_or_default();
-        for (tree, node) in users {
-            if let Some(tree_id) = project.trees.id(tree) {
-                self.update_step(project, tree_id, node, include_inherent);
+            .unwrap_or_default()
+        {
+            if let Some(node_idx) = project.trees.get(tree).and_then(|e| e.tree.idx_of(&node)) {
+                self.enqueue(&mut seeds, tree, [node_idx]);
             }
         }
+        self.update_dirty(project, &seeds, include_inherent);
     }
 
     fn update_control_target(
@@ -16468,6 +16644,7 @@ impl ProjectEvalCache {
         let Ok(target_idx) = project.item_idx(target) else {
             return;
         };
+        let mut seeds = DirtyTrees::new();
         for (tree_idx, _, entry) in project.trees.iter() {
             let dirty: Vec<NodeIdx> = entry
                 .tree
@@ -16480,12 +16657,10 @@ impl ProjectEvalCache {
                 })
                 .collect();
             if !dirty.is_empty() {
-                if include_inherent {
-                    self.update_tree_mode(project, tree_idx, entry, &dirty, false);
-                }
-                self.update_tree_mode(project, tree_idx, entry, &dirty, true);
+                self.enqueue(&mut seeds, tree_idx, dirty);
             }
         }
+        self.update_dirty(project, &seeds, include_inherent);
     }
 
     fn update_control_rule(
@@ -16504,6 +16679,7 @@ impl ProjectEvalCache {
             return;
         }
         let include_inherent = ctrl.status.counts_for_initial();
+        let mut seeds = DirtyTrees::new();
         for (tree_idx, _, entry) in project.trees.iter() {
             let dirty: Vec<NodeIdx> = entry
                 .tree
@@ -16520,12 +16696,10 @@ impl ProjectEvalCache {
                 })
                 .collect();
             if !dirty.is_empty() {
-                if include_inherent {
-                    self.update_tree_mode(project, tree_idx, entry, &dirty, false);
-                }
-                self.update_tree_mode(project, tree_idx, entry, &dirty, true);
+                self.enqueue(&mut seeds, tree_idx, dirty);
             }
         }
+        self.update_dirty(project, &seeds, include_inherent);
     }
 
     fn update_control_status(&mut self, project: &Project, control: ControlId) {
@@ -16535,6 +16709,7 @@ impl ProjectEvalCache {
         let Some(ctrl) = project.controls.get(ctrl_idx) else {
             return;
         };
+        let mut seeds = DirtyTrees::new();
         for (tree_idx, _, entry) in project.trees.iter() {
             let mut dirty = Vec::new();
             for (i, mitigations) in entry.step_mitigations.iter().enumerate() {
@@ -16557,10 +16732,10 @@ impl ProjectEvalCache {
                 }
             }
             if !dirty.is_empty() {
-                self.update_tree_mode(project, tree_idx, entry, &dirty, false);
-                self.update_tree_mode(project, tree_idx, entry, &dirty, true);
+                self.enqueue(&mut seeds, tree_idx, dirty);
             }
         }
+        self.update_dirty(project, &seeds, true);
     }
 
     fn update_tree_mode(
@@ -16847,15 +17022,12 @@ fn insert_sorted_unique(list: &mut Vec<ThreatIdx>, idx: ThreatIdx) {
     }
 }
 
-fn insert_shared_user(
-    users: &mut Vec<Vec<(TreeIdx, NodeId)>>,
-    shared: SharedStepIdx,
-    user: (TreeIdx, NodeId),
-) {
-    if users.len() <= shared.index() {
-        users.resize_with(shared.index() + 1, Vec::new);
+/// Records `user` in the sorted reverse index of `slot`, by stable IDs.
+fn insert_user(users: &mut Vec<Vec<(TreeIdx, NodeId)>>, slot: usize, user: (TreeIdx, NodeId)) {
+    if users.len() <= slot {
+        users.resize_with(slot + 1, Vec::new);
     }
-    let list = &mut users[shared.index()];
+    let list = &mut users[slot];
     let key = (user.0.index(), user.1);
     if let Err(pos) = list.binary_search_by(|&(tree, node)| (tree.index(), node).cmp(&key)) {
         list.insert(pos, user);

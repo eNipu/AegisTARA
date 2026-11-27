@@ -2,17 +2,20 @@
 //! prefix, undo, and persistence in snapshots, op logs and workspace files.
 
 mod common;
+#[path = "common/fragment_oracle.rs"]
+mod fragment_oracle;
 
 use std::sync::Arc;
 
 use aegis_model::ControlStatus;
 use aegis_model::{
-    AssetId, AttackTree, DamageId, GateKind, MAX_FRAGMENT_DEPTH, MAX_FRAGMENT_REFERENCES,
+    AssetId, AttackTree, DamageId, GateKind, Lifted, MAX_FRAGMENT_DEPTH, MAX_FRAGMENT_REFERENCES,
     Methodology, ModelError, Node, NodeId, Op, Project, ProjectEvalCache, Provenance, StepRef,
     StepTarget, StoreError, ThreatId, TreeId, TreeRole,
 };
 use common::{
-    builtin, condition_id, control_id, node_id, read_log, save, shared_step_id, tree_id, write_log,
+    asset_id, builtin, condition_id, control_id, damage_id, feas, node_id, read_log, save,
+    shared_step_id, threat_id, tree_id, write_log,
 };
 use serde_json::Value;
 
@@ -1816,5 +1819,842 @@ proptest::proptest! {
             }
             assert_eq!(&ProjectEvalCache::new(reloaded), &ProjectEvalCache::new(&p));
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Incremental invalidation of fragment users (142e).
+// ---------------------------------------------------------------------------
+
+/// Steps referencing `fragment`, found by walking every node of every tree
+/// through the public per-step accessor, independent of any index.
+fn scan_users(p: &Project, fragment: TreeId) -> Vec<(TreeId, NodeId)> {
+    let mut out = Vec::new();
+    for (idx, id, tree) in p.attack_trees() {
+        for (node_idx, node, _) in tree.iter() {
+            if p.step_fragment_id(idx, node_idx) == Some(fragment) {
+                out.push((id, node));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// A diamond: fragment 34 is referenced by fragments 32 and 33, which the
+/// threat tree 30 folds under one AND gate, so every edit in 34 reaches
+/// tree 30 along two paths. Tree 31 is rated and unrelated, and threat 70
+/// reads tree 30.
+fn diamond(m: &Arc<Methodology>) -> Project {
+    let prov = Provenance::human("alice", 60);
+    let root = node_id(30000);
+    let mut user = AttackTree::new(root, Node::gate(GateKind::Or, "Compromise")).expect("tree");
+    let pair = user
+        .add_child(
+            user.root(),
+            node_id(30001),
+            Node::gate(GateKind::And, "Both"),
+        )
+        .expect("gate");
+    for n in [30002, 30003] {
+        user.add_child(pair, node_id(n), Node::step("Reference"))
+            .expect("reference step");
+    }
+    user.add_child(user.root(), node_id(30004), Node::step("Own"))
+        .expect("own step");
+    let safety = m.impact_category("safety").expect("category");
+    let severe = m.level(safety, "severe").expect("level");
+    project_with(
+        m,
+        &[
+            Op::AddAttackTree {
+                role: TreeRole::Threat,
+                id: tree_id(30),
+                tree: user,
+                step_feasibility: vec![(node_id(30004), feas(m, "very-low"))],
+                provenance: prov.clone(),
+            },
+            gate_tree(31, TreeRole::Threat, GateKind::Or, &[(1, Some("low"))], m),
+            gate_tree(
+                32,
+                TreeRole::Fragment,
+                GateKind::Or,
+                &[(1, Some("very-low")), (2, None)],
+                m,
+            ),
+            gate_tree(
+                33,
+                TreeRole::Fragment,
+                GateKind::Or,
+                &[(1, Some("very-low")), (2, None)],
+                m,
+            ),
+            gate_tree(
+                34,
+                TreeRole::Fragment,
+                GateKind::Or,
+                &[(1, Some("high")), (2, Some("low"))],
+                m,
+            ),
+            use_fragment(32, 2, 34),
+            use_fragment(33, 2, 34),
+            Op::UseFragment {
+                tree: tree_id(30),
+                node: node_id(30002),
+                fragment: tree_id(32),
+                provenance: prov.clone(),
+            },
+            Op::UseFragment {
+                tree: tree_id(30),
+                node: node_id(30003),
+                fragment: tree_id(33),
+                provenance: prov.clone(),
+            },
+            Op::AddAsset {
+                id: asset_id(70),
+                name: "ECU".into(),
+                properties: m.all_properties(),
+                provenance: prov.clone(),
+            },
+            Op::AddDamageScenario {
+                id: damage_id(70),
+                name: "Crash".into(),
+                impacts: vec![(safety, severe)],
+                provenance: prov.clone(),
+            },
+            Op::AddThreatScenario {
+                id: threat_id(70),
+                name: "Spoof".into(),
+                asset: asset_id(70),
+                category: m.threat_categories().next().expect("threat category"),
+                catalog_refs: vec![],
+                damages: vec![damage_id(70)],
+                provenance: prov.clone(),
+            },
+            Op::SetThreatAttackTree {
+                threat: threat_id(70),
+                tree: Some(tree_id(30)),
+                provenance: prov,
+            },
+        ],
+    )
+}
+
+/// Every tree of [`diamond`]: the cache agrees with an independent full
+/// evaluation and with a freshly built cache, and the public reverse index
+/// agrees with a scan of every step.
+fn check_fragments(p: &Project, cache: &ProjectEvalCache) {
+    for n in [30, 31, 32, 33, 34] {
+        let id = tree_id(n);
+        assert_eq!(
+            cache.evaluate_tree(p, id).cloned(),
+            p.evaluate_tree(id),
+            "inherent {n}"
+        );
+        assert_eq!(
+            cache.evaluate_residual_tree(p, id).cloned(),
+            p.evaluate_residual_tree(id),
+            "residual {n}"
+        );
+    }
+    assert_eq!(
+        cache.evaluate_risk(p, threat_id(70)).cloned(),
+        p.evaluate_risk(threat_id(70)),
+        "risk"
+    );
+    assert_eq!(
+        cache.evaluate_residual_risk(p, threat_id(70)).cloned(),
+        p.evaluate_residual_risk(threat_id(70)),
+        "residual risk"
+    );
+    // Hand-independent numbers: a fold of the project inputs alone.
+    let mut oracle = fragment_oracle::Oracle::new(p);
+    for n in [30, 31, 32, 33, 34] {
+        let id = tree_id(n);
+        for residual in [false, true] {
+            let cached = if residual {
+                cache.evaluate_residual_tree(p, id)
+            } else {
+                cache.evaluate_tree(p, id)
+            };
+            match (oracle.root(id, residual), cached) {
+                (Ok(Lifted::Value(v)), Ok(e)) => {
+                    assert_eq!(e.root_value(), &v, "oracle {n} residual={residual}")
+                }
+                (Ok(Lifted::Excluded), Err(ModelError::TreeNotApplicable(_))) => {}
+                (Err(_), Err(e)) => assert!(!matches!(e, ModelError::TreeNotApplicable(_))),
+                (expected, actual) => {
+                    panic!("{n} residual={residual}: oracle {expected:?}, cache {actual:?}")
+                }
+            }
+        }
+    }
+    for n in [32, 33, 34] {
+        let idx = p.attack_tree_idx(&tree_id(n)).expect("live fragment");
+        assert_eq!(
+            path_ids(&p.fragment_users(idx)),
+            scan_users(p, tree_id(n)),
+            "users of {n}"
+        );
+    }
+    assert_eq!(cache, &ProjectEvalCache::new(p), "incremental equals full");
+}
+
+#[test]
+fn a_fragment_edit_folds_every_affected_tree_once_per_mode() {
+    let m = builtin();
+    let mut p = diamond(&m);
+    let mut cache = ProjectEvalCache::new(&p);
+    let (very_low, low, medium, high) = (
+        feas(&m, "very-low"),
+        feas(&m, "low"),
+        feas(&m, "medium"),
+        feas(&m, "high"),
+    );
+    assert_eq!(
+        p.evaluate_tree(tree_id(30)).expect("user").root_value(),
+        &high
+    );
+    let unrelated = cache
+        .evaluate_tree(&p, tree_id(31))
+        .expect("unrelated")
+        .clone();
+    let (nodes, threats) = (cache.recomputed_nodes(), cache.recomputed_threats());
+
+    // Per mode: tree 34 folds its step and its root (2), trees 32 and 33
+    // their reference step and their root (2 each), and tree 30 once with
+    // both reference steps dirty (2 steps + the AND gate + the root = 4).
+    // Folding tree 30 per path, or touching the unrelated tree, would raise
+    // the count above 10 per mode.
+    let rate = p
+        .apply_cached(
+            Op::SetStepFeasibility {
+                target: StepTarget::Step(tree_id(34), node_id(34001)),
+                level: Some(medium),
+                provenance: Provenance::human("alice", 70),
+            },
+            &mut cache,
+        )
+        .expect("rate the shared fragment");
+    assert_eq!(cache.recomputed_nodes() - nodes, 20, "10 folds per mode");
+    assert_eq!(
+        cache.recomputed_threats() - threats,
+        2,
+        "one threat, 2 modes"
+    );
+    assert_eq!(
+        cache
+            .evaluate_tree(&p, tree_id(30))
+            .expect("user")
+            .root_value(),
+        &medium
+    );
+    assert_eq!(
+        cache.evaluate_tree(&p, tree_id(31)).expect("unrelated"),
+        &unrelated
+    );
+    check_fragments(&p, &cache);
+
+    let ctrl = control_id(70);
+    for op in [
+        Op::AddSecurityControl {
+            id: ctrl,
+            name: "SecOC".into(),
+            provenance: Provenance::human("alice", 71),
+        },
+        Op::SetControlStatus {
+            control: ctrl,
+            status: ControlStatus::Planned,
+            provenance: Provenance::human("alice", 72),
+        },
+    ] {
+        p.apply_cached(op, &mut cache).expect("control");
+    }
+    let (nodes, threats) = (cache.recomputed_nodes(), cache.recomputed_threats());
+    let mitigate = p
+        .apply_cached(
+            Op::SetStepMitigation {
+                tree: tree_id(34),
+                node: node_id(34001),
+                control: ctrl,
+                feasibility: Some(very_low),
+                provenance: Provenance::human("alice", 73),
+            },
+            &mut cache,
+        )
+        .expect("plan a mitigation");
+    // A planned control counts in the residual mode only, so the inherent
+    // users are not dirtied at all.
+    assert_eq!(cache.recomputed_nodes() - nodes, 10, "residual only");
+    assert_eq!(cache.recomputed_threats() - threats, 1, "residual only");
+    assert_eq!(
+        cache
+            .evaluate_tree(&p, tree_id(30))
+            .expect("inherent")
+            .root_value(),
+        &medium
+    );
+    assert_eq!(
+        cache
+            .evaluate_residual_tree(&p, tree_id(30))
+            .expect("residual")
+            .root_value(),
+        &low
+    );
+    check_fragments(&p, &cache);
+
+    let (nodes, threats) = (cache.recomputed_nodes(), cache.recomputed_threats());
+    let implement = p
+        .apply_cached(
+            Op::SetControlStatus {
+                control: ctrl,
+                status: ControlStatus::Implemented,
+                provenance: Provenance::human("alice", 74),
+            },
+            &mut cache,
+        )
+        .expect("implement the control");
+    // Inherent gains the mitigation and propagates (10 folds). Residual
+    // only re-reads the mitigated step (1): its value is unchanged there, so
+    // no gate above it, and no user, is refolded.
+    assert_eq!(cache.recomputed_nodes() - nodes, 11);
+    assert_eq!(cache.recomputed_threats() - threats, 1);
+    assert_eq!(
+        cache
+            .evaluate_tree(&p, tree_id(30))
+            .expect("inherent")
+            .root_value(),
+        &low
+    );
+    check_fragments(&p, &cache);
+
+    for inv in [implement, mitigate, rate] {
+        p.apply_cached(inv, &mut cache).expect("undo");
+        check_fragments(&p, &cache);
+    }
+    assert_eq!(
+        cache
+            .evaluate_tree(&p, tree_id(30))
+            .expect("restored")
+            .root_value(),
+        &high
+    );
+}
+
+#[test]
+fn every_fragment_op_and_its_inverse_keep_users_and_the_index_exact() {
+    let m = builtin();
+    let mut p = diamond(&m);
+    let (very_low, low, high) = (feas(&m, "very-low"), feas(&m, "low"), feas(&m, "high"));
+    let shared = shared_step_id(70);
+    let ctrl = control_id(70);
+    let cond = condition_id(70);
+    let prov = Provenance::human("alice", 80);
+    // One shared step used from both fragments, a second reference to
+    // fragment 32 in the using tree, and a planned control.
+    for op in [
+        Op::AddSharedStep {
+            id: shared,
+            name: "Shared".into(),
+            provenance: prov.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Shared(shared),
+            level: Some(low),
+            provenance: prov.clone(),
+        },
+        Op::AddSecurityControl {
+            id: ctrl,
+            name: "SecOC".into(),
+            provenance: prov.clone(),
+        },
+        Op::SetControlStatus {
+            control: ctrl,
+            status: ControlStatus::Planned,
+            provenance: prov.clone(),
+        },
+    ] {
+        p.apply(op).expect("fixture");
+    }
+    share_in_fragments(&mut p, shared);
+    for op in [
+        Op::AddTreeNode {
+            tree: tree_id(30),
+            parent: node_id(30000),
+            id: node_id(30005),
+            node: Node::step("Reference again"),
+            index: 5,
+            position: 2,
+            provenance: prov.clone(),
+        },
+        Op::UseFragment {
+            tree: tree_id(30),
+            node: node_id(30005),
+            fragment: tree_id(32),
+            provenance: prov.clone(),
+        },
+    ] {
+        p.apply(op).expect("second reference");
+    }
+    let before = p.clone();
+    let mut cache = ProjectEvalCache::new(&p);
+    check_fragments(&p, &cache);
+    assert_eq!(
+        p.evaluate_tree(tree_id(30)).expect("user").root_value(),
+        &high
+    );
+
+    let ops = vec![
+        // A rating edit at the fragment root, then a gate edit that changes
+        // how the fragment folds.
+        Op::SetStepFeasibility {
+            target: StepTarget::Step(tree_id(34), node_id(34001)),
+            level: Some(feas(&m, "medium")),
+            provenance: prov.clone(),
+        },
+        Op::SetTreeNodeGate {
+            tree: tree_id(34),
+            id: node_id(34000),
+            gate: GateKind::And,
+            provenance: prov.clone(),
+        },
+        // Residual-only, then inherent too.
+        Op::SetStepMitigation {
+            tree: tree_id(34),
+            node: node_id(34001),
+            control: ctrl,
+            feasibility: Some(very_low),
+            provenance: prov.clone(),
+        },
+        Op::SetControlStatus {
+            control: ctrl,
+            status: ControlStatus::Implemented,
+            provenance: prov.clone(),
+        },
+        // One shared-step edit with a user inside each fragment: unrating it
+        // leaves both fragments, and the tree above them, unrated.
+        Op::SetStepFeasibility {
+            target: StepTarget::Shared(shared),
+            level: None,
+            provenance: prov.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Shared(shared),
+            level: Some(low),
+            provenance: prov.clone(),
+        },
+        // Unlink and relink the second reference.
+        Op::UnuseFragment {
+            tree: tree_id(30),
+            node: node_id(30005),
+            provenance: prov.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Step(tree_id(30), node_id(30005)),
+            level: Some(low),
+            provenance: prov.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Step(tree_id(30), node_id(30005)),
+            level: None,
+            provenance: prov.clone(),
+        },
+        Op::UseFragment {
+            tree: tree_id(30),
+            node: node_id(30005),
+            fragment: tree_id(32),
+            provenance: prov.clone(),
+        },
+        // An insertion in the using tree moves every reference step's index.
+        Op::AddTreeNode {
+            tree: tree_id(30),
+            parent: node_id(30000),
+            id: node_id(30006),
+            node: Node::step("Inserted"),
+            index: 1,
+            position: 0,
+            provenance: prov.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Step(tree_id(30), node_id(30006)),
+            level: Some(very_low),
+            provenance: prov.clone(),
+        },
+        // One edit whose users sit in both fragments, which must still reach
+        // the moved reference steps of tree 30.
+        Op::SetStepFeasibility {
+            target: StepTarget::Shared(shared),
+            level: Some(high),
+            provenance: prov.clone(),
+        },
+        // A condition excluding fragment 33 excludes the AND above it; a
+        // local condition on the second reference excludes only that step.
+        Op::AddCondition {
+            id: cond,
+            name: "Debug port".into(),
+            description: "".into(),
+            present: true,
+            provenance: prov.clone(),
+        },
+        Op::NeedCondition {
+            element: aegis_model::ElementRef::Tree(tree_id(33)),
+            condition: cond,
+            provenance: prov.clone(),
+        },
+        Op::SetConditionPresent {
+            id: cond,
+            present: false,
+            provenance: prov.clone(),
+        },
+        Op::NeedStepCondition {
+            tree: tree_id(30),
+            node: node_id(30005),
+            condition: cond,
+            provenance: prov.clone(),
+        },
+        Op::SetConditionPresent {
+            id: cond,
+            present: true,
+            provenance: prov.clone(),
+        },
+    ];
+    let mut inverses = Vec::new();
+    let mut run = |ops: Vec<Op>, p: &mut Project, cache: &mut ProjectEvalCache| {
+        for op in ops {
+            let inverse = p
+                .apply_cached(op.clone(), cache)
+                .unwrap_or_else(|e| panic!("{op:?}: {e}"));
+            check_fragments(p, cache);
+            inverses.push(inverse);
+        }
+    };
+    run(ops, &mut p, &mut cache);
+    // The implemented mitigation holds tree 34 at very-low, so the high
+    // shared step decides both fragments, and tree 30 reads them through its
+    // moved reference steps.
+    assert_eq!(
+        p.evaluate_tree(tree_id(30)).expect("shifted").root_value(),
+        &high
+    );
+    // Deleting users: the second reference step, the inserted step before
+    // the remaining references (their indices move down), then the whole
+    // using tree; a fragment edit after each must reach only live users.
+    let rate = |level: &str| Op::SetStepFeasibility {
+        target: StepTarget::Step(tree_id(34), node_id(34002)),
+        level: Some(feas(&m, level)),
+        provenance: prov.clone(),
+    };
+    let deletions = vec![
+        Op::UnneedStepCondition {
+            tree: tree_id(30),
+            node: node_id(30005),
+            condition: cond,
+            provenance: prov.clone(),
+        },
+        Op::UnuseFragment {
+            tree: tree_id(30),
+            node: node_id(30005),
+            provenance: prov.clone(),
+        },
+        Op::RemoveTreeNode {
+            tree: tree_id(30),
+            id: node_id(30005),
+            provenance: prov.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Step(tree_id(30), node_id(30006)),
+            level: None,
+            provenance: prov.clone(),
+        },
+        Op::RemoveTreeNode {
+            tree: tree_id(30),
+            id: node_id(30006),
+            provenance: prov.clone(),
+        },
+        rate("medium"),
+        Op::SetThreatAttackTree {
+            threat: threat_id(70),
+            tree: None,
+            provenance: prov.clone(),
+        },
+        // A tree holding references cannot be removed, so unlink first.
+        Op::UnuseFragment {
+            tree: tree_id(30),
+            node: node_id(30002),
+            provenance: prov.clone(),
+        },
+        Op::UnuseFragment {
+            tree: tree_id(30),
+            node: node_id(30003),
+            provenance: prov.clone(),
+        },
+        Op::RemoveAttackTree { id: tree_id(30) },
+        rate("high"),
+    ];
+    run(deletions, &mut p, &mut cache);
+    assert_eq!(
+        p.evaluate_tree(tree_id(30)),
+        Err(ModelError::UnknownAttackTree(tree_id(30)))
+    );
+    for n in [32, 33] {
+        assert!(scan_users(&p, tree_id(n)).is_empty(), "no users of {n}");
+    }
+    for inverse in inverses.into_iter().rev() {
+        p.apply_cached(inverse.clone(), &mut cache)
+            .unwrap_or_else(|e| panic!("inverse {inverse:?}: {e}"));
+        check_fragments(&p, &cache);
+    }
+    assert_eq!(p, before, "every inverse restored the project");
+    assert_eq!(
+        p.evaluate_tree(tree_id(30)).expect("restored").root_value(),
+        &high
+    );
+}
+
+/// Gives fragments 32 and 33 of [`diamond`] each a step using `shared`.
+fn share_in_fragments(p: &mut Project, shared: aegis_model::SharedStepId) {
+    let prov = Provenance::human("alice", 81);
+    for t in [32u64, 33] {
+        p.apply(Op::AddTreeNode {
+            tree: tree_id(t),
+            parent: node_id(1000 * t),
+            id: node_id(1000 * t + 3),
+            node: Node::step("Shared"),
+            index: 3,
+            position: 2,
+            provenance: prov.clone(),
+        })
+        .expect("shared step slot");
+        p.apply(Op::UseSharedStep {
+            tree: tree_id(t),
+            node: node_id(1000 * t + 3),
+            step: shared,
+            provenance: prov.clone(),
+        })
+        .expect("use the shared step");
+    }
+}
+
+/// The last step of the cross-tree derivation of tree 30's root.
+fn why_end(p: &Project) -> (TreeId, NodeId) {
+    let path = p
+        .fragment_why_path(tree_id(30), node_id(30000), false)
+        .expect("why path");
+    *path_ids(&path).last().expect("non-empty path")
+}
+
+#[test]
+fn why_only_metadata_and_shared_edits_fold_the_minimum() {
+    let m = builtin();
+    let mut p = diamond(&m);
+    let mut cache = ProjectEvalCache::new(&p);
+    let prov = Provenance::human("alice", 90);
+    let rate = |node: u64, level: &str| Op::SetStepFeasibility {
+        target: StepTarget::Step(tree_id(34), node_id(node)),
+        level: Some(feas(&m, level)),
+        provenance: prov.clone(),
+    };
+    let delta = |cache: &ProjectEvalCache, before: (u64, u64)| {
+        (
+            cache.recomputed_nodes() - before.0,
+            cache.recomputed_threats() - before.1,
+        )
+    };
+    let counters =
+        |cache: &ProjectEvalCache| (cache.recomputed_nodes(), cache.recomputed_threats());
+    assert_eq!(why_end(&p), (tree_id(34), node_id(34001)));
+
+    // Why-only: tree 34 stays OR(high, high) = high, then OR(low, high) =
+    // high, so each edit refolds the step and the root of tree 34 in each
+    // mode (4) and no user; the explanation now ends at the other step.
+    let mut inverses = Vec::new();
+    for op in [rate(34002, "high"), rate(34001, "low")] {
+        let before = counters(&cache);
+        inverses.push(p.apply_cached(op, &mut cache).expect("why-only edit"));
+        assert_eq!(delta(&cache, before), (4, 0), "root unchanged");
+        check_fragments(&p, &cache);
+    }
+    assert_eq!(why_end(&p), (tree_id(34), node_id(34002)));
+    let idx = p.attack_tree_idx(&tree_id(34)).expect("fragment");
+    let tree = p.attack_tree(idx).expect("fragment");
+    let cached = cache.evaluate_tree(&p, tree_id(34)).expect("cached");
+    let local = cached.why_path(tree.root()).last().expect("path");
+    assert_eq!(tree.id_of(local), Some(node_id(34002)));
+
+    // Metadata only: nothing is refolded.
+    let before = counters(&cache);
+    for (tree, node) in [(34, 34001), (30, 30002), (32, 32000)] {
+        inverses.push(
+            p.apply_cached(
+                Op::RenameTreeNode {
+                    tree: tree_id(tree),
+                    id: node_id(node),
+                    label: "Renamed".into(),
+                    provenance: prov.clone(),
+                },
+                &mut cache,
+            )
+            .expect("rename"),
+        );
+        check_fragments(&p, &cache);
+    }
+    assert_eq!(delta(&cache, before), (0, 0), "metadata folds nothing");
+    for inverse in inverses.into_iter().rev() {
+        p.apply_cached(inverse, &mut cache).expect("undo");
+        check_fragments(&p, &cache);
+    }
+    assert_eq!(why_end(&p), (tree_id(34), node_id(34001)));
+
+    // One shared step used inside both fragments 32 and 33, which tree 30
+    // reads under one AND gate. With tree 34 at OR(very-low, low) = low and
+    // the shared step at low, everything above is low.
+    let shared = shared_step_id(71);
+    for op in [
+        Op::AddSharedStep {
+            id: shared,
+            name: "Shared".into(),
+            provenance: prov.clone(),
+        },
+        Op::SetStepFeasibility {
+            target: StepTarget::Shared(shared),
+            level: Some(feas(&m, "low")),
+            provenance: prov.clone(),
+        },
+        rate(34001, "very-low"),
+    ] {
+        p.apply(op).expect("fixture");
+    }
+    share_in_fragments(&mut p, shared);
+    let mut cache = ProjectEvalCache::new(&p);
+    check_fragments(&p, &cache);
+    assert_eq!(
+        p.evaluate_tree(tree_id(30)).expect("user").root_value(),
+        &feas(&m, "low")
+    );
+    // Per mode: the shared step and the root of trees 32 and 33 (2 each),
+    // then tree 30 once with both reference steps dirty (2 + AND + root).
+    // Propagating each shared user separately would fold tree 30 twice
+    // (3 + 3 per mode) and give 20.
+    let before = counters(&cache);
+    let raise = p
+        .apply_cached(
+            Op::SetStepFeasibility {
+                target: StepTarget::Shared(shared),
+                level: Some(feas(&m, "high")),
+                provenance: prov.clone(),
+            },
+            &mut cache,
+        )
+        .expect("raise the shared step");
+    assert_eq!(delta(&cache, before), (16, 2), "one batch");
+    assert_eq!(
+        cache
+            .evaluate_tree(&p, tree_id(30))
+            .expect("user")
+            .root_value(),
+        &feas(&m, "high")
+    );
+    check_fragments(&p, &cache);
+    let before = counters(&cache);
+    p.apply_cached(raise, &mut cache).expect("undo");
+    assert_eq!(delta(&cache, before), (16, 2), "one batch back");
+    check_fragments(&p, &cache);
+}
+
+/// A host with two references, one of them through a nested reference and
+/// lowered by a planned control: tipping one reference leaves the other at
+/// its resolved value, and the reported tips equal both a hand derivation
+/// and the independent input fold, in each mode.
+#[test]
+fn tipping_a_reference_matches_hand_derived_and_independent_tips() {
+    let m = builtin();
+    let ctrl = control_id(40);
+    let prov = Provenance::human("alice", 95);
+    let p = project_with(
+        &m,
+        &[
+            gate_tree(
+                42,
+                TreeRole::Fragment,
+                GateKind::Or,
+                &[(1, Some("medium"))],
+                &m,
+            ),
+            gate_tree(
+                41,
+                TreeRole::Fragment,
+                GateKind::And,
+                &[(1, Some("high")), (2, None)],
+                &m,
+            ),
+            gate_tree(
+                40,
+                TreeRole::Threat,
+                GateKind::Or,
+                &[(1, Some("low")), (2, None), (3, None)],
+                &m,
+            ),
+            use_fragment(41, 2, 42),
+            use_fragment(40, 2, 41),
+            use_fragment(40, 3, 42),
+            Op::AddSecurityControl {
+                id: ctrl,
+                name: "Guard".into(),
+                provenance: prov.clone(),
+            },
+            Op::SetControlStatus {
+                control: ctrl,
+                status: ControlStatus::Planned,
+                provenance: prov.clone(),
+            },
+            Op::SetStepMitigation {
+                tree: tree_id(40),
+                node: node_id(40003),
+                control: ctrl,
+                feasibility: Some(feas(&m, "very-low")),
+                provenance: prov,
+            },
+        ],
+    );
+    let (low, medium, high) = (feas(&m, "low"), feas(&m, "medium"), feas(&m, "high"));
+    // Inherent: OR(low, AND(high, medium), medium) = medium; residual lowers
+    // the direct reference to very-low, so 40002 alone holds the root.
+    let mut inherent = vec![
+        (node_id(40002), medium, high, medium, high),
+        (node_id(40003), medium, high, medium, high),
+    ];
+    let mut residual = vec![
+        (node_id(40002), medium, low, medium, low),
+        (node_id(40002), medium, high, medium, high),
+    ];
+    inherent.sort();
+    residual.sort();
+    let mut oracle = fragment_oracle::Oracle::new(&p);
+    let tree = p
+        .attack_tree(p.attack_tree_idx(&tree_id(40)).expect("host"))
+        .expect("host");
+    for (mode, expected) in [(false, inherent), (true, residual)] {
+        assert_eq!(oracle.root(tree_id(40), mode), Ok(Lifted::Value(medium)));
+        assert_eq!(oracle.tips(tree_id(40), mode).as_ref(), Ok(&expected));
+        let tips = if mode {
+            p.residual_tree_tipping_points(tree_id(40))
+        } else {
+            p.tree_tipping_points(tree_id(40))
+        }
+        .expect("tips");
+        let mut actual: Vec<_> = tips
+            .iter()
+            .map(|t| {
+                (
+                    tree.id_of(t.step()).expect("node"),
+                    t.from_step(),
+                    t.to_step(),
+                    t.from_root(),
+                    t.to_root(),
+                )
+            })
+            .collect();
+        actual.sort();
+        assert_eq!(actual, expected, "residual={mode}");
     }
 }
