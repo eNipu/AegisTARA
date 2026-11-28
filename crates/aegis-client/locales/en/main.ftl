@@ -416,3 +416,7 @@ report-attacker-profile-excluded = Excluded
 report-attacker-profile-scalability = Scalability
 report-attacker-profile-all-allowed = All allowed
 report-attacker-profile-none-excluded = None
+relation-control-bypass = Bypass tree
+inspector-rev-control-bypass = Bypass tree for
+inspector-bypass-tree = Bypass tree
+create-bypass-from-selection = Create from selection

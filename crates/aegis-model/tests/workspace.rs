@@ -695,3 +695,275 @@ fn shared_steps_workspace_cap_is_isolated() {
         })
     ));
 }
+
+#[test]
+fn control_bypass_workspace_round_trip_and_blame() {
+    use aegis_model::{MAX_FRAGMENT_DEPTH, TreeRole};
+
+    let m = builtin();
+    let low = common::feas(&m, "low");
+    let frag = tree_id(9_600);
+    let frag_step = node_id(9_601);
+    let threat_tree = tree_id(9_602);
+    let threat_step = node_id(9_603);
+    let ctrl_with = common::control_id(9_604);
+    let ctrl_without = common::control_id(9_605);
+    let p_human = Provenance::human("alice", 77);
+
+    let p = project_with(
+        &m,
+        &[
+            Op::AddAttackTree {
+                role: TreeRole::Fragment,
+                id: frag,
+                tree: AttackTree::new(frag_step, Node::step("Bypass step")).expect("frag"),
+                step_feasibility: vec![],
+                provenance: p_human.clone(),
+            },
+            Op::AddAttackTree {
+                role: TreeRole::Threat,
+                id: threat_tree,
+                tree: AttackTree::new(threat_step, Node::step("Threat step")).expect("threat"),
+                step_feasibility: vec![],
+                provenance: p_human.clone(),
+            },
+            Op::AddSecurityControl {
+                id: ctrl_with,
+                name: "Ctrl A".into(),
+                provenance: p_human.clone(),
+            },
+            Op::AddSecurityControl {
+                id: ctrl_without,
+                name: "Ctrl B".into(),
+                provenance: p_human.clone(),
+            },
+            Op::SetControlBypass {
+                control: ctrl_with,
+                tree: Some(frag),
+                provenance: p_human,
+            },
+        ],
+    );
+
+    let mut all = files(&p);
+    let controls_json = json(
+        all.iter()
+            .find(|f| f.path == "shared/controls.json")
+            .expect("controls"),
+    );
+    let arr = controls_json["security_controls"].as_array().expect("arr");
+    assert_eq!(
+        arr.iter()
+            .find(|c| c["id"] == ctrl_with.to_string())
+            .expect("with")["bypass"],
+        frag.to_string()
+    );
+    assert!(
+        arr.iter()
+            .find(|c| c["id"] == ctrl_without.to_string())
+            .expect("without")
+            .get("bypass")
+            .is_none()
+    );
+    all.reverse();
+    let back = read(&all, &m).expect("read reversed");
+    assert_eq!(back, p);
+    assert_eq!(save(&back), save(&p));
+
+    // FragmentRole blames shared/controls.json.
+    let mut bad_role = files(&p);
+    rewrite(&mut bad_role, "shared/controls.json", |v| {
+        v["security_controls"][0]["bypass"] = json!(threat_tree.to_string());
+    });
+    let Err(StoreError::InWorkspace { path, source }) = read(&bad_role, &m) else {
+        panic!("expected FragmentRole");
+    };
+    assert_eq!(path, "shared/controls.json");
+    assert!(matches!(*source, StoreError::Model(ModelError::FragmentRole(t)) if t == threat_tree));
+
+    // UnknownAttackTree blames shared/controls.json.
+    let missing_tree = tree_id(9_699);
+    let mut bad_unknown = files(&p);
+    rewrite(&mut bad_unknown, "shared/controls.json", |v| {
+        v["security_controls"][0]["bypass"] = json!(missing_tree.to_string());
+    });
+    let Err(StoreError::InWorkspace { path, source }) = read(&bad_unknown, &m) else {
+        panic!("expected UnknownAttackTree");
+    };
+    assert_eq!(path, "shared/controls.json");
+    assert!(matches!(
+        *source,
+        StoreError::Model(ModelError::UnknownAttackTree(t)) if t == missing_tree
+    ));
+
+    // FragmentCycle blames shared/controls.json when controls file participates in the cycle.
+    let mut cyclic = p.clone();
+    cyclic
+        .apply(Op::SetControlBypass {
+            control: ctrl_with,
+            tree: None,
+            provenance: Provenance::default(),
+        })
+        .expect("clear");
+    cyclic
+        .apply(Op::SetStepMitigation {
+            tree: frag,
+            node: frag_step,
+            control: ctrl_with,
+            feasibility: Some(low),
+            provenance: Provenance::default(),
+        })
+        .expect("mitigate");
+    let mut bad_cycle = files(&cyclic);
+    rewrite(&mut bad_cycle, "shared/controls.json", |v| {
+        v["security_controls"][0]["bypass"] = json!(frag.to_string());
+    });
+    let Err(StoreError::InWorkspace { path, source }) = read(&bad_cycle, &m) else {
+        panic!("expected FragmentCycle");
+    };
+    assert_eq!(path, "shared/controls.json");
+    assert!(matches!(
+        *source,
+        StoreError::Model(ModelError::FragmentCycle(_))
+    ));
+
+    // FragmentDepth blames shared/controls.json when controls file contains "bypass".
+    let mut deep = Project::new(Arc::clone(&m));
+    let mut tids = Vec::new();
+    let mut nids = Vec::new();
+    for i in 0..=MAX_FRAGMENT_DEPTH {
+        let tid = tree_id(9_700 + i as u64);
+        let nid = node_id(9_800 + i as u64);
+        deep.apply(Op::AddAttackTree {
+            role: if i == 0 {
+                TreeRole::Threat
+            } else {
+                TreeRole::Fragment
+            },
+            id: tid,
+            tree: AttackTree::new(nid, Node::step(format!("S{i}"))).expect("step"),
+            step_feasibility: vec![],
+            provenance: Provenance::default(),
+        })
+        .expect("tree");
+        tids.push(tid);
+        nids.push(nid);
+    }
+    for i in 0..MAX_FRAGMENT_DEPTH {
+        deep.apply(Op::UseFragment {
+            tree: tids[i],
+            node: nids[i],
+            fragment: tids[i + 1],
+            provenance: Provenance::default(),
+        })
+        .expect("use");
+    }
+    let extra = tree_id(9_900);
+    deep.apply(Op::AddAttackTree {
+        role: TreeRole::Fragment,
+        id: extra,
+        tree: AttackTree::new(node_id(9_901), Node::step("Extra")).expect("extra"),
+        step_feasibility: vec![],
+        provenance: Provenance::default(),
+    })
+    .expect("extra");
+    deep.apply(Op::AddSecurityControl {
+        id: ctrl_with,
+        name: "Deep".into(),
+        provenance: Provenance::default(),
+    })
+    .expect("ctrl");
+    deep.apply(Op::SetStepMitigation {
+        tree: tids[MAX_FRAGMENT_DEPTH],
+        node: nids[MAX_FRAGMENT_DEPTH],
+        control: ctrl_with,
+        feasibility: Some(low),
+        provenance: Provenance::default(),
+    })
+    .expect("mit");
+    let mut bad_depth = files(&deep);
+    rewrite(&mut bad_depth, "shared/controls.json", |v| {
+        v["security_controls"][0]["bypass"] = json!(extra.to_string());
+    });
+    let Err(StoreError::InWorkspace { path, source }) = read(&bad_depth, &m) else {
+        panic!("expected FragmentDepth");
+    };
+    assert_eq!(path, "shared/controls.json");
+    assert!(matches!(
+        *source,
+        StoreError::Model(ModelError::FragmentDepth {
+            max: MAX_FRAGMENT_DEPTH,
+        })
+    ));
+
+    // UnknownSecurityControl blames the tree file when a tree references it,
+    // and shared/controls.json otherwise.
+    let missing_ctrl = common::control_id(9_999);
+    let mut with_mit = project_with(
+        &m,
+        &[
+            Op::AddAttackTree {
+                role: TreeRole::Threat,
+                id: threat_tree,
+                tree: AttackTree::new(threat_step, Node::step("S")).expect("s"),
+                step_feasibility: vec![],
+                provenance: Provenance::default(),
+            },
+            Op::AddSecurityControl {
+                id: ctrl_with,
+                name: "C".into(),
+                provenance: Provenance::default(),
+            },
+            Op::SetStepMitigation {
+                tree: threat_tree,
+                node: threat_step,
+                control: ctrl_with,
+                feasibility: Some(low),
+                provenance: Provenance::default(),
+            },
+        ],
+    );
+    let mut bad_tree_ctrl = files(&with_mit);
+    let tree_path = bad_tree_ctrl
+        .iter()
+        .find(|f| f.path.starts_with("systems/main/trees/"))
+        .expect("tree file")
+        .path
+        .clone();
+    rewrite(&mut bad_tree_ctrl, &tree_path, |v| {
+        v["attack_trees"][0]["step_mitigations"] = json!({
+            threat_step.to_string(): {
+                missing_ctrl.to_string(): "low",
+            }
+        });
+    });
+    let Err(StoreError::InWorkspace { path, source }) = read(&bad_tree_ctrl, &m) else {
+        panic!("expected UnknownSecurityControl");
+    };
+    assert_eq!(path, tree_path);
+    assert!(matches!(
+        *source,
+        StoreError::Model(ModelError::UnknownSecurityControl(c)) if c == missing_ctrl
+    ));
+
+    with_mit
+        .apply(Op::AddCybersecurityGoal {
+            id: common::goal_id(9_998),
+            name: "G".into(),
+            controls: vec![ctrl_with],
+            provenance: Provenance::default(),
+        })
+        .expect("goal");
+    let mut bad_goal_ctrl = files(&with_mit);
+    rewrite(&mut bad_goal_ctrl, "shared/goals.json", |v| {
+        v["cybersecurity_goals"][0]["controls"] = json!([missing_ctrl.to_string()]);
+    });
+    let Err(StoreError::InWorkspace { path, source }) = read(&bad_goal_ctrl, &m) else {
+        panic!("expected UnknownSecurityControl");
+    };
+    assert_eq!(path, "shared/controls.json");
+    assert!(matches!(
+        *source,
+        StoreError::Model(ModelError::UnknownSecurityControl(c)) if c == missing_ctrl
+    ));
+}

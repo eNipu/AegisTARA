@@ -291,13 +291,17 @@ fn file_of_key(key: &str) -> &'static str {
         .map_or("aegis.json", |&(path, _, _)| path)
 }
 
+/// Whether `bytes` contains `needle` as a contiguous UTF-8 byte sequence.
+fn bytes_contain(bytes: &[u8], needle: &str) -> bool {
+    !needle.is_empty() && bytes.windows(needle.len()).any(|w| w == needle.as_bytes())
+}
+
 /// The second tree file (in load order) whose text holds `id`, else the
 /// first, else `aegis.json`. `Project::load` meets the repeat in the second.
 fn tree_file_with(id: &str, trees: &[(&str, &[u8])]) -> String {
-    let needle = id.as_bytes();
     let mut holders = trees
         .iter()
-        .filter(|(_, bytes)| bytes.windows(needle.len()).any(|w| w == needle))
+        .filter(|(_, bytes)| bytes_contain(bytes, id))
         .map(|&(path, _)| path);
     let first = holders.next();
     holders
@@ -308,10 +312,9 @@ fn tree_file_with(id: &str, trees: &[(&str, &[u8])]) -> String {
 
 /// The first element file whose text holds `id`.
 fn element_file_with(id: &str, files: &[(&str, &[u8])]) -> Option<String> {
-    let needle = id.as_bytes();
     files
         .iter()
-        .find(|(_, bytes)| bytes.windows(needle.len()).any(|w| w == needle))
+        .find(|(_, bytes)| bytes_contain(bytes, id))
         .map(|&(path, _)| short(path))
 }
 
@@ -337,7 +340,12 @@ fn element_error_id(model: &ModelError) -> Option<String> {
 }
 
 /// The file `Project::load` refused, as well as the error tells.
-fn blame(err: &StoreError, trees: &[(&str, &[u8])], elements: &[(&str, &[u8])]) -> String {
+fn blame(
+    err: &StoreError,
+    trees: &[(&str, &[u8])],
+    elements: &[(&str, &[u8])],
+    controls_bytes: Option<&[u8]>,
+) -> String {
     let StoreError::Model(model) = err else {
         return "aegis.json".to_owned();
     };
@@ -349,6 +357,29 @@ fn blame(err: &StoreError, trees: &[(&str, &[u8])], elements: &[(&str, &[u8])]) 
         ModelError::DuplicateId(id) => return tree_file_with(&id.to_string(), trees),
         ModelError::NodeUsesSharedStep { tree, .. } => {
             return tree_file_with(&tree.to_string(), trees);
+        }
+        ModelError::UnknownSecurityControl(id) => {
+            let s = id.to_string();
+            if trees.iter().any(|(_, b)| bytes_contain(b, &s)) {
+                return tree_file_with(&s, trees);
+            }
+            "security_controls"
+        }
+        ModelError::UnknownAttackTree(id) | ModelError::FragmentRole(id)
+            if controls_bytes.is_some_and(|b| bytes_contain(b, &id.to_string())) =>
+        {
+            "security_controls"
+        }
+        ModelError::FragmentCycle(cycle)
+            if controls_bytes
+                .is_some_and(|b| cycle.iter().any(|id| bytes_contain(b, &id.to_string()))) =>
+        {
+            "security_controls"
+        }
+        ModelError::FragmentDepth { .. }
+            if controls_bytes.is_some_and(|b| bytes_contain(b, "\"bypass\"")) =>
+        {
+            "security_controls"
         }
         ModelError::DuplicateSharedStep(_)
         | ModelError::UnknownSharedStep(_)
@@ -473,7 +504,11 @@ impl Project {
         let mut trees: Vec<(u32, &str, &[u8], Vec<Value>)> = Vec::new();
         let mut elements = Map::new();
         let mut element_files: Vec<(&str, &[u8])> = Vec::new();
+        let mut controls_bytes: Option<&[u8]> = None;
         for (path, bytes, kind, keys) in taken {
+            if path == "shared/controls.json" {
+                controls_bytes = Some(bytes);
+            }
             let envelope = |problem| StoreError::WorkspaceEnvelope {
                 path: short(path),
                 problem,
@@ -554,7 +589,7 @@ impl Project {
                 path: "aegis.json".to_owned(),
             },
             other => StoreError::InWorkspace {
-                path: blame(&other, &tree_files, &element_files),
+                path: blame(&other, &tree_files, &element_files, controls_bytes),
                 source: Box::new(other),
             },
         })

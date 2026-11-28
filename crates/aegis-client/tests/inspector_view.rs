@@ -61,6 +61,10 @@ const NEW_KEYS: &[&str] = &[
     "inspector-rev-conditions",
     "inspector-rev-claim-assumptions",
     "inspector-rev-assumption-excludes",
+    "relation-control-bypass",
+    "inspector-rev-control-bypass",
+    "inspector-bypass-tree",
+    "create-bypass-from-selection",
 ];
 
 fn prov() -> Provenance {
@@ -1706,4 +1710,145 @@ fn unrated_and_excluded_fragments_never_invent_reference_numbers() {
         fragment.exclusion_causes[0].target,
         Selection::Condition(condition)
     );
+}
+
+#[test]
+fn bypass_tree_inspector_fields_and_reverse_relation() {
+    let m = Arc::new(Methodology::iso21434_r155().expect("builtin"));
+    let medium = m.feasibility_level("medium").expect("medium");
+    let medium_label = m.feasibility_level_label(medium).expect("medium label");
+    let mut ws = Workspace::empty(Arc::clone(&m));
+    let (ctrl, bypass_id, b_node, cond) = (
+        ControlId::new_v7(),
+        TreeId::new_v7(),
+        NodeId::new_v7(),
+        ConditionId::new_v7(),
+    );
+    let catalog = Catalog::load(Language::En);
+
+    ws.apply(
+        vec![
+            Op::AddSecurityControl {
+                id: ctrl,
+                name: "SecOC".into(),
+                provenance: prov(),
+            },
+            Op::AddAttackTree {
+                role: aegis_model::TreeRole::Fragment,
+                id: bypass_id,
+                tree: AttackTree::new(b_node, Node::step("Forge MAC")).expect("bypass tree"),
+                step_feasibility: Vec::new(),
+                provenance: prov(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("setup");
+
+    let no_bypass = inspector_view(&ws, Selection::Control(ctrl), &catalog).expect("ctrl");
+    assert!(no_bypass.fields.iter().any(|f| {
+        f.label == catalog.tr("relation-control-bypass")
+            && f.value == catalog.tr("none")
+            && f.tone.is_none()
+    }));
+
+    ws.apply(
+        vec![Op::SetControlBypass {
+            control: ctrl,
+            tree: Some(bypass_id),
+            provenance: prov(),
+        }],
+        Origin::Edit,
+    )
+    .expect("link bypass");
+
+    let unrated_ctrl = inspector_view(&ws, Selection::Control(ctrl), &catalog).expect("ctrl");
+    let unrated_field = unrated_ctrl
+        .fields
+        .iter()
+        .find(|f| f.label == catalog.tr("relation-control-bypass"))
+        .expect("bypass field");
+    assert!(
+        unrated_field.value.contains("Forge MAC"),
+        "{unrated_field:?}"
+    );
+    assert!(
+        unrated_field.value.contains(&catalog.tr("not-rated")),
+        "{unrated_field:?}"
+    );
+    assert_eq!(unrated_field.tone, None);
+
+    ws.apply(
+        vec![Op::SetStepFeasibility {
+            target: StepTarget::Step(bypass_id, b_node),
+            level: Some(medium),
+            provenance: prov(),
+        }],
+        Origin::Edit,
+    )
+    .expect("rate bypass");
+
+    let rated_ctrl = inspector_view(&ws, Selection::Control(ctrl), &catalog).expect("ctrl");
+    let rated_field = rated_ctrl
+        .fields
+        .iter()
+        .find(|f| f.label == catalog.tr("relation-control-bypass"))
+        .expect("bypass field");
+    assert!(rated_field.value.contains("Forge MAC"), "{rated_field:?}");
+    assert!(rated_field.value.contains(medium_label), "{rated_field:?}");
+    assert!(rated_field.tone.is_some(), "{rated_field:?}");
+
+    let bypass_tree_view =
+        inspector_view(&ws, Selection::Tree(bypass_id), &catalog).expect("bypass tree view");
+    let rev = bypass_tree_view
+        .reverse_relations
+        .iter()
+        .find(|r| r.key == RelationKey::CONTROL_BYPASS)
+        .expect("CONTROL_BYPASS reverse relation");
+    assert_eq!(rev.label, "Bypass tree for");
+    assert!(
+        rev.chips
+            .iter()
+            .any(|c| c.target == Selection::Control(ctrl))
+    );
+
+    ws.apply(
+        vec![
+            Op::AddCondition {
+                id: cond,
+                name: "Debug header".into(),
+                description: "".into(),
+                present: false,
+                provenance: prov(),
+            },
+            Op::NeedStepCondition {
+                tree: bypass_id,
+                node: b_node,
+                condition: cond,
+                provenance: prov(),
+            },
+        ],
+        Origin::Edit,
+    )
+    .expect("exclude bypass step");
+    assert!(
+        ws.cache()
+            .evaluate_residual_tree(ws.project(), bypass_id)
+            .is_err(),
+        "bypass tree should now fail evaluation with TreeNotApplicable"
+    );
+
+    let excl_ctrl = inspector_view(&ws, Selection::Control(ctrl), &catalog).expect("ctrl");
+    let excl_field = excl_ctrl
+        .fields
+        .iter()
+        .find(|f| f.label == catalog.tr("relation-control-bypass"))
+        .expect("bypass field");
+    assert!(
+        excl_field
+            .value
+            .contains(&catalog.tr("grid-excluded-badge")),
+        "{excl_field:?}"
+    );
+    assert_eq!(excl_field.tone, None);
 }

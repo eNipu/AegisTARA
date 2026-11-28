@@ -2139,3 +2139,444 @@ fn tree_bearing_v1_snapshot_without_shared_keys_loads() {
     assert!(!text.contains("step_shared"));
     assert_eq!(load(&saved, &m).expect("resaved v1 loads"), loaded);
 }
+
+#[test]
+fn control_bypass_round_trips_snapshot_op_log_and_undo() {
+    use aegis_model::{ControlStatus, TreeRole};
+
+    let m = builtin();
+    let mut p = Project::new(Arc::clone(&m));
+    let frag = tree_id(9_100);
+    let threat_tree = tree_id(9_101);
+    let ctrl_with = control_id(9_102);
+    let ctrl_without = control_id(9_103);
+    let p_human = Provenance::human("alice", 10);
+    let p_ai = Provenance::ai("assist", 20);
+
+    for op in [
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag,
+            tree: AttackTree::new(node_id(9_104), Node::step("Bypass step")).expect("frag"),
+            step_feasibility: vec![],
+            provenance: p_human.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Threat,
+            id: threat_tree,
+            tree: AttackTree::new(node_id(9_105), Node::step("Main step")).expect("threat"),
+            step_feasibility: vec![],
+            provenance: p_human.clone(),
+        },
+        Op::AddSecurityControl {
+            id: ctrl_with,
+            name: "Signature check".into(),
+            provenance: p_human.clone(),
+        },
+        Op::AddSecurityControl {
+            id: ctrl_without,
+            name: "Watchdog".into(),
+            provenance: p_human.clone(),
+        },
+        Op::SetControlStatus {
+            control: ctrl_with,
+            status: ControlStatus::Off,
+            provenance: p_human.clone(),
+        },
+    ] {
+        p.apply(op).expect("setup");
+    }
+
+    let before_bytes = save(&p);
+    let before_project = p.clone();
+    let set_op = Op::SetControlBypass {
+        control: ctrl_with,
+        tree: Some(frag),
+        provenance: p_ai.clone(),
+    };
+    let inverse = p.apply(set_op.clone()).expect("set bypass");
+    let c_idx = p.security_control_idx(&ctrl_with).expect("ctrl_with");
+    let frag_idx = p.attack_tree_idx(&frag).expect("frag");
+    let ctrl_ent = p.security_control(c_idx).expect("live");
+    assert_eq!(ctrl_ent.bypass(), Some(frag_idx));
+    assert_eq!(ctrl_ent.provenance(), &p_ai);
+
+    // Snapshot encodes `"bypass"` when set and omits it when `None`.
+    let bytes = save(&p);
+    let value: Value = serde_json::from_slice(&bytes).expect("json");
+    let controls = value["security_controls"].as_array().expect("controls");
+    let with_json = controls
+        .iter()
+        .find(|c| c["id"] == ctrl_with.to_string())
+        .expect("ctrl_with json");
+    let without_json = controls
+        .iter()
+        .find(|c| c["id"] == ctrl_without.to_string())
+        .expect("ctrl_without json");
+    assert_eq!(with_json["bypass"], frag.to_string());
+    assert!(without_json.get("bypass").is_none());
+
+    let loaded = load(&bytes, &m).expect("snapshot loads");
+    assert_eq!(loaded, p);
+    assert_eq!(save(&loaded), bytes);
+    let loaded_ctrl = loaded
+        .security_control(loaded.security_control_idx(&ctrl_with).expect("idx"))
+        .expect("ctrl");
+    assert_eq!(loaded_ctrl.provenance(), &p_ai);
+
+    // Op log round-trips both setting and clearing bypasses.
+    let clear_op = Op::SetControlBypass {
+        control: ctrl_with,
+        tree: None,
+        provenance: p_human.clone(),
+    };
+    let log_ops = vec![
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag,
+            tree: AttackTree::new(node_id(9_104), Node::step("Bypass step")).expect("frag"),
+            step_feasibility: vec![],
+            provenance: p_human.clone(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Threat,
+            id: threat_tree,
+            tree: AttackTree::new(node_id(9_105), Node::step("Main step")).expect("threat"),
+            step_feasibility: vec![],
+            provenance: p_human.clone(),
+        },
+        Op::AddSecurityControl {
+            id: ctrl_with,
+            name: "Signature check".into(),
+            provenance: p_human.clone(),
+        },
+        Op::AddSecurityControl {
+            id: ctrl_without,
+            name: "Watchdog".into(),
+            provenance: p_human,
+        },
+        Op::SetControlStatus {
+            control: ctrl_with,
+            status: ControlStatus::Off,
+            provenance: Provenance::human("alice", 10),
+        },
+        set_op,
+    ];
+    let log_bytes = write_log(&m, &log_ops);
+    let decoded: Vec<Op> = read_log(&m, &log_bytes).into_iter().map(|l| l.op).collect();
+    assert_eq!(decoded, log_ops);
+    let replayed = apply_all(&m, &decoded);
+    assert_eq!(replayed, p);
+    assert_eq!(save(&replayed), bytes);
+    let clear_decoded: Vec<Op> = read_log(&m, &write_log(&m, std::slice::from_ref(&clear_op)))
+        .into_iter()
+        .map(|l| l.op)
+        .collect();
+    assert_eq!(clear_decoded, [clear_op]);
+
+    // Inverse undo restores both project equality and serialized bytes.
+    p.apply(inverse).expect("undo");
+    assert_eq!(p, before_project);
+    assert_eq!(save(&p), before_bytes);
+
+    // `same_control` compares bypass by public `TreeId`, not raw `TreeIdx`.
+    let other_frag = tree_id(9_106);
+    let mut same_id_diff_slot = Project::new(Arc::clone(&m));
+    for op in [
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: other_frag,
+            tree: AttackTree::new(node_id(9_107), Node::step("Other")).expect("other"),
+            step_feasibility: vec![],
+            provenance: Provenance::default(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag,
+            tree: AttackTree::new(node_id(9_104), Node::step("Bypass step")).expect("frag"),
+            step_feasibility: vec![],
+            provenance: Provenance::human("alice", 10),
+        },
+        Op::RemoveAttackTree { id: other_frag },
+        Op::AddSecurityControl {
+            id: ctrl_with,
+            name: "Signature check".into(),
+            provenance: Provenance::default(),
+        },
+        Op::SetControlBypass {
+            control: ctrl_with,
+            tree: Some(frag),
+            provenance: Provenance::default(),
+        },
+    ] {
+        same_id_diff_slot.apply(op).expect("setup");
+    }
+    let mut same_id_slot_0 = Project::new(Arc::clone(&m));
+    for op in [
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag,
+            tree: AttackTree::new(node_id(9_104), Node::step("Bypass step")).expect("frag"),
+            step_feasibility: vec![],
+            provenance: Provenance::human("alice", 10),
+        },
+        Op::AddSecurityControl {
+            id: ctrl_with,
+            name: "Signature check".into(),
+            provenance: Provenance::default(),
+        },
+        Op::SetControlBypass {
+            control: ctrl_with,
+            tree: Some(frag),
+            provenance: Provenance::default(),
+        },
+    ] {
+        same_id_slot_0.apply(op).expect("setup");
+    }
+    assert_ne!(
+        same_id_diff_slot.attack_tree_idx(&frag),
+        same_id_slot_0.attack_tree_idx(&frag)
+    );
+    assert_eq!(same_id_diff_slot, same_id_slot_0);
+
+    let mut diff_bypass = same_id_slot_0.clone();
+    diff_bypass
+        .apply(Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: other_frag,
+            tree: AttackTree::new(node_id(9_107), Node::step("Other")).expect("other"),
+            step_feasibility: vec![],
+            provenance: Provenance::default(),
+        })
+        .expect("add");
+    same_id_slot_0
+        .apply(Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: other_frag,
+            tree: AttackTree::new(node_id(9_107), Node::step("Other")).expect("other"),
+            step_feasibility: vec![],
+            provenance: Provenance::default(),
+        })
+        .expect("add");
+    diff_bypass
+        .apply(Op::SetControlBypass {
+            control: ctrl_with,
+            tree: Some(other_frag),
+            provenance: Provenance::default(),
+        })
+        .expect("change bypass");
+    assert_ne!(diff_bypass, same_id_slot_0);
+    assert_eq!(
+        diff_bypass
+            .diff(&same_id_slot_0)
+            .expect("diff")
+            .security_controls()
+            .modified()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn control_bypass_guards_reject_wrong_role_cycles_depth_and_removals() {
+    use aegis_model::{ControlStatus, MAX_FRAGMENT_DEPTH, TreeRole};
+
+    let m = builtin();
+    let low = feas(&m, "low");
+    let mut p = Project::new(Arc::clone(&m));
+    let threat_tree = tree_id(9_200);
+    let frag = tree_id(9_201);
+    let frag_step = node_id(9_202);
+    let ctrl = control_id(9_203);
+
+    for op in [
+        Op::AddAttackTree {
+            role: TreeRole::Threat,
+            id: threat_tree,
+            tree: AttackTree::new(node_id(9_204), Node::step("Threat step")).expect("threat"),
+            step_feasibility: vec![],
+            provenance: Provenance::default(),
+        },
+        Op::AddAttackTree {
+            role: TreeRole::Fragment,
+            id: frag,
+            tree: AttackTree::new(frag_step, Node::step("Frag step")).expect("frag"),
+            step_feasibility: vec![],
+            provenance: Provenance::default(),
+        },
+        Op::AddSecurityControl {
+            id: ctrl,
+            name: "Gatekeeper".into(),
+            provenance: Provenance::default(),
+        },
+        // Off status still participates in cycle & depth checks.
+        Op::SetControlStatus {
+            control: ctrl,
+            status: ControlStatus::Off,
+            provenance: Provenance::default(),
+        },
+    ] {
+        p.apply(op).expect("setup");
+    }
+
+    // Wrong role rejected live and in snapshot.
+    assert_eq!(
+        p.apply(Op::SetControlBypass {
+            control: ctrl,
+            tree: Some(threat_tree),
+            provenance: Provenance::default(),
+        }),
+        Err(ModelError::FragmentRole(threat_tree))
+    );
+    let mut snap: Value = serde_json::from_slice(&save(&p)).expect("json");
+    snap["security_controls"][0]["bypass"] = json!(threat_tree.to_string());
+    assert!(matches!(
+        load(&serde_json::to_vec(&snap).expect("bytes"), &m),
+        Err(StoreError::Model(ModelError::FragmentRole(t))) if t == threat_tree
+    ));
+
+    // Removal guards for SecurityControlHasBypass and FragmentInUse.
+    p.apply(Op::SetControlBypass {
+        control: ctrl,
+        tree: Some(frag),
+        provenance: Provenance::default(),
+    })
+    .expect("set bypass");
+    assert_eq!(
+        p.apply(Op::RemoveSecurityControl { id: ctrl }),
+        Err(ModelError::SecurityControlHasBypass { control: ctrl })
+    );
+    assert_eq!(
+        p.apply(Op::RemoveAttackTree { id: frag }),
+        Err(ModelError::FragmentInUse {
+            fragment: frag,
+            users: 1,
+        })
+    );
+
+    // Self-cycle rejected when attaching SetStepMitigation on the bypass fragment.
+    assert_eq!(
+        p.apply(Op::SetStepMitigation {
+            tree: frag,
+            node: frag_step,
+            control: ctrl,
+            feasibility: Some(low),
+            provenance: Provenance::default(),
+        }),
+        Err(ModelError::FragmentCycle(vec![frag, frag]))
+    );
+
+    // Self-cycle rejected when setting SetControlBypass after SetStepMitigation exists.
+    p.apply(Op::SetControlBypass {
+        control: ctrl,
+        tree: None,
+        provenance: Provenance::default(),
+    })
+    .expect("clear bypass");
+    p.apply(Op::SetStepMitigation {
+        tree: frag,
+        node: frag_step,
+        control: ctrl,
+        feasibility: Some(low),
+        provenance: Provenance::default(),
+    })
+    .expect("attach mitigation");
+    assert_eq!(
+        p.apply(Op::SetControlBypass {
+            control: ctrl,
+            tree: Some(frag),
+            provenance: Provenance::default(),
+        }),
+        Err(ModelError::FragmentCycle(vec![frag, frag]))
+    );
+
+    // Depth > MAX_FRAGMENT_DEPTH (8) rejected via both SetControlBypass and SetStepMitigation.
+    let mut deep = Project::new(Arc::clone(&m));
+    let mut chain_trees = Vec::new();
+    let mut chain_steps = Vec::new();
+    for i in 0..=MAX_FRAGMENT_DEPTH {
+        let tid = tree_id(9_300 + i as u64);
+        let nid = node_id(9_400 + i as u64);
+        deep.apply(Op::AddAttackTree {
+            role: if i == 0 {
+                TreeRole::Threat
+            } else {
+                TreeRole::Fragment
+            },
+            id: tid,
+            tree: AttackTree::new(nid, Node::step(format!("S{i}"))).expect("node"),
+            step_feasibility: vec![],
+            provenance: Provenance::default(),
+        })
+        .expect("tree");
+        chain_trees.push(tid);
+        chain_steps.push(nid);
+    }
+    for i in 0..MAX_FRAGMENT_DEPTH {
+        deep.apply(Op::UseFragment {
+            tree: chain_trees[i],
+            node: chain_steps[i],
+            fragment: chain_trees[i + 1],
+            provenance: Provenance::default(),
+        })
+        .expect("chain");
+    }
+    let extra_frag = tree_id(9_500);
+    let deep_ctrl = control_id(9_501);
+    deep.apply(Op::AddAttackTree {
+        role: TreeRole::Fragment,
+        id: extra_frag,
+        tree: AttackTree::new(node_id(9_502), Node::step("Extra")).expect("extra"),
+        step_feasibility: vec![],
+        provenance: Provenance::default(),
+    })
+    .expect("extra frag");
+    deep.apply(Op::AddSecurityControl {
+        id: deep_ctrl,
+        name: "Deep".into(),
+        provenance: Provenance::default(),
+    })
+    .expect("ctrl");
+    deep.apply(Op::SetControlBypass {
+        control: deep_ctrl,
+        tree: Some(extra_frag),
+        provenance: Provenance::default(),
+    })
+    .expect("set bypass");
+    assert_eq!(
+        deep.apply(Op::SetStepMitigation {
+            tree: chain_trees[MAX_FRAGMENT_DEPTH],
+            node: chain_steps[MAX_FRAGMENT_DEPTH],
+            control: deep_ctrl,
+            feasibility: Some(low),
+            provenance: Provenance::default(),
+        }),
+        Err(ModelError::FragmentDepth {
+            max: MAX_FRAGMENT_DEPTH,
+        })
+    );
+    deep.apply(Op::SetControlBypass {
+        control: deep_ctrl,
+        tree: None,
+        provenance: Provenance::default(),
+    })
+    .expect("clear");
+    deep.apply(Op::SetStepMitigation {
+        tree: chain_trees[MAX_FRAGMENT_DEPTH],
+        node: chain_steps[MAX_FRAGMENT_DEPTH],
+        control: deep_ctrl,
+        feasibility: Some(low),
+        provenance: Provenance::default(),
+    })
+    .expect("mitigate");
+    assert_eq!(
+        deep.apply(Op::SetControlBypass {
+            control: deep_ctrl,
+            tree: Some(extra_frag),
+            provenance: Provenance::default(),
+        }),
+        Err(ModelError::FragmentDepth {
+            max: MAX_FRAGMENT_DEPTH,
+        })
+    );
+}

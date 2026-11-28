@@ -854,6 +854,7 @@ fn walk_shared_steps(seen: &mut BTreeSet<String>) {
     let node = NodeId::new_v7();
     let fragment = TreeId::new_v7();
     let fragment_root = NodeId::new_v7();
+    let control = ControlId::new_v7();
     let target = StepTarget::Shared(id);
     let factor = m.feasibility_factors().next().expect("factor");
     let level = m.factor_levels(factor).next().expect("factor level");
@@ -953,6 +954,22 @@ fn walk_shared_steps(seen: &mut BTreeSet<String>) {
             node,
             provenance: who(),
         },
+        Op::AddSecurityControl {
+            id: control,
+            name: "Bypassed control".into(),
+            provenance: who(),
+        },
+        Op::SetControlBypass {
+            control,
+            tree: Some(fragment),
+            provenance: who(),
+        },
+        Op::SetControlBypass {
+            control,
+            tree: None,
+            provenance: who(),
+        },
+        Op::RemoveSecurityControl { id: control },
         Op::RemoveAttackTree { id: fragment },
         Op::RemoveSharedStep { id },
         Op::RemoveAttackTree { id: tree },

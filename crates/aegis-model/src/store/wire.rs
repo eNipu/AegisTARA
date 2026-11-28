@@ -2286,6 +2286,8 @@ pub(super) struct ControlWire {
     pub(super) kind: Option<ControlKindKey>,
     #[serde(default, deserialize_with = "some")]
     pub(super) status: Option<ControlStatusWire>,
+    #[serde(default, deserialize_with = "some")]
+    pub(super) bypass: Option<WireId<TreeId>>,
     #[serde(default)]
     pub(super) targets: ControlTargetsWire,
     #[serde(default)]
@@ -2746,6 +2748,13 @@ pub(super) enum OpWire {
     SetControlStatus {
         control: WireId<ControlId>,
         status: ControlStatusWire,
+        #[serde(default, deserialize_with = "some")]
+        provenance: Option<ProvenanceWire>,
+    },
+    SetControlBypass {
+        control: WireId<ControlId>,
+        #[serde(deserialize_with = "Option::deserialize")]
+        tree: Option<WireId<TreeId>>,
         #[serde(default, deserialize_with = "some")]
         provenance: Option<ProvenanceWire>,
     },

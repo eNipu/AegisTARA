@@ -112,6 +112,7 @@ pub fn reverse_relation_label(key: RelationKey, catalog: &Catalog) -> String {
         RelationKey::GOAL_RESPONSIBLE => "inspector-rev-goal-responsible",
         RelationKey::CLAIM_RESPONSIBLE => "inspector-rev-claim-responsible",
         RelationKey::CONTROL_TARGETS => "inspector-rev-control-targets",
+        RelationKey::CONTROL_BYPASS => "inspector-rev-control-bypass",
         RelationKey::STEP_VIA | RelationKey::SHARED_STEP_VIA => "inspector-rev-step-via",
         RelationKey::FRAGMENT_USED_IN => "inspector-rev-fragment-used-in",
         RelationKey::SHARED_STEP_USED_IN => "inspector-rev-shared-step-used-in",
@@ -219,6 +220,20 @@ fn push_ceiling_causes(
         let target = Selection::Control(cid);
         if !causes.iter().any(|existing| existing.target == target) {
             causes.push(make_cause(project, catalog, "inspector-capped-by", target));
+        }
+        if let Some(bypass_id) = c.bypass() {
+            let bypass_target = Selection::Tree(bypass_id);
+            if !causes
+                .iter()
+                .any(|existing| existing.target == bypass_target)
+            {
+                causes.push(make_cause(
+                    project,
+                    catalog,
+                    "inspector-bypass-tree",
+                    bypass_target,
+                ));
+            }
         }
     }
 }
@@ -539,6 +554,9 @@ fn explain_tree_node(
             let line = match c.source() {
                 CeilingSource::ControlRule { target, .. } => {
                     format!("{name} (from {}): {lvl}", through_label(project, target))
+                }
+                CeilingSource::StepMitigation if c.bypass().is_some() => {
+                    format!("{name}: bypass {lvl}")
                 }
                 CeilingSource::StepMitigation => format!("{name} (on this step): {lvl}"),
             };
@@ -997,6 +1015,38 @@ pub fn inspector_view(ws: &Workspace, sel: Selection, catalog: &Catalog) -> Opti
                     .join(", ");
                 fields.push(field(catalog.tr("rules"), rules, None));
             }
+            let bypass_field = if let Some(b_idx) = c.bypass()
+                && let Some(b_id) = project.attack_tree_id(b_idx)
+                && let Some(b_tree) = project.attack_tree(b_idx)
+            {
+                let vis = project.attack_tree_visual_id(b_idx).unwrap_or_default();
+                let label = b_tree.get(b_tree.root()).map_or("", Node::label);
+                let (text, tone) = match ws.cache().evaluate_residual_tree(project, b_id) {
+                    Ok(eval) => {
+                        let lvl = *eval.root_value();
+                        (
+                            feasibility_text(m, lang, lvl),
+                            Some(feasibility_tone(m, lvl)),
+                        )
+                    }
+                    Err(aegis_model::ModelError::TreeNotApplicable(_)) => {
+                        (catalog.tr("grid-excluded-badge"), None)
+                    }
+                    Err(_) => (unrated(), None),
+                };
+                field(
+                    catalog.tr("relation-control-bypass"),
+                    format!("{vis} \u{b7} {label} ({text})"),
+                    tone,
+                )
+            } else {
+                field(
+                    catalog.tr("relation-control-bypass"),
+                    catalog.tr("none"),
+                    None,
+                )
+            };
+            fields.push(bypass_field);
             (
                 names.security_control.singular.to_string(),
                 pages::changed_text(c.provenance()),

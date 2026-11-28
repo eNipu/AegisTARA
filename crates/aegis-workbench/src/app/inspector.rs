@@ -251,6 +251,27 @@ impl InspectorPanel {
         self.open_chip(target, window, cx);
     }
 
+    /// Creates a bypass fragment tree for the currently inspected control from
+    /// the workbench's latest live tree or node selection.
+    pub fn create_bypass_from_selection(&mut self, cx: &mut Context<Self>) -> bool {
+        let (Some(Selection::Control(control)), Some(wb)) =
+            (self.selection, self.workbench.upgrade())
+        else {
+            return false;
+        };
+        let my_id = cx.entity_id();
+        let ok = wb.update(cx, |w, cx| {
+            w.create_bypass_from_selection_skipping(control, Some(my_id), cx)
+        });
+        let built = inspector_view(
+            wb.read(cx).workspace(),
+            Selection::Control(control),
+            &self.catalog,
+        );
+        self.apply_built(Some(Selection::Control(control)), built, cx);
+        ok
+    }
+
     fn open_chip(&mut self, target: Selection, window: &mut Window, cx: &mut Context<Self>) {
         let Some(wb) = self.workbench.upgrade() else {
             return;
@@ -450,6 +471,21 @@ impl InspectorPanel {
             })
             .flatten();
         let is_active = active_view.is_some();
+        let create_btn = (prefix == "inspector" && key == RelationKey::CONTROL_BYPASS).then(|| {
+            let can_create = !read_only
+                && self
+                    .workbench
+                    .upgrade()
+                    .is_some_and(|wb| wb.read(cx).last_tree_selection().is_some());
+            Button::new("inspector-create-bypass-from-selection")
+                .ghost()
+                .xsmall()
+                .label(self.catalog.tr("create-bypass-from-selection"))
+                .disabled(!can_create)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.create_bypass_from_selection(cx);
+                }))
+        });
         let edit_btn = row.editable.then(|| {
             Button::new(("inspector-edit", row_ix))
                 .ghost()
@@ -490,6 +526,7 @@ impl InspectorPanel {
             .justify_between()
             .gap_1()
             .child(label)
+            .children(create_btn)
             .children(edit_btn);
         v_flex()
             .gap_1()

@@ -1663,6 +1663,15 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
     let usage =
         (project.element_count(aegis_model::ElementKind::System) > 0).then(|| project.system_use());
     let app = project.applicability();
+    let bypass_controls: Vec<_> = project
+        .security_controls()
+        .filter(|(_, _, c)| c.bypass() == Some(tree_idx))
+        .collect();
+    let control_off = !bypass_controls.is_empty()
+        && bypass_controls
+            .iter()
+            .all(|(_, _, c)| c.status() == aegis_model::ControlStatus::Off)
+        && project.fragment_users(tree_idx).is_empty();
     let style = |idx: NodeIdx| -> NodeStyle {
         if let Some((ref preview_tree, ref ghosts)) = ghost_overlay
             && let Some(nid) = preview_tree.id_of(idx)
@@ -1679,12 +1688,27 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
                 via: None,
                 capped: None,
                 excluded: None,
+                excluded_label: None,
             };
         }
-        let excluded = tree
-            .id_of(idx)
-            .filter(|&nid| app.is_node_excluded(tree_id, nid))
-            .map(|nid| crate::exclusion::reasons_text(project, app.node_reasons(tree_id, nid)));
+        let (excluded, excluded_label) = if let Some(nid) = tree.id_of(idx)
+            && app.is_node_excluded(tree_id, nid)
+        {
+            (
+                Some(crate::exclusion::reasons_text(
+                    project,
+                    app.node_reasons(tree_id, nid),
+                )),
+                None,
+            )
+        } else if control_off {
+            (
+                Some("control off".to_owned()),
+                Some("control off".to_owned()),
+            )
+        } else {
+            (None, None)
+        };
         let value = evaluation.and_then(|e| e.get(idx).copied());
         let is_step = tree.get(idx).is_some_and(|n| n.gate_kind().is_none());
         let capped = if is_step
@@ -1700,6 +1724,13 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
                     aegis_model::CeilingSource::ControlRule { target, .. } => {
                         let name = project.security_control(c.control())?.name();
                         Some(format!("{name} on {}", through_label(project, target)))
+                    }
+                    aegis_model::CeilingSource::StepMitigation if c.bypass().is_some() => {
+                        let name = project.security_control(c.control())?.name();
+                        Some(format!(
+                            "{name} (bypass {})",
+                            level_label(m, c.feasibility())
+                        ))
                     }
                     aegis_model::CeilingSource::StepMitigation => None,
                 })
@@ -1742,6 +1773,7 @@ pub fn tree_scene(ws: &Workspace, tree_id: TreeId, residual: bool) -> Option<Sce
             }),
             capped,
             excluded,
+            excluded_label,
         }
     };
     let layout_tree = ghost_overlay.as_ref().map_or(tree, |(pt, _)| pt);
@@ -1961,6 +1993,9 @@ pub fn inspector(ws: &Workspace, ui: &UiState) -> Option<Inspector> {
                 Some(match c.source() {
                     aegis_model::CeilingSource::ControlRule { target, .. } => {
                         format!("{name} (from {}): {lvl}", through_label(project, target))
+                    }
+                    aegis_model::CeilingSource::StepMitigation if c.bypass().is_some() => {
+                        format!("{name}: bypass {lvl}")
                     }
                     aegis_model::CeilingSource::StepMitigation => {
                         format!("{name} (on this step): {lvl}")

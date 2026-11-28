@@ -99,7 +99,10 @@ pub fn describe(scene: &Scene, v: u32) -> Option<NodeAccess> {
         score: style.and_then(|s| s.score.clone()),
         via: style.and_then(|s| s.via.clone()),
         capped: style.and_then(|s| s.capped.clone()),
-        excluded: style.and_then(|s| s.excluded.clone()),
+        excluded: style.and_then(|s| match (&s.excluded, &s.excluded_label) {
+            (Some(reason), Some(label)) if reason != label => Some(format!("{label}: {reason}")),
+            _ => s.excluded.clone(),
+        }),
         critical: style.is_some_and(|s| s.critical),
         shared_from: scene.shared_in(v),
     })

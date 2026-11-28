@@ -41,6 +41,7 @@ impl RelationKey {
     pub const ASSUMPTION_CONDITIONS: Self = Self("assumption-conditions");
     pub const ASSUMPTION_EXCLUDES: Self = Self("assumption-excludes");
     pub const CONTROL_TARGETS: Self = Self("control-targets");
+    pub const CONTROL_BYPASS: Self = Self("control-bypass");
     pub const STEP_VIA: Self = Self("step-via");
     pub const SHARED_STEP_VIA: Self = Self("shared-step-via");
     pub const FRAGMENT_USED_IN: Self = Self("fragment-used-in");
@@ -167,6 +168,7 @@ pub static RELATIONS: &[Relation] = &[
     rel(RelationKey::GOAL_RESPONSIBLE, ElementKind::Goal, &[ElementKind::Party], "relation-goal-responsible", true, read_goal_responsible, Some(link_goal_responsible), Some(unlink_goal_responsible)),
     rel(RelationKey::CLAIM_RESPONSIBLE, ElementKind::Claim, &[ElementKind::Party], "relation-claim-responsible", true, read_claim_responsible, Some(link_claim_responsible), Some(unlink_claim_responsible)),
     rel(RelationKey::CONTROL_TARGETS, ElementKind::Control, ITEM, "relation-control-targets", true, read_control_targets, Some(link_control_targets), Some(unlink_control_targets)),
+    rel(RelationKey::CONTROL_BYPASS, ElementKind::Control, &[ElementKind::Tree], "relation-control-bypass", false, read_control_bypass, Some(link_control_bypass), Some(unlink_control_bypass)),
     rel(RelationKey::STEP_VIA, ElementKind::Step, ITEM, "relation-step-via", false, read_step_via, Some(link_step_via), Some(unlink_step_via)),
     rel(RelationKey::SHARED_STEP_VIA, ElementKind::SharedStep, ITEM, "relation-step-via", false, read_shared_step_via, Some(link_shared_step_via), Some(unlink_shared_step_via)),
     rel(RelationKey::SHARED_STEP_USED_IN, ElementKind::SharedStep, &[ElementKind::Step], "inspector-used-in", true, read_shared_step_used_in, None, None),
@@ -251,10 +253,14 @@ pub fn reverse_related(project: &Project, key: RelationKey, to: Selection) -> Ve
 /// for an unknown key. O(elements).
 #[must_use]
 pub fn candidates(project: &Project, key: RelationKey) -> Vec<Selection> {
-    if key == RelationKey::THREAT_TREE {
+    if let Some(role) = match key {
+        RelationKey::THREAT_TREE => Some(TreeRole::Threat),
+        RelationKey::CONTROL_BYPASS => Some(TreeRole::Fragment),
+        _ => None,
+    } {
         return project
             .attack_trees()
-            .filter(|(idx, _, _)| project.attack_tree_role(*idx) == Some(TreeRole::Threat))
+            .filter(|(idx, _, _)| project.attack_tree_role(*idx) == Some(role))
             .map(|(_, id, _)| Selection::Tree(id))
             .collect();
     }
@@ -386,6 +392,11 @@ fn read_assumption_excludes(project: &Project, from: Selection) -> Vec<Selection
 fn read_control_targets(project: &Project, from: Selection) -> Vec<Selection> {
     let Selection::Control(id) = from else { return Vec::new() };
     project.security_control_idx(&id).map_or_else(Vec::new, |i| project.control_targets(i).filter_map(item_selection).collect())
+}
+#[rustfmt::skip]
+fn read_control_bypass(project: &Project, from: Selection) -> Vec<Selection> {
+    let Selection::Control(id) = from else { return Vec::new() };
+    project.security_control_idx(&id).and_then(|i| project.security_control(i)).and_then(|c| c.bypass()).and_then(|t| project.attack_tree_id(t)).map(Selection::Tree).into_iter().collect()
 }
 #[rustfmt::skip]
 fn read_step_via(project: &Project, from: Selection) -> Vec<Selection> {
@@ -613,6 +624,14 @@ fn link_control_targets(from: Selection, to: Selection) -> Option<Edit> {
 #[rustfmt::skip]
 fn unlink_control_targets(from: Selection, to: Selection) -> Option<Edit> {
     match (from, selection_item(to)) { (Selection::Control(c), Some(target)) => Some(Edit::UnapplyControl { control: c, target }), _ => None }
+}
+#[rustfmt::skip]
+fn link_control_bypass(from: Selection, to: Selection) -> Option<Edit> {
+    match (from, to) { (Selection::Control(control), Selection::Tree(tree)) => Some(Edit::SetControlBypass { control, tree: Some(tree) }), _ => None }
+}
+#[rustfmt::skip]
+fn unlink_control_bypass(from: Selection, to: Selection) -> Option<Edit> {
+    match (from, to) { (Selection::Control(control), Selection::Tree(_)) => Some(Edit::SetControlBypass { control, tree: None }), _ => None }
 }
 #[rustfmt::skip]
 fn link_step_via(from: Selection, to: Selection) -> Option<Edit> {

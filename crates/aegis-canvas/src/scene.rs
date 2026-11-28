@@ -80,6 +80,9 @@ pub struct NodeStyle {
     /// Human-readable exclusion reasons when the node is excluded by
     /// applicability (`None` when included).
     pub excluded: Option<String>,
+    /// Optional override for the bottom-left `"excluded"` hatch text when
+    /// `excluded` is `Some(...)`.
+    pub excluded_label: Option<String>,
 }
 
 /// A connection between two nodes.

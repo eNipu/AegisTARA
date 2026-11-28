@@ -199,10 +199,13 @@ fn push_node(items: &mut Vec<Item>, scene: &Scene, view: &Viewport, v: u32, sele
     }
     let base = rect.origin.y + (world.size.h - 8.0) * z;
     let capped = style.and_then(|s| s.capped.as_deref()).is_some() && !ghost;
+    let hatch_text = style
+        .and_then(|s| s.excluded_label.as_deref())
+        .unwrap_or("excluded");
     if excluded {
         items.push(Item::Text {
             at: Point::new(text_left, base),
-            text: "excluded".to_owned(),
+            text: hatch_text.to_owned(),
             size: FONT * z,
             bold: true,
             paint: Paint::Graphite,
@@ -239,7 +242,7 @@ fn push_node(items: &mut Vec<Item>, scene: &Scene, view: &Viewport, v: u32, sele
         .filter(|_| !ghost)
         .map(|via| {
             let score_chars = if excluded {
-                "excluded".len()
+                hatch_text.chars().count()
             } else {
                 style
                     .and_then(|s| s.score.as_deref())

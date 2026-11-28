@@ -675,7 +675,7 @@ impl Seed {
 /// One seed.
 pub fn seed() -> impl Strategy<Value = Seed> {
     (
-        0u8..92,
+        0u8..93,
         any::<u16>(),
         any::<u16>(),
         any::<u16>(),
@@ -2311,6 +2311,19 @@ impl Gen {
                 }
                 Op::SetAttackFilter { filter, provenance }
             }
+            83 => {
+                let tree = match s.b % 4 {
+                    0 => None,
+                    1 => Some(self.fragment_tree(p, s.c)),
+                    2 => Some(self.tree(p, s.c)),
+                    _ => Some(tree_id(self.fresh())),
+                };
+                Op::SetControlBypass {
+                    control: self.control(p, s.a),
+                    tree,
+                    provenance,
+                }
+            }
             84 => Op::AddSharedStep {
                 id: if s.a.is_multiple_of(16) {
                     self.shared_step(p, s.b)
@@ -3765,7 +3778,6 @@ pub fn second_every_op(m: Arc<Methodology>) {
         },
     );
     ok(&mut p, Op::RemoveCybersecurityGoal { id: goal });
-    ok(&mut p, Op::RemoveSecurityControl { id: ctrl });
     ok(
         &mut p,
         Op::SetThreatFeasibility {
@@ -3858,6 +3870,49 @@ pub fn second_every_op(m: Arc<Methodology>) {
     );
     ok(&mut p, Op::RemoveCybersecurityClaim { id: claim });
     ok(&mut p, Op::RemoveAttackTree { id: tree });
+    // Keep at most one attack tree live at a time for workspace `check_keys`.
+    let bypass_tree = tree_id(9_002);
+    ok(
+        &mut p,
+        Op::AddAttackTree {
+            role: aegis_model::TreeRole::Fragment,
+            id: bypass_tree,
+            tree: AttackTree::new(node_id(9_003), Node::step("Bypass")).expect("bypass"),
+            step_feasibility: vec![],
+            provenance: p_human.clone(),
+        },
+    );
+    ok(
+        &mut p,
+        Op::SetControlBypass {
+            control: ctrl,
+            tree: Some(bypass_tree),
+            provenance: p_human.clone(),
+        },
+    );
+    rejects(
+        &mut p,
+        Op::RemoveAttackTree { id: bypass_tree },
+        &aegis_model::ModelError::FragmentInUse {
+            fragment: bypass_tree,
+            users: 1,
+        },
+    );
+    rejects(
+        &mut p,
+        Op::RemoveSecurityControl { id: ctrl },
+        &aegis_model::ModelError::SecurityControlHasBypass { control: ctrl },
+    );
+    ok(
+        &mut p,
+        Op::SetControlBypass {
+            control: ctrl,
+            tree: None,
+            provenance: Provenance::default(),
+        },
+    );
+    ok(&mut p, Op::RemoveSecurityControl { id: ctrl });
+    ok(&mut p, Op::RemoveAttackTree { id: bypass_tree });
     ok(
         &mut p,
         Op::RemoveCatalogRef {

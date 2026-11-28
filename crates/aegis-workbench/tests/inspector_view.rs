@@ -7,6 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use aegis_client::command_table::command;
+use aegis_client::commands::Edit;
 use aegis_client::explorer::{ExplorerKey, Folder, Owner};
 use aegis_client::i18n::{Catalog, Language};
 use aegis_client::relations::RelationKey;
@@ -15,7 +16,7 @@ use aegis_client::view::{Selection, TableId};
 use aegis_model::{
     AssetId, AttackTree, ComponentId, ConditionId, ControlId, DamageId, ElementId, ElementKind,
     ElementRef, GateKind, GoalId, ItemRef, Methodology, Node, NodeId, Op, Project, Provenance,
-    RiskTreatment, SharedStepId, StepTarget, ThreatId, TreeId,
+    RiskTreatment, SharedStepId, StepTarget, ThreatId, TreeId, TreeRole,
 };
 use aegis_workbench::app::{InspectorPanel, Workbench, apply_appearance, bind_all};
 use gpui::{AppContext as _, Entity, Focusable as _, TestAppContext, VisualTestContext};
@@ -594,4 +595,217 @@ fn shared_step_note_renders_above_fields_for_five_distinct_trees(cx: &mut TestAp
         note.bottom() <= fields.top(),
         "note {note:?} is not above fields {fields:?}"
     );
+}
+
+#[gpui::test]
+fn control_inspector_creates_bypass_from_selection_with_read_only_and_undo_guards(
+    cx: &mut TestAppContext,
+) {
+    let mut fx = build_fixture();
+    let medium = fx
+        .project
+        .methodology()
+        .feasibility_level("medium")
+        .expect("medium");
+    let medium_label = fx
+        .project
+        .methodology()
+        .feasibility_level_label(medium)
+        .expect("medium label")
+        .to_owned();
+
+    let src_tree_id = TreeId::new_v7();
+    let src_root = NodeId::new_v7();
+    let src_subgate = NodeId::new_v7();
+    let src_step = NodeId::new_v7();
+    let mut src_tree =
+        AttackTree::new(src_root, Node::gate(GateKind::Or, "Outer root")).expect("r");
+    let sub_idx = src_tree
+        .add_child(
+            src_tree.root(),
+            src_subgate,
+            Node::gate(GateKind::And, "Clone subgate"),
+        )
+        .expect("subgate");
+    src_tree
+        .add_child(sub_idx, src_step, Node::step("Replay bus frame"))
+        .expect("step");
+    fx.project
+        .apply(Op::AddAttackTree {
+            role: Default::default(),
+            id: src_tree_id,
+            tree: src_tree,
+            step_feasibility: vec![(src_step, medium)],
+            provenance: prov(),
+        })
+        .expect("add source tree");
+    let src_snapshot = fx
+        .project
+        .attack_tree(fx.project.attack_tree_idx(&src_tree_id).expect("src idx"))
+        .expect("src tree")
+        .clone();
+
+    let catalog = Catalog::load(Language::En);
+    let bypass_label = catalog.tr("relation-control-bypass");
+
+    let (wb, inspector, vcx) = open_workbench(cx, Language::En, Appearance::Light);
+    wb.update_in(vcx, |w, window, cx| {
+        w.show_project(fx.project, "Bypass from selection", None, window, cx);
+    });
+
+    // Initially no tree or node has been selected, so creating fails cleanly with no mutation.
+    wb.update(vcx, |w, cx| {
+        assert_eq!(w.last_tree_selection(), None);
+        w.select_element(Some(Selection::Control(fx.ctrl)), cx);
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    let before_empty = vcx.read_entity(&wb, |w, _| w.workspace().project().clone());
+    assert!(!inspector.update(vcx, |i, cx| i.create_bypass_from_selection(cx)));
+    assert!(vcx.read_entity(&wb, |w, _| w.workspace().project() == &before_empty));
+    assert_eq!(
+        vcx.read_entity(&wb, |w, _| w.note().map(str::to_owned)),
+        None
+    );
+
+    // 1. Select a tree node, then inspect the SecurityControl: last_tree_selection stays set,
+    //    and the "Bypass tree" field + CONTROL_BYPASS relation row are displayed.
+    wb.update(vcx, |w, cx| {
+        w.select_element(Some(Selection::TreeNode(src_tree_id, src_subgate)), cx);
+        w.select_element(Some(Selection::Control(fx.ctrl)), cx);
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let tree_sel = Some(Selection::TreeNode(src_tree_id, src_subgate));
+    assert_eq!(
+        vcx.read_entity(&wb, |w, _| w.last_tree_selection()),
+        tree_sel
+    );
+    vcx.read_entity(&inspector, |i, _| {
+        assert_eq!(i.selection(), Some(Selection::Control(fx.ctrl)));
+        let view = i.view().expect("control view");
+        assert!(view.fields.iter().any(|f| {
+            f.label == bypass_label && f.value == catalog.tr("none") && f.tone.is_none()
+        }));
+        let row = i
+            .relation_rows()
+            .iter()
+            .find(|r| r.key == RelationKey::CONTROL_BYPASS)
+            .expect("CONTROL_BYPASS relation row");
+        assert_eq!(row.label, bypass_label);
+        assert!(row.chips.is_empty());
+    });
+
+    // 3. When read-only is set, create_bypass_from_selection returns false and mutates nothing.
+    wb.update(vcx, |w, cx| {
+        w.set_read_only(Some("Read-only mode".to_owned()), cx);
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    let before_ro = vcx.read_entity(&wb, |w, _| w.workspace().project().clone());
+    assert!(!inspector.update(vcx, |i, cx| i.create_bypass_from_selection(cx)));
+    assert!(vcx.read_entity(&wb, |w, _| w.workspace().project() == &before_ro));
+    assert_eq!(
+        vcx.read_entity(&wb, |w, _| w.note().map(str::to_owned)),
+        Some("Read-only mode".to_owned())
+    );
+
+    wb.update(vcx, |w, cx| {
+        w.set_read_only(None, cx);
+    });
+    let before_create = vcx.read_entity(&wb, |w, _| w.workspace().project().clone());
+
+    // 2. Invoking create_bypass_from_selection creates a Fragment subtree copy attached to ctrl,
+    //    updates Control's Bypass tree field + chip and step explain-why, and leaves source intact.
+    assert!(inspector.update(vcx, |i, cx| i.create_bypass_from_selection(cx)));
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let frag_id = vcx.read_entity(&wb, |w, _| {
+        let project = w.workspace().project();
+        let ctrl_idx = project.security_control_idx(&fx.ctrl).expect("ctrl idx");
+        let ctrl = project.security_control(ctrl_idx).expect("ctrl");
+        let frag_idx = ctrl.bypass().expect("ctrl bypass attached");
+        assert_eq!(project.attack_tree_role(frag_idx), Some(TreeRole::Fragment));
+        let frag_tree = project.attack_tree(frag_idx).expect("fragment tree");
+        assert_eq!(frag_tree.len(), 2);
+        assert_eq!(
+            frag_tree.get(frag_tree.root()).map(|n| n.label()),
+            Some("Clone subgate")
+        );
+        let src = project
+            .attack_tree(project.attack_tree_idx(&src_tree_id).expect("src idx"))
+            .expect("src tree");
+        assert_eq!(src, &src_snapshot);
+        project.attack_tree_id(frag_idx).expect("fragment id")
+    });
+
+    vcx.read_entity(&inspector, |i, _| {
+        let view = i.view().expect("updated control view");
+        let field = view
+            .fields
+            .iter()
+            .find(|f| f.label == bypass_label)
+            .expect("bypass field");
+        assert!(field.value.contains("Clone subgate"), "{field:?}");
+        assert!(field.value.contains(&medium_label), "{field:?}");
+        assert!(field.tone.is_some(), "{field:?}");
+        let row = i
+            .relation_rows()
+            .iter()
+            .find(|r| r.key == RelationKey::CONTROL_BYPASS)
+            .expect("CONTROL_BYPASS row");
+        assert_eq!(row.chips.len(), 1);
+        assert_eq!(row.chips[0].target, Selection::Tree(frag_id));
+    });
+
+    wb.update(vcx, |w, cx| {
+        w.select_element(Some(Selection::TreeNode(fx.tree_id, fx.step_deciding)), cx);
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    vcx.read_entity(&inspector, |i, _| {
+        let explain = i.explain().expect("step explain-why");
+        assert!(
+            explain.lines.iter().any(|l| l.contains("bypass ")),
+            "expected bypass note in explain lines: {:?}",
+            explain.lines
+        );
+    });
+
+    // 4a. Selecting the created fragment tree then undoing restores the exact pre-creation project,
+    //     removes the fragment, and clears last_tree_selection() because the remembered tree is gone.
+    wb.update(vcx, |w, cx| {
+        w.select_element(Some(Selection::Tree(frag_id)), cx);
+    });
+    assert_eq!(
+        vcx.read_entity(&wb, |w, _| w.last_tree_selection()),
+        Some(Selection::Tree(frag_id))
+    );
+    wb.update_in(vcx, |w, window, cx| w.run("undo", window, cx));
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
+    vcx.read_entity(&wb, |w, _| {
+        let project = w.workspace().project();
+        assert!(project == &before_create);
+        assert!(project.attack_tree_idx(&frag_id).is_none());
+        let ctrl_idx = project.security_control_idx(&fx.ctrl).expect("ctrl idx");
+        assert_eq!(
+            project.security_control(ctrl_idx).expect("ctrl").bypass(),
+            None
+        );
+        assert_eq!(w.last_tree_selection(), None);
+    });
+
+    // 4b. Deleting the remembered source tree also causes last_tree_selection() to return None.
+    wb.update(vcx, |w, cx| {
+        w.select_element(Some(Selection::TreeNode(src_tree_id, src_subgate)), cx);
+        w.select_element(Some(Selection::Control(fx.ctrl)), cx);
+    });
+    assert_eq!(
+        vcx.read_entity(&wb, |w, _| w.last_tree_selection()),
+        tree_sel
+    );
+    wb.update(vcx, |w, cx| {
+        assert!(w.apply_edit(&Edit::RemoveTree { tree: src_tree_id }, cx));
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(vcx.read_entity(&wb, |w, _| w.last_tree_selection()), None);
+    assert!(!inspector.update(vcx, |i, cx| i.create_bypass_from_selection(cx)));
 }

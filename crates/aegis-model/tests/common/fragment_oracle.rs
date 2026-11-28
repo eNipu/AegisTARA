@@ -147,11 +147,23 @@ impl<'a> Oracle<'a> {
             matches!(status, ControlStatus::Implemented)
                 || (residual && matches!(status, ControlStatus::Planned))
         };
+        let mut excluded = false;
         for mitigation in p.step_mitigations(tree_idx, idx) {
             let control = p.security_control(mitigation.control()).expect("control");
             if counts(control.status()) {
-                value = value.min(mitigation.feasibility());
+                if let Some(b_idx) = control.bypass() {
+                    let b_id = p.attack_tree_id(b_idx).expect("bypass tree");
+                    match self.root(b_id, residual)? {
+                        Lifted::Value(bv) => value = value.min(bv),
+                        Lifted::Excluded => excluded = true,
+                    }
+                } else {
+                    value = value.min(mitigation.feasibility());
+                }
             }
+        }
+        if excluded {
+            return Ok(Lifted::Excluded);
         }
         if let (Some(via), Some(attack)) =
             (p.step_via(tree_idx, idx), p.step_attack_type(tree_idx, idx))

@@ -229,6 +229,7 @@ impl Workbench {
         self.name = name;
         self.folder = folder;
         self.picked = None;
+        self.last_tree_selection = None;
         self.state = ExplorerState {
             filter: std::mem::take(&mut self.state.filter),
             ..ExplorerState::default()

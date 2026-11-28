@@ -544,11 +544,11 @@ fn check_diff_pair(
     Ok(())
 }
 
-/// Runs 2048 sequences with a fixed seed and merges their statistics.
+/// Runs 4096 sequences with a fixed seed and merges their statistics.
 fn coverage(m: &std::sync::Arc<aegis_model::Methodology>) -> Stats {
     let config = Config {
         failure_persistence: None,
-        ..Config::with_cases(2048)
+        ..Config::with_cases(4096)
     };
     let mut runner = TestRunner::new_with_rng(
         config,
@@ -586,11 +586,12 @@ fn ops_generator_covers_every_op_and_most_errors() {
         // Job 133 adds the eight condition ops; job 137 adds SetAttackFilter;
         // job 141a adds the three shared-step lifecycle ops; 141c adds link/unlink;
         // 142c adds the two fragment reference ops.
-        let kinds = if m.interface_kind_count() > 0 { 82 } else { 79 };
+        let kinds = if m.interface_kind_count() > 0 { 83 } else { 80 };
         assert_eq!(stats.ok_kinds.len(), kinds, "{:?}", stats.ok_kinds);
         for kind in [
             "SetStepVia",
             "SetStepAttackType",
+            "SetControlBypass",
             "UnneedCondition",
             "UnneedStepCondition",
             "UnlinkDamage",

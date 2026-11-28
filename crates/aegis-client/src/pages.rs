@@ -1454,6 +1454,13 @@ fn ceiling_lines(ws: &Workspace, id: ThreatId) -> Vec<String> {
         .take(SHOWN)
         .filter_map(|c| {
             let name = project.security_control(c.control())?.name();
+            let level = feasibility_label(m, c.feasibility());
+            if c.source() == aegis_model::CeilingSource::StepMitigation && c.bypass().is_some() {
+                return Some(format!(
+                    "Step \"{}\" is capped at bypass {level} by {name}.",
+                    node_label(project, tree_id, node),
+                ));
+            }
             let from = match c.source() {
                 aegis_model::CeilingSource::ControlRule { target, .. } => {
                     format!(" (from {})", crate::view::through_label(project, target))
@@ -1461,9 +1468,8 @@ fn ceiling_lines(ws: &Workspace, id: ThreatId) -> Vec<String> {
                 aegis_model::CeilingSource::StepMitigation => " (on this step)".to_owned(),
             };
             Some(format!(
-                "Step \"{}\" is capped at {} by {name}{from}.",
+                "Step \"{}\" is capped at {level} by {name}{from}.",
                 node_label(project, tree_id, node),
-                feasibility_label(m, c.feasibility()),
             ))
         })
         .collect();
@@ -1721,11 +1727,15 @@ fn reduction(
             name: project
                 .security_control(c.control())
                 .map_or_else(String::new, |k| k.name().to_owned()),
-            on: match c.source() {
-                aegis_model::CeilingSource::ControlRule { target, .. } => {
-                    crate::view::through_label(project, target)
+            on: if c.bypass().is_some() {
+                format!("bypass {}", feasibility_label(m, c.feasibility()))
+            } else {
+                match c.source() {
+                    aegis_model::CeilingSource::ControlRule { target, .. } => {
+                        crate::view::through_label(project, target)
+                    }
+                    aegis_model::CeilingSource::StepMitigation => String::new(),
                 }
-                aegis_model::CeilingSource::StepMitigation => String::new(),
             },
             ceiling: feasibility_label(m, c.feasibility()),
             status: c.status(),
@@ -1978,6 +1988,8 @@ pub struct ControlDetail {
     pub targets: Vec<LinkRow>,
     /// Attack-type feasibility ceiling rules (CFG-03).
     pub rules: Vec<ControlRuleView>,
+    /// Bypass fragment tree modeling how this control can be bypassed, if any.
+    pub bypass: Option<LinkRow>,
     /// Where it is attached: step, tree and the cap.
     pub steps: Vec<LinkRow>,
     /// Goals that list it.
@@ -2008,7 +2020,8 @@ fn control_uses(project: &Project, c_idx: aegis_model::ControlIdx) -> Vec<LinkRo
                     visual_id: tree_vis.clone(),
                     label: node.label().to_owned(),
                     detail: format!(
-                        "in \"{title}\", caps feasibility at {}",
+                        "in \"{title}\", caps feasibility at {}{}",
+                        if s.bypass().is_some() { "bypass " } else { "" },
                         feasibility_label(m, s.feasibility())
                     ),
                     target: Selection::Tree(tree_id),
@@ -2108,6 +2121,24 @@ pub fn control_detail(ws: &Workspace, id: ControlId) -> Option<ControlDetail> {
             level: c.rule_for(at).and_then(|l| feasibility_position(m, l)),
         })
         .collect();
+    let bypass = c.bypass().and_then(|b_idx| {
+        let b_id = project.attack_tree_id(b_idx)?;
+        let tree = project.attack_tree(b_idx)?;
+        let detail = ws
+            .cache()
+            .evaluate_residual_tree(project, b_id)
+            .ok()
+            .map_or_else(String::new, |eval| feasibility_label(m, *eval.root_value()));
+        Some(LinkRow {
+            visual_id: project.attack_tree_visual_id(b_idx).unwrap_or_default(),
+            label: tree
+                .get(tree.root())
+                .map_or("", aegis_model::Node::label)
+                .to_owned(),
+            detail,
+            target: Selection::Tree(b_id),
+        })
+    });
     Some(ControlDetail {
         id,
         visual_id: project.security_control_visual_id(idx).unwrap_or_default(),
@@ -2115,6 +2146,7 @@ pub fn control_detail(ws: &Workspace, id: ControlId) -> Option<ControlDetail> {
         status: c.status(),
         targets,
         rules,
+        bypass,
         steps: control_uses(project, idx),
         goals: project
             .cybersecurity_goals()
@@ -3754,11 +3786,15 @@ pub fn comparison_in(
             let state = |p: &Project| {
                 p.security_control_idx(id).and_then(|i| {
                     let c = p.security_control(i)?;
-                    Some((p.control_targets(i).collect::<Vec<_>>(), c.rules().to_vec()))
+                    Some((
+                        p.control_targets(i).collect::<Vec<_>>(),
+                        c.rules().to_vec(),
+                        c.bypass().and_then(|t| p.attack_tree_id(t)),
+                    ))
                 })
             };
             let detail = match (state(base), state(current)) {
-                (Some((bt, br)), Some((ct, cr))) => {
+                (Some((bt, br, bb)), Some((ct, cr, cb))) => {
                     let mut parts = Vec::new();
                     if bt != ct {
                         parts.push(if ct.len() == bt.len() {
@@ -3773,6 +3809,9 @@ pub fn comparison_in(
                         } else {
                             format!("{} rule(s) (was {})", cr.len(), br.len())
                         });
+                    }
+                    if bb != cb {
+                        parts.push("bypass tree changed".to_owned());
                     }
                     if parts.is_empty() {
                         String::new()
