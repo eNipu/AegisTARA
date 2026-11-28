@@ -115,10 +115,6 @@ impl App {
             self.headless.tick();
             let view = rx.borrow_and_update().clone();
             if ready(&view) {
-                // The session may have moved on since the apply above. Keys
-                // act on the window's state, so bring it up to date.
-                self.controller.apply_latest();
-                self.headless.tick();
                 return view;
             }
             let left = deadline.saturating_duration_since(Instant::now());

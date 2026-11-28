@@ -261,7 +261,7 @@ async fn apply_custom_setting_see_inherited_dimmed_toast_shield_and_japanese() {
     }
     save(&app.frame(), "control-settings-step");
 
-    // Keyboard Ctrl+Z undoes the custom setting in one batch; Ctrl+Shift+Z redoes it.
+    // The undo chord reverts the custom setting in one batch; the redo chord restores it.
     let before_undo = seq(&app);
     press_chord(&app, 'z', false);
     app.until("undone", |vm| {
@@ -273,7 +273,12 @@ async fn apply_custom_setting_see_inherited_dimmed_toast_shield_and_japanese() {
     })
     .await;
     let before_redo = seq(&app);
-    press_chord(&app, 'z', true);
+    // Redo is Ctrl+Y off macOS (shortcuts.rs).
+    if cfg!(target_os = "macos") {
+        press_chord(&app, 'z', true);
+    } else {
+        press_chord(&app, 'y', false);
+    }
     app.until("redone", |vm| {
         vm.project.as_ref().is_some_and(|p| {
             p.sync == SyncView::Synced
