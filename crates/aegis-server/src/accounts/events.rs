@@ -357,6 +357,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_row_cap_counts_old_checkpoints_and_leaves_an_idle_log_alone() {
+        let log = log();
+        let retention = Retention {
+            max_age: Duration::from_secs(3600),
+            max_events: 3,
+        };
+        for round in 0..5 {
+            write(&log, 100 + round, 2).await;
+            log.trim(retention).await.expect("trim");
+            assert!(log.recent(100).await.expect("recent").len() <= 4);
+            assert_eq!(log.trim(retention).await.expect("idle"), 0);
+        }
+        assert_eq!(log.verify_chain().await.expect("verify").first_bad, None);
+    }
+
+    #[tokio::test]
     async fn a_clock_before_the_retention_does_not_underflow() {
         let log = log();
         write(&log, 5, 2).await;

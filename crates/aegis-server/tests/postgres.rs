@@ -295,7 +295,7 @@ async fn migrations_are_idempotent_and_refuse_newer_databases() {
         .query("SELECT version FROM aegis_schema_migration", &[])
         .await
         .expect("rows");
-    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.len(), 7);
 
     // A database migrated by a newer build is refused.
     f.raw
@@ -653,7 +653,8 @@ async fn the_event_log_is_trimmed_by_age_and_by_row_cap_in_postgres() {
         .expect("again");
     assert_eq!(again, 0);
 
-    // The row cap keeps the newest ten non-trim events plus the trim event.
+    // The row cap keeps the newest ten rows, the age pass's checkpoint among
+    // them, plus the new checkpoint.
     let removed = log
         .trim(Retention {
             max_age: Duration::from_secs(365 * 86_400),
@@ -665,9 +666,20 @@ async fn the_event_log_is_trimmed_by_age_and_by_row_cap_in_postgres() {
     let left = log.recent(1000).await.expect("recent");
     assert_eq!(left.len(), 11);
     assert_eq!(left[0].kind, AuditKind::EventsTrimmed);
-    assert_eq!(left[1].target, "p49");
-    assert_eq!(left[10].target, "p40");
+    assert_eq!(left[1].kind, AuditKind::EventsTrimmed);
+    assert_eq!(left[2].target, "p49");
+    assert_eq!(left[10].target, "p41");
     assert_eq!(log.verify_chain().await.expect("chain").first_bad, None);
+
+    // A second pass at the same cap leaves an idle log alone.
+    let idle = log
+        .trim(Retention {
+            max_age: Duration::from_secs(365 * 86_400),
+            max_events: 10,
+        })
+        .await
+        .expect("idle");
+    assert_eq!(idle, 0);
 
     // A cap above the row count removes nothing.
     let none = log

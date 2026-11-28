@@ -100,6 +100,10 @@ ignore = [
     { id = "RUSTSEC-2024-0384", reason = "instant unmaintained; via gpui-component and gpui-base, no safe upgrade" },
     { id = "RUSTSEC-2024-0436", reason = "paste unmaintained (proc macro); via gpui-component, no safe upgrade" },
     { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile unmaintained; via gpui-component > gpui-kit-assets > gpui-pre-reqwest, no safe upgrade" },
+    # Reviewed 2026-11-28: a notice, not a vulnerability. Third-party only
+    # (slint > i-slint-core, and gpui-pre and gpui-component); no crate of
+    # ours depends on chrono. Re-check at each Slint or GPUI bump.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; via slint and gpui, no safe upgrade" },
     { id = "RUSTSEC-2026-0206", reason = "rustybuzz unmaintained; via gpui-pre and gpui-component > resvg > usvg (SVG text), no safe upgrade" },
 ]
 

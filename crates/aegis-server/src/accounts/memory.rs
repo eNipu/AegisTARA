@@ -211,18 +211,19 @@ impl MemoryAccounts {
             .iter()
             .rposition(|c| c.event.at_ms < cutoff_ms)
             .map_or(0, |idx| idx + 1);
-        let non_trim_indices: Vec<usize> = inner
-            .events
-            .iter()
-            .enumerate()
-            .skip(age_cut)
-            .filter(|(_, c)| c.event.kind != AuditKind::EventsTrimmed)
-            .map(|(idx, _)| idx)
-            .collect();
+        // The cap counts every row. A checkpoint that is still the newest row
+        // gets one spare place, so an idle log is left alone.
+        let spare = usize::from(
+            inner
+                .events
+                .back()
+                .is_some_and(|c| c.event.kind == AuditKind::EventsTrimmed),
+        );
+        let len = inner.events.len();
         let cap_cut = if keep == 0 {
-            inner.events.len()
-        } else if non_trim_indices.len() > keep {
-            non_trim_indices[non_trim_indices.len() - keep]
+            len
+        } else if len > keep.saturating_add(spare) {
+            len - keep
         } else {
             0
         };

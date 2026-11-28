@@ -427,22 +427,27 @@ impl PostgresAccounts {
                 .await
                 .map_err(backend)?
         } else {
-            let offset = to_i64((keep - 1) as u64)?;
+            let offset = to_i64(keep as u64)?;
             client
                 .query_opt(
+                    // The cap counts every row. A checkpoint that is still the
+                    // newest row gets one spare place, so an idle log is left
+                    // alone instead of losing an event on every pass.
                     "WITH age_cut AS (
                          SELECT max(event_id) AS id FROM aegis_event
                          WHERE org_id = $1 AND at_ms < $2
                      ),
-                     min_kept AS (
-                         SELECT event_id AS id FROM aegis_event
-                         WHERE org_id = $1 AND at_ms >= $2 AND kind <> 'events_trimmed'
-                         ORDER BY event_id DESC OFFSET $3 LIMIT 1
+                     spare AS (
+                         SELECT (kind = 'events_trimmed')::int AS n FROM aegis_event
+                         WHERE org_id = $1 ORDER BY event_id DESC LIMIT 1
                      ),
                      cap_cut AS (
-                         SELECT max(e.event_id) AS id
-                         FROM aegis_event e, min_kept m
-                         WHERE e.org_id = $1 AND e.event_id < m.id
+                         SELECT event_id AS id FROM aegis_event
+                         WHERE org_id = $1 AND EXISTS (
+                             SELECT 1 FROM aegis_event WHERE org_id = $1
+                             ORDER BY event_id DESC
+                             OFFSET $3::bigint + (SELECT n FROM spare) LIMIT 1)
+                         ORDER BY event_id DESC OFFSET $3 LIMIT 1
                      ),
                      chosen AS (
                          SELECT GREATEST(

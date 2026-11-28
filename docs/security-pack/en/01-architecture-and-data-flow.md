@@ -123,7 +123,7 @@ provider. Cloud AI providers are `Planned` and will be opt-in.
 - `crates/aegis-server/src/auth_layer.rs`
 - `crates/aegis-auth/src/jwks.rs`
 - `crates/aegis-client/src/settings.rs`
-- `crates/aegis-shell/src/provider.rs`
+- `crates/aegis-client/src/provider.rs`
 - `crates/aegis-shell/src/launcher.rs`
 - `crates/aegis-shell/src/standalone.rs`
 - `crates/aegis-server/src/access.rs`
