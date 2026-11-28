@@ -1,0 +1,86 @@
+{
+  "job": "143-bypass-trees",
+  "slices": [
+    {
+      "id": "143a",
+      "title": "Add SecurityControl::bypass, SetControlBypass, graph guards, and persistence",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/control.rs",
+        "crates/aegis-model/src/error.rs",
+        "crates/aegis-model/src/op.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/src/store/*",
+        "crates/aegis-model/tests/*"
+      ],
+      "max_lines": 380,
+      "new_deps": false,
+      "ci": ["crates/aegis-model"],
+      "checks": [
+        "cargo test --locked -p aegis-model --test ops_properties --test store --test store_limits --test workspace --test control_status"
+      ]
+    },
+    {
+      "id": "143b",
+      "title": "Evaluate bypass mitigation ceilings, diff closure, and incremental cache",
+      "tier": "hard",
+      "risk": "high",
+      "allow": [
+        "crates/aegis-model/src/control.rs",
+        "crates/aegis-model/src/project.rs",
+        "crates/aegis-model/tests/*"
+      ],
+      "max_lines": 320,
+      "new_deps": false,
+      "ci": ["crates/aegis-model"],
+      "checks": [
+        "cargo test --locked -p aegis-model --test bypass_trees --test control_settings --test control_status --test shared_fragments"
+      ]
+    },
+    {
+      "id": "143c",
+      "title": "Show bypass ceilings in explain-why, control inspector, client edits, and control-off canvas",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-canvas/src/*",
+        "crates/aegis-canvas/tests/*",
+        "crates/aegis-client/locales/*",
+        "crates/aegis-client/src/commands.rs",
+        "crates/aegis-client/src/inspector.rs",
+        "crates/aegis-client/src/pages.rs",
+        "crates/aegis-client/src/relations.rs",
+        "crates/aegis-client/src/undo_label.rs",
+        "crates/aegis-client/src/view.rs",
+        "crates/aegis-client/tests/*"
+      ],
+      "max_lines": 320,
+      "new_deps": false,
+      "ci": ["crates/aegis-canvas", "crates/aegis-client"],
+      "checks": [
+        "cargo test --locked -p aegis-canvas",
+        "cargo test --locked -p aegis-client --test relations --test inspector_view --test excluded_canvas --test undo_every_op --test reduced_by --test bypass_trees"
+      ]
+    },
+    {
+      "id": "143d",
+      "title": "Wire Create from selection into GPUI control inspector",
+      "tier": "standard",
+      "risk": "normal",
+      "allow": [
+        "crates/aegis-workbench/src/app/files.rs",
+        "crates/aegis-workbench/src/app/inspector.rs",
+        "crates/aegis-workbench/src/app/workbench.rs",
+        "crates/aegis-workbench/tests/*"
+      ],
+      "max_lines": 120,
+      "new_deps": false,
+      "ci": [],
+      "checks": [
+        "cargo test --locked -p aegis-workbench --test inspector_view",
+        "cargo test --locked -p aegis-client --test bypass_trees"
+      ]
+    }
+  ]
+}

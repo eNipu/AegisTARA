@@ -3231,6 +3231,64 @@
       ],
       "decision": "142a-142l all passed gates and reviews on factory/142-shared-fragments; ready to merge into master.",
       "updated": "2026-11-27T20:47:01Z"
+    },
+    {
+      "id": "143-bypass-trees",
+      "title": "Bypass trees (BLK-04)",
+      "branch": "factory/143-bypass-trees",
+      "stage": "merged",
+      "slice": "143d",
+      "base": "1fdb046f8ffc4609fac8b74fbd54de76d2735763",
+      "reviews": {
+        "slice": "143d",
+        "gate": "PASS",
+        "review": "PASS",
+        "owner": "auto"
+      },
+      "history": [
+        {
+          "slice": "143a",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "pro",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 303
+        },
+        {
+          "slice": "143b",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "pro",
+          "gate_tries": 2,
+          "review_tries": 1,
+          "lines": 317
+        },
+        {
+          "slice": "143c",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "pro",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 277
+        },
+        {
+          "slice": "143d",
+          "gate": "PASS",
+          "review": "PASS",
+          "owner": "auto",
+          "model": "pro",
+          "gate_tries": 1,
+          "review_tries": 1,
+          "lines": 80
+        }
+      ],
+      "decision": null,
+      "updated": "2026-11-28T00:41:07Z"
     }
   ],
   "updated_at": "2026-11-01T13:10:00Z"
