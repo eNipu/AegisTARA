@@ -4,7 +4,7 @@
 # catches agents nobody has listed. Allow named people here if that changes.
 agents='claude|anthropic|\[bot\]|factory-droid|codex|openai|chatgpt|copilot|cursoragent|gemini|aider'
 
-if grep -qiE "^[[:space:]]*(co-authored-by|assisted-by|generated-by)[[:space:]]*:|^[[:space:]]*signed-off-by[[:space:]]*:.*($agents)|^[[:space:]]*(🤖 *)?generated (with|by) .*($agents)" "$1" ||
+if grep -qiE "^[[:space:]]*(co-authored-by|assisted-by|generated-by|claude-session)[[:space:]]*:|^[[:space:]]*signed-off-by[[:space:]]*:.*($agents)|^[[:space:]]*(🤖 *)?generated (with|by) .*($agents)" "$1" ||
    { git var GIT_AUTHOR_IDENT; git var GIT_COMMITTER_IDENT; } | grep -qiE "$agents"; then
     echo "commit refused: no AI agent or tool may sign a commit (see CLAUDE.md)" >&2
     exit 1
